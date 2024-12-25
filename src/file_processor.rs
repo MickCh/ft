@@ -68,19 +68,27 @@ impl FileProcessor {
         if row_start > current_line_number || current_line_number > row_end {
             //if line_number is outside of the row range (before & after)
             writer.write_all(line)?;
-        } else if self.config.delete {
-            //do nothing (delete)
-        } else if is_sequence_breaking {
-            let utf8_line = from_utf8(line).unwrap(); //TODO: unwrap! - improve error handling
+            return Ok(true);
+        }
+
+        if self.config.delete
+            && self.config.is_rows_range_provided()
+            && !self.config.is_cols_range_provided()
+        {
+            //don't add lines when rows range is given without cols range
+            //do nothing - it will remove a line
+            return Ok(true);
+        }
+
+        let utf8_line = from_utf8(line).unwrap(); //TODO: unwrap! - improve error handling
+
+        if is_sequence_breaking {
             non_sequence_vec.push(utf8_line.to_owned());
 
             if current_line_number >= row_end {
                 *sequence_stored = self.write_all_modifiable_lines(non_sequence_vec, writer)?;
             }
         } else {
-            //write modified lines in sequence
-            let utf8_line = from_utf8(line).unwrap(); //TODO: unwrap! - improve error handling
-
             writer.write_all(self.modify_line(utf8_line).as_bytes())?;
         }
         Ok(true)
@@ -112,6 +120,7 @@ impl FileProcessor {
 
         if self.config.sort {
             result.sort_by(|line1, line2| {
+                //TODO: wrong for UTF8, takes bytes not chars
                 let line1_slice = &line1[(col_start - 1)..cmp::min(col_end, line1.len())];
                 let line2_slice = &line2[(col_start - 1)..cmp::min(col_end, line2.len())];
 
@@ -122,10 +131,22 @@ impl FileProcessor {
     }
 
     fn modify_line(&self, utf8_line: &str) -> String {
+        let (col_start, col_end) = self.config.cols.clone().into_inner();
+
+        if self.config.delete && self.config.is_cols_range_provided() {
+            let mut result: Vec<char> = vec![];
+
+            for (index, c) in utf8_line.chars().enumerate() {
+                if index < col_start || index > col_end {
+                    result.push(c);
+                }
+            }
+
+            return result.into_iter().collect();
+        }
+
         if let Some(find) = self.config.find_string.clone() {
             if let Some(replace) = self.config.replace_string.clone() {
-                let (col_start, col_end) = self.config.cols.clone().into_inner();
-
                 return self.line_replace(
                     utf8_line,
                     find.as_str(),

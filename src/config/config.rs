@@ -30,7 +30,15 @@ impl Config {
     }
 
     pub fn is_sequence_breaking(&self) -> bool {
-        self.sort || self.delete
+        self.sort
+    }
+
+    pub fn is_rows_range_provided(&self) -> bool {
+        *self.rows.start() != 1usize || *self.rows.end() != usize::MAX
+    }
+
+    pub fn is_cols_range_provided(&self) -> bool {
+        *self.cols.start() != 1usize || *self.cols.end() != usize::MAX
     }
 }
 
