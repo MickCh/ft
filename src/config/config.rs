@@ -96,27 +96,25 @@ impl ConfigBuilder {
     }
 
     pub fn replace(&mut self) -> &mut Self {
-        self.find_string = match self.matches.get_one::<String>("find") {
-            Some(find_string) => Some(find_string.to_owned()),
-            None => None,
-        };
+        self.find_string = self
+            .matches
+            .get_one::<String>("find")
+            .map(|f| f.to_owned());
 
-        self.replace_string = match self
+        self.replace_string = self
             .matches
             .get_one::<String>("replace")
-        {
-            Some(replace_string) => Some(replace_string.to_owned()),
-            None => None,
-        };
+            .map(|r| r.to_owned());
+
         self
     }
 
     pub fn build(&mut self) -> Result<Config, ConfigError> {
-        if self.replace_string != None && self.find_string == None {
+        if self.replace_string.is_some() && self.find_string.is_none() {
             return Err(ConfigError::MissingFindForReplace);
         }
 
-        if self.replace_string != None && self.delete {
+        if self.replace_string.is_some() && self.delete {
             return Err(ConfigError::ReplaceWithDelete);
         }
 

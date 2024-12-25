@@ -20,7 +20,7 @@ impl FileProcessor {
         let is_sequence_breaking = self.config.is_sequence_breaking();
 
         let filename = &self.config.filename;
-        let reader = std::fs::File::open(&filename)?;
+        let reader = std::fs::File::open(filename)?;
         let mut buffer_reader = BufReader::new(reader);
 
         //rethink how to store data
@@ -38,7 +38,7 @@ impl FileProcessor {
         buffer_reader.for_byte_record_with_terminator(b'\n', |line| {
             current_line_number += 1;
             self.process_single_line(
-                &line,
+                line,
                 current_line_number,
                 is_sequence_breaking,
                 &mut non_sequence_vec,
@@ -75,28 +75,25 @@ impl FileProcessor {
             non_sequence_vec.push(utf8_line.to_owned());
 
             if current_line_number >= row_end {
-                *sequence_stored = self.write_all_modifiable_lines(&non_sequence_vec, writer)?;
+                *sequence_stored = self.write_all_modifiable_lines(non_sequence_vec, writer)?;
             }
         } else {
             //write modified lines in sequence
             let utf8_line = from_utf8(line).unwrap(); //TODO: unwrap! - improve error handling
 
-            writer.write_all(
-                self.modify_line(&utf8_line.to_owned())
-                    .as_bytes(),
-            )?;
+            writer.write_all(self.modify_line(utf8_line).as_bytes())?;
         }
         Ok(true)
     }
 
     fn write_all_modifiable_lines(
         &self,
-        lines: &Vec<String>,
+        lines: &[String],
         writer: &mut std::fs::File,
     ) -> io::Result<bool> {
         let (col_start, col_end) = self.config.cols.clone().into_inner();
 
-        for i in &self.process_all_modifiable_lines(&lines, col_start, col_end) {
+        for i in &self.process_all_modifiable_lines(lines, col_start, col_end) {
             writer.write_all(i.as_bytes())?;
         }
         Ok(true)
@@ -104,13 +101,13 @@ impl FileProcessor {
 
     fn process_all_modifiable_lines(
         &self,
-        lines: &Vec<String>,
+        lines: &[String],
         col_start: usize,
         col_end: usize,
     ) -> Vec<String> {
         let mut result: Vec<String> = lines
             .iter()
-            .map(|line| self.modify_line(&line))
+            .map(|line| self.modify_line(line))
             .collect();
 
         if self.config.sort {
@@ -124,13 +121,13 @@ impl FileProcessor {
         result
     }
 
-    fn modify_line(&self, utf8_line: &String) -> String {
+    fn modify_line(&self, utf8_line: &str) -> String {
         if let Some(find) = self.config.find_string.clone() {
             if let Some(replace) = self.config.replace_string.clone() {
                 let (col_start, col_end) = self.config.cols.clone().into_inner();
 
                 return self.line_replace(
-                    utf8_line.as_str(),
+                    utf8_line,
                     find.as_str(),
                     replace.as_str(),
                     col_start,
@@ -139,7 +136,7 @@ impl FileProcessor {
             }
         };
 
-        utf8_line.clone()
+        utf8_line.to_owned()
     }
 
     fn line_replace(
