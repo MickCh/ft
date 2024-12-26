@@ -1,12 +1,11 @@
-use file_processor::FileProcessor;
-
-use crate::config::config::Config;
-
-mod config;
+mod cli_args;
 mod file_processor;
 
+use cli_args::ConfigBuilder;
+use file_processor::FileProcessor;
+
 fn main() -> std::result::Result<(), String> {
-    let config = Config::new()
+    let config = ConfigBuilder::new()
         .rows()
         .cols()
         .sort()

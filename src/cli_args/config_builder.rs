@@ -1,46 +1,7 @@
+use super::{cli, Config, ConfigError};
+
 use clap::ArgMatches;
 use std::ops::RangeInclusive;
-
-use crate::config::cli::cli;
-use crate::config::config_error::ConfigError;
-
-#[derive(Debug)]
-pub struct Config {
-    pub rows: RangeInclusive<usize>,
-    pub cols: RangeInclusive<usize>,
-    pub sort: bool,
-    pub delete: bool,
-    pub filename: String,
-    pub find_string: Option<String>,
-    pub replace_string: Option<String>,
-}
-
-impl Config {
-    pub fn new() -> ConfigBuilder {
-        ConfigBuilder {
-            matches: cli().get_matches(),
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            cols: RangeInclusive::new(1usize, usize::MAX),
-            sort: false,
-            delete: false,
-            filename: String::new(),
-            find_string: None,
-            replace_string: None,
-        }
-    }
-
-    pub fn is_sequence_breaking(&self) -> bool {
-        self.sort
-    }
-
-    pub fn is_rows_range_provided(&self) -> bool {
-        *self.rows.start() != 1usize || *self.rows.end() != usize::MAX
-    }
-
-    pub fn is_cols_range_provided(&self) -> bool {
-        *self.cols.start() != 1usize || *self.cols.end() != usize::MAX
-    }
-}
 
 pub struct ConfigBuilder {
     matches: ArgMatches,
@@ -54,6 +15,19 @@ pub struct ConfigBuilder {
 }
 
 impl ConfigBuilder {
+    pub fn new() -> Self {
+        ConfigBuilder {
+            matches: cli().get_matches(),
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            cols: RangeInclusive::new(1usize, usize::MAX),
+            sort: false,
+            delete: false,
+            filename: String::new(),
+            find_string: None,
+            replace_string: None,
+        }
+    }
+
     pub fn rows(&mut self) -> &mut Self {
         self.rows = match self
             .matches
@@ -134,7 +108,7 @@ impl ConfigBuilder {
             return Err(ConfigError::ColEndGTStart);
         }
 
-        Ok(Config {
+        let config = Config {
             rows: self.rows.clone(),
             cols: self.cols.clone(),
             sort: self.sort,
@@ -142,6 +116,8 @@ impl ConfigBuilder {
             filename: self.filename.clone(),
             find_string: self.find_string.clone(),
             replace_string: self.replace_string.clone(),
-        })
+        };
+
+        Ok(config)
     }
 }

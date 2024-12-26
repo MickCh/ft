@@ -1,4 +1,4 @@
-use crate::config::config::Config;
+use crate::cli_args::Config;
 
 use bstr::io::BufReadExt;
 use std::cmp;
@@ -48,7 +48,7 @@ impl FileProcessor {
         })?;
 
         if !sequence_stored {
-            self.write_all_modifiable_lines(&non_sequence_vec, &mut writer)?;
+            self.write_modified_lines(&non_sequence_vec, &mut writer)?;
         }
 
         writer.flush()
@@ -88,7 +88,7 @@ impl FileProcessor {
             non_sequence_vec.push(utf8_line.to_owned());
 
             if current_line_number >= *self.config.rows.end() {
-                *sequence_stored = self.write_all_modifiable_lines(non_sequence_vec, writer)?;
+                *sequence_stored = self.write_modified_lines(non_sequence_vec, writer)?;
             }
         } else {
             writer.write_all(self.modify_line(utf8_line).as_bytes())?;
@@ -96,25 +96,20 @@ impl FileProcessor {
         Ok(true)
     }
 
-    fn write_all_modifiable_lines(
+    fn write_modified_lines(
         &self,
         lines: &[String],
         writer: &mut std::fs::File,
     ) -> io::Result<bool> {
-        let (col_start, col_end) = self.config.cols.clone().into_inner();
-
-        for i in &self.process_all_modifiable_lines(lines, col_start, col_end) {
+        for i in &self.modify_lines(lines) {
             writer.write_all(i.as_bytes())?;
         }
         Ok(true)
     }
 
-    fn process_all_modifiable_lines(
-        &self,
-        lines: &[String],
-        col_start: usize,
-        col_end: usize,
-    ) -> Vec<String> {
+    fn modify_lines(&self, lines: &[String]) -> Vec<String> {
+        let (col_start, col_end) = self.config.cols.clone().into_inner();
+
         let mut result: Vec<String> = lines
             .iter()
             .map(|line| self.modify_line(line))
@@ -422,5 +417,74 @@ mod tests {
         };
 
         FileProcessor::new(config)
+    }
+
+    #[test]
+    fn test_modify_lines() {
+        let lines: Vec<&str> = vec!["Line1_02", "Line2_03", "Line3_01"];
+        let string_vec: Vec<String> = lines
+            .iter()
+            .map(|&line| line.to_string())
+            .collect();
+
+        //1
+        //Given - Ranges/delete/sort/find/replace with default values (not provided)
+        //When - call function
+        //Then - the same lines w/o modifications
+        let file_processor = FileProcessor::new(Config {
+            cols: RangeInclusive::new(1usize, usize::MAX),
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: false,
+            filename: "".to_owned(),
+            find_string: None,
+            replace_string: None,
+            sort: false,
+        });
+
+        let result = file_processor.modify_lines(&string_vec);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "Line1_02");
+        assert_eq!(result[1], "Line2_03");
+        assert_eq!(result[2], "Line3_01");
+
+        //2
+        //Given - Delete for columns range 1-2 provided
+        //When - call function
+        //Then - it returns 3 lines with removed columns 1-2
+        let file_processor = FileProcessor::new(Config {
+            cols: RangeInclusive::new(1usize, 2),
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: true,
+            filename: "".to_owned(),
+            find_string: None,
+            replace_string: None,
+            sort: false,
+        });
+
+        let result = file_processor.modify_lines(&string_vec);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "ne1_02");
+        assert_eq!(result[1], "ne2_03");
+        assert_eq!(result[2], "ne3_01");
+
+        //3
+        //Given - Sort by columns range 7-8 provided
+        //When - call function
+        //Then - it returns 3 sorted lines, sorting based on columns 7-8
+        let file_processor = FileProcessor::new(Config {
+            cols: RangeInclusive::new(7usize, 8),
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: false,
+            filename: "".to_owned(),
+            find_string: None,
+            replace_string: None,
+            sort: true,
+        });
+
+        let result = file_processor.modify_lines(&string_vec);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "Line3_01");
+        assert_eq!(result[1], "Line1_02");
+        assert_eq!(result[2], "Line2_03");
     }
 }
