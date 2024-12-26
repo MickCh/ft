@@ -448,7 +448,7 @@ mod tests {
         assert_eq!(result[2], "Line3_01");
 
         //2
-        //Given - Delete for columns range 1-2 provided
+        //Given - Delete for column range 1-2 provided
         //When - call function
         //Then - it returns 3 lines with removed columns 1-2
         let file_processor = FileProcessor::new(Config {
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(result[2], "ne3_01");
 
         //3
-        //Given - Sort by columns range 7-8 provided
+        //Given - Sort lines by column range 7-8 provided
         //When - call function
         //Then - it returns 3 sorted lines, sorting based on columns 7-8
         let file_processor = FileProcessor::new(Config {
