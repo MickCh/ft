@@ -171,19 +171,12 @@ impl FileProcessor {
 
         match exclude_range {
             true => {
-                let chank1 = &vec[0..(start - 1)];
-                let chank3 = &vec[end..vec_length];
-
-                let capacity = chank1.len() + chank3.len();
-
-                let mut result = String::with_capacity(capacity);
-                result.extend(chank1);
-                result.extend(chank3);
-                result
+                //unknown real capacity (possible UTF8 chars)
+                let chunk1: String = vec[0..(start - 1)].iter().collect();
+                let chunk2: String = vec[end..vec_length].iter().collect();
+                format!("{}{}", chunk1, chunk2)
             }
-            false => (&vec[(start - 1)..end])
-                .into_iter()
-                .collect(),
+            false => vec[(start - 1)..end].iter().collect(),
         }
     }
 
@@ -204,19 +197,19 @@ impl FileProcessor {
 
         let end = cmp::min(end, vec_length);
 
-        let chank1 = &vec[0..(start - 1)];
-        let chank2 = &vec[(start - 1)..end];
-        let chank3 = &vec[end..vec_length];
+        let chunk1 = &vec[0..(start - 1)];
+        let chunk2 = &vec[(start - 1)..end];
+        let chunk3 = &vec[end..vec_length];
 
-        let chank2_str: String = chank2.into_iter().collect();
-        let replaced = str::replace(&chank2_str, find, replace);
+        let chunk2_str: String = chunk2.iter().collect();
+        let replaced = str::replace(&chunk2_str, find, replace);
 
-        let capacity = chank1.len() + replaced.len() + chank3.len();
+        let capacity = chunk1.len() + replaced.len() + chunk3.len();
 
         let mut result = String::with_capacity(capacity);
-        result.extend(chank1);
+        result.extend(chunk1);
         result.push_str(&replaced);
-        result.extend(chank3);
+        result.extend(chunk3);
         result
     }
 }
