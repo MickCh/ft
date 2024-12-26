@@ -63,9 +63,11 @@ impl FileProcessor {
         writer: &mut std::fs::File,
         sequence_stored: &mut bool,
     ) -> io::Result<bool> {
-        let (row_start, row_end) = self.config.rows.clone().into_inner();
-
-        if row_start > current_line_number || current_line_number > row_end {
+        if !self
+            .config
+            .rows
+            .contains(&current_line_number)
+        {
             //if line_number is outside of the row range (before & after)
             writer.write_all(line)?;
             return Ok(true);
@@ -85,7 +87,7 @@ impl FileProcessor {
         if is_sequence_breaking {
             non_sequence_vec.push(utf8_line.to_owned());
 
-            if current_line_number >= row_end {
+            if current_line_number >= *self.config.rows.end() {
                 *sequence_stored = self.write_all_modifiable_lines(non_sequence_vec, writer)?;
             }
         } else {
@@ -120,11 +122,10 @@ impl FileProcessor {
 
         if self.config.sort {
             result.sort_by(|line1, line2| {
-                //TODO: wrong for UTF8, takes bytes not chars
-                let line1_slice = &line1[(col_start - 1)..cmp::min(col_end, line1.len())];
-                let line2_slice = &line2[(col_start - 1)..cmp::min(col_end, line2.len())];
+                let line1_sub = self.get_substring(line1, col_start, col_end, false);
+                let line2_sub = self.get_substring(line2, col_start, col_end, false);
 
-                line1_slice.cmp(line2_slice)
+                line1_sub.cmp(&line2_sub)
             });
         }
         result
@@ -134,15 +135,7 @@ impl FileProcessor {
         let (col_start, col_end) = self.config.cols.clone().into_inner();
 
         if self.config.delete && self.config.is_cols_range_provided() {
-            let mut result: Vec<char> = vec![];
-
-            for (index, c) in utf8_line.chars().enumerate() {
-                if index < col_start || index > col_end {
-                    result.push(c);
-                }
-            }
-
-            return result.into_iter().collect();
+            return self.get_substring(utf8_line, col_start, col_end, true);
         }
 
         if let Some(find) = self.config.find_string.clone() {
@@ -160,35 +153,281 @@ impl FileProcessor {
         utf8_line.to_owned()
     }
 
+    fn get_substring(
+        &self,
+        line_str: &str,
+        start: usize,
+        end: usize,
+        exclude_range: bool,
+    ) -> String {
+        let vec: Vec<char> = line_str.chars().collect();
+        let vec_length = vec.len();
+
+        if start > vec_length || start > end {
+            return line_str.to_owned();
+        }
+
+        let end = cmp::min(end, vec_length);
+
+        match exclude_range {
+            true => {
+                let chank1 = &vec[0..(start - 1)];
+                let chank3 = &vec[end..vec_length];
+
+                let capacity = chank1.len() + chank3.len();
+
+                let mut result = String::with_capacity(capacity);
+                result.extend(chank1);
+                result.extend(chank3);
+                result
+            }
+            false => (&vec[(start - 1)..end])
+                .into_iter()
+                .collect(),
+        }
+    }
+
     fn line_replace(
         &self,
         line_str: &str,
         find: &str,
         replace: &str,
         start: usize,
-        stop: usize,
+        end: usize,
     ) -> String {
-        let mut prefix: Vec<char> = vec![];
-        let mut main: Vec<char> = vec![];
-        let mut suffix: Vec<char> = vec![];
+        let vec: Vec<char> = line_str.chars().collect();
+        let vec_length = vec.len();
 
-        for (index, c) in line_str.chars().enumerate() {
-            match index {
-                i if i + 1 < start => prefix.push(c),
-                i if i >= stop => suffix.push(c),
-                _ => main.push(c),
-            }
+        if start > vec_length || start > end {
+            return line_str.to_owned();
         }
 
-        let main: String = main.into_iter().collect();
-        let replaced = str::replace(&main, find, replace);
+        let end = cmp::min(end, vec_length);
 
-        let capacity = prefix.len() + replaced.len() + suffix.len();
+        let chank1 = &vec[0..(start - 1)];
+        let chank2 = &vec[(start - 1)..end];
+        let chank3 = &vec[end..vec_length];
+
+        let chank2_str: String = chank2.into_iter().collect();
+        let replaced = str::replace(&chank2_str, find, replace);
+
+        let capacity = chank1.len() + replaced.len() + chank3.len();
 
         let mut result = String::with_capacity(capacity);
-        result.extend(prefix);
+        result.extend(chank1);
         result.push_str(&replaced);
-        result.extend(suffix);
+        result.extend(chank3);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ops::RangeInclusive;
+
+    #[test]
+    fn test_get_substring() {
+        let file_processor = create_file_processor();
+
+        //pos:           123456789012345678901
+        let line_utf8 = "ABCabcąłć😊😍😁123śę";
+
+        let result = file_processor.get_substring(line_utf8, 1, 3, false);
+        assert_eq!(result, "ABC");
+        let result = file_processor.get_substring(line_utf8, 1, 3, true);
+        assert_eq!(result, "abcąłć😊😍😁123śę");
+
+        let result = file_processor.get_substring(line_utf8, 1, 6, false);
+        assert_eq!(result, "ABCabc");
+        let result = file_processor.get_substring(line_utf8, 1, 6, true);
+        assert_eq!(result, "ąłć😊😍😁123śę");
+
+        let result = file_processor.get_substring(line_utf8, 1, 9, false);
+        assert_eq!(result, "ABCabcąłć");
+        let result = file_processor.get_substring(line_utf8, 1, 9, true);
+        assert_eq!(result, "😊😍😁123śę");
+
+        let result = file_processor.get_substring(line_utf8, 1, 11, false);
+        assert_eq!(result, "ABCabcąłć😊😍");
+        let result = file_processor.get_substring(line_utf8, 1, 11, true);
+        assert_eq!(result, "😁123śę");
+
+        let result = file_processor.get_substring(line_utf8, 1, 16, false);
+        assert_eq!(result, "ABCabcąłć😊😍😁123ś");
+        let result = file_processor.get_substring(line_utf8, 1, 16, true);
+        assert_eq!(result, "ę");
+
+        let result = file_processor.get_substring(line_utf8, 1, 17, false);
+        assert_eq!(result, "ABCabcąłć😊😍😁123śę");
+
+        let result = file_processor.get_substring(line_utf8, 1, 18, false);
+        assert_eq!(result, "ABCabcąłć😊😍😁123śę");
+        let result = file_processor.get_substring(line_utf8, 1, 18, true);
+        assert_eq!(result, "");
+
+        let result = file_processor.get_substring(line_utf8, 1, 30, false);
+        assert_eq!(result, "ABCabcąłć😊😍😁123śę");
+
+        let result = file_processor.get_substring(line_utf8, 4, 30, false);
+        assert_eq!(result, "abcąłć😊😍😁123śę");
+        let result = file_processor.get_substring(line_utf8, 4, 30, true);
+        assert_eq!(result, "ABC");
+
+        let result = file_processor.get_substring(line_utf8, 9, 30, false);
+        assert_eq!(result, "ć😊😍😁123śę");
+        let result = file_processor.get_substring(line_utf8, 9, 30, true);
+        assert_eq!(result, "ABCabcął");
+
+        let result = file_processor.get_substring(line_utf8, 10, 12, false);
+        assert_eq!(result, "😊😍😁");
+        let result = file_processor.get_substring(line_utf8, 10, 12, true);
+        assert_eq!(result, "ABCabcąłć123śę");
+
+        let result = file_processor.get_substring(line_utf8, 11, 11, false);
+        assert_eq!(result, "😍");
+        let result = file_processor.get_substring(line_utf8, 11, 11, true);
+        assert_eq!(result, "ABCabcąłć😊😁123śę");
+    }
+
+    #[test]
+    fn test_line_replace() {
+        let file_processor = create_file_processor();
+
+        //pos:          123456789012345678901234
+        let line_str = "Test01234567891231234567";
+
+        let result = file_processor.line_replace(line_str, "Test", "Passed", 1, usize::MAX);
+        assert_eq!(result, "Passed01234567891231234567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABC", 1, usize::MAX);
+        assert_eq!(result, "Test0ABC456789ABCABC4567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABCDEF", 1, usize::MAX);
+        assert_eq!(result, "Test0ABCDEF456789ABCDEFABCDEF4567");
+
+        let result = file_processor.line_replace(line_str, "123", "", 1, usize::MAX);
+        assert_eq!(result, "Test04567894567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABCD", 6, 8);
+        assert_eq!(result, "Test0ABCD4567891231234567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABCD", 7, 8);
+        assert_eq!(result, "Test01234567891231234567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABCD", 6, 7);
+        assert_eq!(result, "Test01234567891231234567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABCD", 15, 20);
+        assert_eq!(result, "Test0123456789ABCDABCD4567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABCD", 21, 40);
+        assert_eq!(result, "Test01234567891231234567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABCD", 30, 40);
+        assert_eq!(result, "Test01234567891231234567");
+
+        let result = file_processor.line_replace(line_str, "123", "ABCD", 10, 5);
+        assert_eq!(result, "Test01234567891231234567");
+    }
+
+    #[test]
+    fn test_modify_line() {
+        //pos:          123456789012345678901234
+        let line_str = "Test01234567891231234567";
+
+        //1
+        //Given - delete & replace disabled
+        //When - call function
+        //Then - the same string
+        let file_processor = FileProcessor::new(Config {
+            cols: RangeInclusive::new(1usize, usize::MAX),
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: false,
+            filename: "".to_owned(),
+            find_string: None,
+            replace_string: None,
+            sort: false,
+        });
+        let result = file_processor.modify_line(line_str);
+        assert_eq!(result, line_str);
+
+        //2
+        //Given - delete enabled with column range covered string length provided
+        //When - call function
+        //Then - empty string
+        let file_processor = FileProcessor::new(Config {
+            cols: RangeInclusive::new(1usize, 50), //provided range of columns
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: true,
+            filename: "".to_owned(),
+            find_string: None,
+            replace_string: None,
+            sort: false,
+        });
+        let result = file_processor.modify_line(line_str);
+        assert_eq!(result, "");
+
+        //3
+        //Given - delete enabled with column range 5-10 provided
+        //When - call function
+        //Then - input string without chars 5-10
+        let file_processor = FileProcessor::new(Config {
+            cols: RangeInclusive::new(5, 10), //provided range of columns
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: true,
+            filename: "".to_owned(),
+            find_string: None,
+            replace_string: None,
+            sort: false,
+        });
+        let result = file_processor.modify_line(line_str);
+        assert_eq!(result, "Test67891231234567");
+
+        //4
+        //Given - delete enabled with column range 5-10 provided and find/replace provided
+        //When - call function
+        //Then - input string without chars 5-10 (only delete worked)
+        let file_processor = FileProcessor::new(Config {
+            cols: RangeInclusive::new(5, 10), //provided range of columns
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: true,
+            filename: "".to_owned(),
+            find_string: Some("123".to_owned()),
+            replace_string: Some("ABCD".to_owned()),
+            sort: false,
+        });
+        let result = file_processor.modify_line(line_str);
+        assert_eq!(result, "Test67891231234567");
+
+        //5
+        //Given - delete disabled but find (123)/replace (ABCD) with column range 5-10 provided
+        //When - call function
+        //Then - input string with first chars (pos. 5-7) replaces by ABCD
+        let file_processor = FileProcessor::new(Config {
+            cols: RangeInclusive::new(5, 10), //provided range of columns
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: false,
+            filename: "".to_owned(),
+            find_string: Some("123".to_owned()),
+            replace_string: Some("ABCD".to_owned()),
+            sort: false,
+        });
+        let result = file_processor.modify_line(line_str);
+        assert_eq!(result, "Test0ABCD4567891231234567");
+    }
+
+    fn create_file_processor() -> FileProcessor {
+        let config = Config {
+            cols: RangeInclusive::new(1usize, usize::MAX),
+            rows: RangeInclusive::new(1usize, usize::MAX),
+            delete: false,
+            filename: "".to_owned(),
+            find_string: None,
+            replace_string: None,
+            sort: false,
+        };
+
+        FileProcessor::new(config)
     }
 }
