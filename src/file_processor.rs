@@ -3,8 +3,8 @@ use crate::cli_args::Config;
 use bstr::io::BufReadExt;
 use std::cmp;
 use std::io;
-use std::io::prelude::*;
 use std::io::BufReader;
+use std::io::prelude::*;
 use std::str::from_utf8;
 
 pub struct FileProcessor {
@@ -35,7 +35,7 @@ impl FileProcessor {
         let mut current_line_number = 0usize;
         let mut sequence_stored = false;
 
-        buffer_reader.for_byte_record_with_terminator(b'\n', |line| {
+        buffer_reader.for_byte_line_with_terminator(|line| {
             current_line_number += 1;
             self.process_single_line(
                 line,
@@ -93,6 +93,7 @@ impl FileProcessor {
         } else {
             writer.write_all(self.modify_line(utf8_line).as_bytes())?;
         }
+
         Ok(true)
     }
 
@@ -130,22 +131,44 @@ impl FileProcessor {
         let (col_start, col_end) = self.config.cols.clone().into_inner();
 
         if self.config.delete && self.config.is_cols_range_provided() {
-            return self.get_substring(utf8_line, col_start, col_end, true);
+            let line = self.remove_new_line(utf8_line.to_owned());
+            let result = self.get_substring(line.as_str(), col_start, col_end, true);
+            return self.append_new_line(result);
         }
 
         if let Some(find) = self.config.find_string.clone() {
             if let Some(replace) = self.config.replace_string.clone() {
-                return self.line_replace(
-                    utf8_line,
+                let line = self.remove_new_line(utf8_line.to_owned());
+                let result = self.line_replace(
+                    line.as_str(),
                     find.as_str(),
                     replace.as_str(),
                     col_start,
                     col_end,
                 );
+                return self.append_new_line(result);
             }
         };
 
         utf8_line.to_owned()
+    }
+
+    fn remove_new_line(&self, line: String) -> String {
+        #[cfg(windows)]
+        const NEW_LINE: &str = "\r\n";
+        #[cfg(not(windows))]
+        const NEW_LINE: &str = "\n";
+
+        line[..(line.len() - NEW_LINE.len())].to_owned()
+    }
+
+    fn append_new_line(&self, line: String) -> String {
+        #[cfg(windows)]
+        const NEW_LINE: &str = "\r\n";
+        #[cfg(not(windows))]
+        const NEW_LINE: &str = "\n";
+
+        format!("{}{}", line, NEW_LINE)
     }
 
     fn get_substring(
@@ -354,7 +377,7 @@ mod tests {
             sort: false,
         });
         let result = file_processor.modify_line(line_str);
-        assert_eq!(result, "");
+        assert_eq!(result, "\r\n");
 
         //3
         //Given - delete enabled with column range 5-10 provided
