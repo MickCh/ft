@@ -12,6 +12,7 @@ fn main() -> std::result::Result<(), String> {
         .delete()
         .filename()
         .replace()
+        .output()
         .build();
 
     let config = match config {

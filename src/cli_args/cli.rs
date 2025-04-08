@@ -50,6 +50,13 @@ pub fn cli() -> Command {
                 .required(false)
                 .help("Set substring to replace (find is required)"),
         )
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .required(false)
+                .help("Output filename"),
+        )
         .arg(Arg::new("filename").required(true))
 }
 

@@ -1,4 +1,4 @@
-use super::{cli, Config, ConfigError};
+use super::{Config, ConfigError, cli};
 
 use clap::ArgMatches;
 use std::ops::RangeInclusive;
@@ -12,6 +12,7 @@ pub struct ConfigBuilder {
     filename: String,
     find_string: Option<String>,
     replace_string: Option<String>,
+    output_filename: Option<String>,
 }
 
 impl ConfigBuilder {
@@ -25,6 +26,7 @@ impl ConfigBuilder {
             filename: String::new(),
             find_string: None,
             replace_string: None,
+            output_filename: None,
         }
     }
 
@@ -91,6 +93,15 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn output(&mut self) -> &mut Self {
+        self.output_filename = self
+            .matches
+            .get_one::<String>("output")
+            .map(|f| f.to_owned());
+
+        self
+    }
+
     pub fn build(&mut self) -> Result<Config, ConfigError> {
         if self.replace_string.is_some() && self.find_string.is_none() {
             return Err(ConfigError::MissingFindForReplace);
@@ -116,6 +127,7 @@ impl ConfigBuilder {
             filename: self.filename.clone(),
             find_string: self.find_string.clone(),
             replace_string: self.replace_string.clone(),
+            output_filename: self.output_filename.clone(),
         };
 
         Ok(config)

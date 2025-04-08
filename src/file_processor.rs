@@ -4,6 +4,7 @@ use bstr::io::BufReadExt;
 use std::cmp;
 use std::io;
 use std::io::BufReader;
+use std::io::BufWriter;
 use std::io::prelude::*;
 use std::str::from_utf8;
 
@@ -29,7 +30,14 @@ impl FileProcessor {
         //1. Before row range
         //2. Insize of row range (modified rows)
         //3. After row range
-        let mut writer = std::fs::File::create(format!("{}{}", filename, ".out"))?;
+
+        let mut writer: Box<dyn Write> = match &self.config.output_filename {
+            Some(fname) => {
+                let file = std::fs::File::create(fname)?;
+                Box::new(BufWriter::new(file))
+            }
+            None => Box::new(std::io::stdout()),
+        };
 
         let mut non_sequence_vec: Vec<String> = Vec::new();
         let mut current_line_number = 0usize;
@@ -60,14 +68,24 @@ impl FileProcessor {
         current_line_number: usize,
         is_sequence_breaking: bool,
         non_sequence_vec: &mut Vec<String>,
-        writer: &mut std::fs::File,
+        writer: &mut Box<dyn Write>,
         sequence_stored: &mut bool,
     ) -> io::Result<bool> {
-        if !self
+        let line_in_provided_rows = self
             .config
             .rows
-            .contains(&current_line_number)
-        {
+            .contains(&current_line_number);
+
+        if !self.config.delete {
+            if line_in_provided_rows {
+                writer.write_all(line)?;
+                return Ok(true);
+            } else {
+                return Ok(true);
+            }
+        }
+
+        if !line_in_provided_rows {
             //if line_number is outside of the row range (before & after)
             writer.write_all(line)?;
             return Ok(true);
@@ -100,7 +118,7 @@ impl FileProcessor {
     fn write_modified_lines(
         &self,
         lines: &[String],
-        writer: &mut std::fs::File,
+        writer: &mut Box<dyn Write>,
     ) -> io::Result<bool> {
         for i in &self.modify_lines(lines) {
             writer.write_all(i.as_bytes())?;
@@ -359,6 +377,7 @@ mod tests {
             find_string: None,
             replace_string: None,
             sort: false,
+            output_filename: None,
         });
         let result = file_processor.modify_line(line_str);
         assert_eq!(result, line_str);
@@ -375,6 +394,7 @@ mod tests {
             find_string: None,
             replace_string: None,
             sort: false,
+            output_filename: None,
         });
         let result = file_processor.modify_line(line_str);
         assert_eq!(result, "\r\n");
@@ -391,6 +411,7 @@ mod tests {
             find_string: None,
             replace_string: None,
             sort: false,
+            output_filename: None,
         });
         let result = file_processor.modify_line(line_str);
         assert_eq!(result, "Test67891231234567");
@@ -407,6 +428,7 @@ mod tests {
             find_string: Some("123".to_owned()),
             replace_string: Some("ABCD".to_owned()),
             sort: false,
+            output_filename: None,
         });
         let result = file_processor.modify_line(line_str);
         assert_eq!(result, "Test67891231234567");
@@ -423,6 +445,7 @@ mod tests {
             find_string: Some("123".to_owned()),
             replace_string: Some("ABCD".to_owned()),
             sort: false,
+            output_filename: None,
         });
         let result = file_processor.modify_line(line_str);
         assert_eq!(result, "Test0ABCD4567891231234567");
@@ -437,6 +460,7 @@ mod tests {
             find_string: None,
             replace_string: None,
             sort: false,
+            output_filename: None,
         };
 
         FileProcessor::new(config)
@@ -462,6 +486,7 @@ mod tests {
             find_string: None,
             replace_string: None,
             sort: false,
+            output_filename: None,
         });
 
         let result = file_processor.modify_lines(&string_vec);
@@ -482,6 +507,7 @@ mod tests {
             find_string: None,
             replace_string: None,
             sort: false,
+            output_filename: None,
         });
 
         let result = file_processor.modify_lines(&string_vec);
@@ -502,6 +528,7 @@ mod tests {
             find_string: None,
             replace_string: None,
             sort: true,
+            output_filename: None,
         });
 
         let result = file_processor.modify_lines(&string_vec);

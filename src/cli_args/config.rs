@@ -9,6 +9,7 @@ pub struct Config {
     pub filename: String,
     pub find_string: Option<String>,
     pub replace_string: Option<String>,
+    pub output_filename: Option<String>,
 }
 
 impl Config {
