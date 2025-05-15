@@ -1,5 +1,6 @@
 use crate::cli_args::Config;
 
+use crate::constants::NEW_LINE;
 use bstr::io::BufReadExt;
 use std::cmp;
 use std::io;
@@ -172,21 +173,29 @@ impl FileProcessor {
     }
 
     fn remove_new_line(&self, line: String) -> String {
-        #[cfg(windows)]
-        const NEW_LINE: &str = "\r\n";
-        #[cfg(not(windows))]
-        const NEW_LINE: &str = "\n";
-
-        line[..(line.len() - NEW_LINE.len())].to_owned()
+        return self.str_remove_endings(line, NEW_LINE.to_string());
     }
 
     fn append_new_line(&self, line: String) -> String {
-        #[cfg(windows)]
-        const NEW_LINE: &str = "\r\n";
-        #[cfg(not(windows))]
-        const NEW_LINE: &str = "\n";
-
         format!("{}{}", line, NEW_LINE)
+    }
+
+    fn str_remove_endings(&self, input: String, suffix: String) -> String {
+        if suffix.len() == 0 {
+            return input;
+        }
+
+        let chr_ind = input
+            .char_indices()
+            .nth_back(suffix.chars().count() - 1);
+
+        if let Some(value) = chr_ind {
+            let index = value.0;
+            if input[index..].to_string() == suffix {
+                return input[..index].to_string();
+            }
+        }
+        return input;
     }
 
     fn get_substring(
@@ -364,6 +373,8 @@ mod tests {
     fn test_modify_line() {
         //pos:          123456789012345678901234
         let line_str = "Test01234567891231234567";
+        let new_line = "\r\n";
+        let new_line = "\n";
 
         //1
         //Given - delete & replace disabled
@@ -397,7 +408,7 @@ mod tests {
             output_filename: None,
         });
         let result = file_processor.modify_line(line_str);
-        assert_eq!(result, "\r\n");
+        assert_eq!(result, new_line);
 
         //3
         //Given - delete enabled with column range 5-10 provided
