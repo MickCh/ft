@@ -150,14 +150,22 @@ impl FileProcessor {
         let (col_start, col_end) = self.config.cols.clone().into_inner();
 
         if self.config.delete && self.config.is_cols_range_provided() {
-            let line = self.remove_new_line(utf8_line.to_owned());
+            let (modified, line) =
+                self.str_remove_endings(utf8_line.to_owned(), NEW_LINE.to_string());
+
             let result = self.get_substring(line.as_str(), col_start, col_end, true);
-            return self.append_new_line(result);
+
+            if modified {
+                return self.append_new_line(result);
+            }
+            return result;
         }
 
         if let Some(find) = self.config.find_string.clone() {
             if let Some(replace) = self.config.replace_string.clone() {
-                let line = self.remove_new_line(utf8_line.to_owned());
+                let (modified, line) =
+                    self.str_remove_endings(utf8_line.to_owned(), NEW_LINE.to_string());
+
                 let result = self.line_replace(
                     line.as_str(),
                     find.as_str(),
@@ -165,24 +173,24 @@ impl FileProcessor {
                     col_start,
                     col_end,
                 );
-                return self.append_new_line(result);
+
+                if modified {
+                    return self.append_new_line(result);
+                }
+                return result;
             }
         };
 
         utf8_line.to_owned()
     }
 
-    fn remove_new_line(&self, line: String) -> String {
-        return self.str_remove_endings(line, NEW_LINE.to_string());
-    }
-
     fn append_new_line(&self, line: String) -> String {
         format!("{}{}", line, NEW_LINE)
     }
 
-    fn str_remove_endings(&self, input: String, suffix: String) -> String {
+    fn str_remove_endings(&self, input: String, suffix: String) -> (bool, String) {
         if suffix.len() == 0 {
-            return input;
+            return (false, input);
         }
 
         let chr_ind = input
@@ -192,10 +200,10 @@ impl FileProcessor {
         if let Some(value) = chr_ind {
             let index = value.0;
             if input[index..].to_string() == suffix {
-                return input[..index].to_string();
+                return (true, input[..index].to_string());
             }
         }
-        return input;
+        return (false, input);
     }
 
     fn get_substring(
@@ -373,8 +381,6 @@ mod tests {
     fn test_modify_line() {
         //pos:          123456789012345678901234
         let line_str = "Test01234567891231234567";
-        let new_line = "\r\n";
-        let new_line = "\n";
 
         //1
         //Given - delete & replace disabled
@@ -408,7 +414,7 @@ mod tests {
             output_filename: None,
         });
         let result = file_processor.modify_line(line_str);
-        assert_eq!(result, new_line);
+        assert_eq!(result, "");
 
         //3
         //Given - delete enabled with column range 5-10 provided
