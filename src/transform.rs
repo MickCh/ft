@@ -60,15 +60,17 @@ impl LineTransform for ReplaceInColumns {
 pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
     let mut pipeline: Vec<Box<dyn LineTransform>> = Vec::new();
 
-    if config.delete && config.is_cols_range_provided() {
-        pipeline.push(Box::new(DeleteColumns::new(config.cols.clone())));
+    if config.delete
+        && let Some(cols) = &config.cols
+    {
+        pipeline.push(Box::new(DeleteColumns::new(cols.clone())));
     }
 
     if let (Some(find), Some(replace)) = (&config.find_string, &config.replace_string) {
         pipeline.push(Box::new(ReplaceInColumns::new(
             find.clone(),
             replace.clone(),
-            config.cols.clone(),
+            config.cols_or_full(),
         )));
     }
 
@@ -81,11 +83,11 @@ mod tests {
 
     fn config() -> Config {
         Config {
-            rows: 1..=usize::MAX,
-            cols: 1..=usize::MAX,
+            rows: None,
+            cols: None,
             sort: false,
             delete: false,
-            filename: String::new(),
+            filename: std::path::PathBuf::new(),
             find_string: None,
             replace_string: None,
             output_filename: None,
@@ -119,7 +121,7 @@ mod tests {
     fn build_pipeline_adds_delete_columns() {
         let mut config = config();
         config.delete = true;
-        config.cols = 5..=10;
+        config.cols = Some(5..=10);
         assert_eq!(build_pipeline(&config).len(), 1);
     }
 

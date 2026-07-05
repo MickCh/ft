@@ -31,14 +31,14 @@ pub struct FileProcessor {
 impl FileProcessor {
     pub fn new(config: &Config) -> FileProcessor {
         FileProcessor {
-            rows: config.rows.clone(),
+            rows: config.rows_or_full(),
             //delete mode keeps lines outside the row range,
             //selection mode (no delete) drops them
             keep_lines_outside_rows: config.delete,
-            delete_lines_in_rows: config.delete
-                && config.is_rows_range_provided()
-                && !config.is_cols_range_provided(),
-            sort_key_cols: config.sort.then(|| config.cols.clone()),
+            delete_lines_in_rows: config.delete && config.rows.is_some() && config.cols.is_none(),
+            sort_key_cols: config
+                .sort
+                .then(|| config.cols_or_full()),
             transforms: transform::build_pipeline(config),
         }
     }
@@ -149,11 +149,11 @@ mod tests {
 
     fn config() -> Config {
         Config {
-            rows: 1..=usize::MAX,
-            cols: 1..=usize::MAX,
+            rows: None,
+            cols: None,
             sort: false,
             delete: false,
-            filename: String::new(),
+            filename: std::path::PathBuf::new(),
             find_string: None,
             replace_string: None,
             output_filename: None,
@@ -198,7 +198,7 @@ mod tests {
     fn sorts_only_selected_rows() {
         let mut config = config();
         config.sort = true;
-        config.rows = 2..=4;
+        config.rows = Some(2..=4);
 
         let result = run(config, "header\nc\na\nb\n");
         //row 1 is dropped in selection mode, rows 2-4 are sorted
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn replace_respects_column_boundaries_per_line() {
         let mut config = config();
-        config.cols = 7..=9;
+        config.cols = Some(7..=9);
         config.find_string = Some("foo".to_owned());
         config.replace_string = Some("BAR".to_owned());
 
@@ -240,7 +240,7 @@ mod tests {
     fn delete_keeps_lines_outside_row_range() {
         let mut config = config();
         config.delete = true;
-        config.rows = 2..=3;
+        config.rows = Some(2..=3);
 
         let result = run(config, "one\ntwo\nthree\nfour\n");
         assert_eq!(result, "one\nfour\n");
@@ -250,8 +250,8 @@ mod tests {
     fn delete_columns_applies_only_to_selected_rows() {
         let mut config = config();
         config.delete = true;
-        config.rows = 1..=1;
-        config.cols = 1..=4;
+        config.rows = Some(1..=1);
+        config.cols = Some(1..=4);
 
         let result = run(config, "one one\ntwo two\n");
         assert_eq!(result, "one\ntwo two\n");

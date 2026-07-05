@@ -158,6 +158,20 @@ fn replace_with_delete_is_rejected() {
 }
 
 #[test]
+fn inverted_range_is_rejected() {
+    let input = TempFile::new("inverted-range", INPUT);
+    let output = run_ft(&["-R", "5-2", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
+fn zero_based_range_is_rejected() {
+    let input = TempFile::new("zero-range", INPUT);
+    let output = run_ft(&["-C", "0-5", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn missing_input_file_fails() {
     let output = run_ft(&["/nonexistent/ft-test-missing.txt"]);
     assert!(!output.status.success());

@@ -25,9 +25,8 @@ CI (`.github/workflows/rust.yml`) runs `cargo build` and `cargo test` on pushes/
 Library crate (`src/lib.rs`) plus a thin binary (`src/main.rs`). Flow: argv → validated `Config` → transform pipeline → streaming processor. Only `main.rs` touches the filesystem; the processor works on injected `BufRead`/`Write`, so tests run against in-memory `Cursor`/`Vec<u8>`.
 
 - `src/cli_args/` — everything between argv and a valid `Config`:
-  - `cli.rs` — clap `Command` definition and range parsing (`<start>-<end>`, 1-based inclusive).
-  - `config_builder.rs` — `ConfigBuilder` reads clap matches, applies defaults, and validates cross-argument rules (e.g. `--replace` requires `--find`, replace and delete are mutually exclusive) in `build()`.
-  - `config.rs` — immutable `Config`. "Range not provided" is encoded as the full range `1..=usize::MAX`; the `is_*_provided()` helpers detect this.
+  - `cli.rs` — clap `Command` definition (name/version come from `crate_name!`/`crate_version!`) and range parsing; single-value validity (format `<start>-<end>`, 1-based, start ≤ end) is enforced here in the value parser.
+  - `config.rs` — immutable `Config` built via `TryFrom<ArgMatches>`, which validates cross-argument rules (e.g. `--replace` requires `--find`, replace and delete are mutually exclusive). Ranges are `Option<RangeInclusive<usize>>` (`None` = not provided); `rows_or_full()`/`cols_or_full()` supply the `1..=usize::MAX` fallback. Paths are `PathBuf`.
   - `config_error.rs` — `ConfigError` enum with `Display` for user-facing validation messages.
 - `src/transform.rs` — `LineTransform` trait and its implementations (`DeleteColumns`, `ReplaceInColumns`); `build_pipeline(&Config)` derives the pipeline once. A new per-line operation is a new transform here, not a new branch in the processing loop.
 - `src/text.rs` — pure char-indexed helpers (`substring`, `remove_columns`, `replace_in_columns`, `split_line_terminator`); all UTF-8 edge-case tests live here.

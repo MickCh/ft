@@ -1,9 +1,10 @@
-use clap::{Arg, ArgAction, Command};
+use clap::{Arg, ArgAction, Command, crate_name, crate_version};
 use std::ops::RangeInclusive;
 
 pub fn cli() -> Command {
-    Command::new("tf [File Transformer]")
-        .version("0.0.2")
+    Command::new(crate_name!())
+        .version(crate_version!())
+        .about("File Transformer")
         .arg(
             Arg::new("rows")
                 .short('R')
@@ -61,7 +62,7 @@ pub fn cli() -> Command {
 }
 
 fn parse_range_lines(input: &str) -> Result<RangeInclusive<usize>, String> {
-    let parts: Vec<&str> = input.split("-").collect();
+    let parts: Vec<&str> = input.split('-').collect();
 
     if parts.len() != 2 {
         return Err("Invalid range format, expected: <value1>-<value2>".to_owned());
@@ -75,5 +76,50 @@ fn parse_range_lines(input: &str) -> Result<RangeInclusive<usize>, String> {
         .parse()
         .map_err(|_| format!("Second value `{input}` isn't a number"))?;
 
+    if from < 1 {
+        return Err("Range is 1-based, start must be at least 1".to_owned());
+    }
+
+    if from > to {
+        return Err("Range start cannot be greater than its end".to_owned());
+    }
+
     Ok(RangeInclusive::new(from, to))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_definition_is_consistent() {
+        cli().debug_assert();
+    }
+
+    #[test]
+    fn parses_valid_range() {
+        assert_eq!(parse_range_lines("2-5").unwrap(), 2..=5);
+        assert_eq!(parse_range_lines("7-7").unwrap(), 7..=7);
+    }
+
+    #[test]
+    fn rejects_inverted_range() {
+        assert!(parse_range_lines("5-2").is_err());
+    }
+
+    #[test]
+    fn rejects_zero_start() {
+        assert!(parse_range_lines("0-5").is_err());
+    }
+
+    #[test]
+    fn rejects_non_numeric_values() {
+        assert!(parse_range_lines("a-5").is_err());
+        assert!(parse_range_lines("1-b").is_err());
+    }
+
+    #[test]
+    fn rejects_missing_separator() {
+        assert!(parse_range_lines("15").is_err());
+    }
 }
