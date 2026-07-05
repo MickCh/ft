@@ -1,9 +1,5 @@
-mod cli_args;
-mod constants;
-mod file_processor;
-
-use cli_args::ConfigBuilder;
-use file_processor::FileProcessor;
+use ft::cli_args::ConfigBuilder;
+use ft::file_processor::FileProcessor;
 
 fn main() -> std::result::Result<(), String> {
     let config = ConfigBuilder::new()

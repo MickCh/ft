@@ -77,18 +77,12 @@ impl FileProcessor {
             .rows
             .contains(&current_line_number);
 
-        if !self.config.delete {
-            if line_in_provided_rows {
-                writer.write_all(line)?;
-                return Ok(true);
-            } else {
-                return Ok(true);
-            }
-        }
-
         if !line_in_provided_rows {
-            //if line_number is outside of the row range (before & after)
-            writer.write_all(line)?;
+            //delete mode keeps lines outside the row range,
+            //selection mode (no delete) drops them
+            if self.config.delete {
+                writer.write_all(line)?;
+            }
             return Ok(true);
         }
 
@@ -101,7 +95,12 @@ impl FileProcessor {
             return Ok(true);
         }
 
-        let utf8_line = from_utf8(line).unwrap(); //TODO: unwrap! - improve error handling
+        let utf8_line = from_utf8(line).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("line {current_line_number} is not valid UTF-8: {e}"),
+            )
+        })?;
 
         if is_sequence_breaking {
             non_sequence_vec.push(utf8_line.to_owned());
@@ -161,25 +160,24 @@ impl FileProcessor {
             return result;
         }
 
-        if let Some(find) = self.config.find_string.clone() {
-            if let Some(replace) = self.config.replace_string.clone() {
-                let (modified, line) =
-                    self.str_remove_endings(utf8_line.to_owned(), NEW_LINE.to_string());
+        if let (Some(find), Some(replace)) = (&self.config.find_string, &self.config.replace_string)
+        {
+            let (modified, line) =
+                self.str_remove_endings(utf8_line.to_owned(), NEW_LINE.to_string());
 
-                let result = self.line_replace(
-                    line.as_str(),
-                    find.as_str(),
-                    replace.as_str(),
-                    col_start,
-                    col_end,
-                );
+            let result = self.line_replace(
+                line.as_str(),
+                find.as_str(),
+                replace.as_str(),
+                col_start,
+                col_end,
+            );
 
-                if modified {
-                    return self.append_new_line(result);
-                }
-                return result;
+            if modified {
+                return self.append_new_line(result);
             }
-        };
+            return result;
+        }
 
         utf8_line.to_owned()
     }
@@ -189,7 +187,7 @@ impl FileProcessor {
     }
 
     fn str_remove_endings(&self, input: String, suffix: String) -> (bool, String) {
-        if suffix.len() == 0 {
+        if suffix.is_empty() {
             return (false, input);
         }
 
@@ -199,11 +197,11 @@ impl FileProcessor {
 
         if let Some(value) = chr_ind {
             let index = value.0;
-            if input[index..].to_string() == suffix {
+            if input[index..] == suffix {
                 return (true, input[..index].to_string());
             }
         }
-        return (false, input);
+        (false, input)
     }
 
     fn get_substring(

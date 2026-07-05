@@ -16,6 +16,8 @@ pub struct ConfigBuilder {
 }
 
 impl ConfigBuilder {
+    //no Default: constructing this parses real argv and may exit the process
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         ConfigBuilder {
             matches: cli().get_matches(),
