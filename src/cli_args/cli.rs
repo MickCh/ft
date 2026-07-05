@@ -52,6 +52,15 @@ pub fn cli() -> Command {
                 .help("Set substring to replace (find is required)"),
         )
         .arg(
+            Arg::new("regex")
+                .short('e')
+                .long("regex")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("find")
+                .help("Treat the find pattern as a regular expression"),
+        )
+        .arg(
             Arg::new("output")
                 .short('o')
                 .long("output")

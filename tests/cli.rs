@@ -166,6 +166,33 @@ fn output_flag_writes_to_file_instead_of_stdout() {
 }
 
 #[test]
+fn regex_replace_works() {
+    let input = TempFile::new("regex-replace", "a1 bb22\nccc333 d\n");
+    let stdout = run_ft_stdout(&["-e", "-f", r"\d+", "-r", "N", input.path_str()]);
+    assert_eq!(stdout, "aN bbN\ncccN d\n");
+}
+
+#[test]
+fn regex_replace_supports_captures() {
+    let input = TempFile::new("regex-captures", "user@host\n");
+    let stdout = run_ft_stdout(&["-e", "-f", r"(\w+)@(\w+)", "-r", "$2.$1", input.path_str()]);
+    assert_eq!(stdout, "host.user\n");
+}
+
+#[test]
+fn invalid_regex_is_rejected() {
+    let input = TempFile::new("regex-invalid", INPUT);
+    let output = run_ft(&["-e", "-f", "[unclosed", "-r", "N", input.path_str()]);
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Invalid regular expression"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn replace_without_find_is_rejected() {
     let input = TempFile::new("replace-no-find", INPUT);
     let output = run_ft(&["-r", "BAR", input.path_str()]);

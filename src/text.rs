@@ -43,14 +43,12 @@ pub fn remove_columns(line: &str, cols: &RangeInclusive<usize>) -> String {
     result
 }
 
-/// Replace every `find` occurrence with `replace`, but only within
-/// the column range; the rest of the line is left untouched.
-pub fn replace_in_columns(
-    line: &str,
-    find: &str,
-    replace: &str,
-    cols: &RangeInclusive<usize>,
-) -> String {
+/// Apply `map_within` to the part of the line inside the column range,
+/// leaving the rest of the line untouched.
+pub fn map_columns<F>(line: &str, cols: &RangeInclusive<usize>, map_within: F) -> String
+where
+    F: FnOnce(&str) -> String,
+{
     let (start, end) = clamp_start(cols);
     let chars: Vec<char> = line.chars().collect();
 
@@ -63,13 +61,24 @@ pub fn replace_in_columns(
     let within: String = chars[(start - 1)..end].iter().collect();
     let after = &chars[end..];
 
-    let replaced = within.replace(find, replace);
+    let mapped = map_within(&within);
 
-    let mut result = String::with_capacity(before.len() + replaced.len() + after.len());
+    let mut result = String::with_capacity(before.len() + mapped.len() + after.len());
     result.extend(before);
-    result.push_str(&replaced);
+    result.push_str(&mapped);
     result.extend(after);
     result
+}
+
+/// Replace every `find` occurrence with `replace`, but only within
+/// the column range; the rest of the line is left untouched.
+pub fn replace_in_columns(
+    line: &str,
+    find: &str,
+    replace: &str,
+    cols: &RangeInclusive<usize>,
+) -> String {
+    map_columns(line, cols, |within| within.replace(find, replace))
 }
 
 //column numbering is 1-based; treat a 0 start as column 1

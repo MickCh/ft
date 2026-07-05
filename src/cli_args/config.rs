@@ -2,8 +2,18 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use clap::ArgMatches;
+use regex::Regex;
 
 use super::ConfigError;
+
+/// What `--find` matches: a literal substring, or a regular expression
+/// when `--regex` is given. The regex is compiled (and therefore
+/// validated) while building the `Config`.
+#[derive(Debug)]
+pub enum FindPattern {
+    Literal(String),
+    Regex(Regex),
+}
 
 #[derive(Debug)]
 pub struct Config {
@@ -13,7 +23,7 @@ pub struct Config {
     pub delete: bool,
     //`None` means the input comes from stdin
     pub filename: Option<PathBuf>,
-    pub find_string: Option<String>,
+    pub find: Option<FindPattern>,
     pub replace_string: Option<String>,
     pub output_filename: Option<PathBuf>,
 }
@@ -41,6 +51,14 @@ impl TryFrom<ArgMatches> for Config {
     /// span multiple arguments. Single-argument validity (range format,
     /// 1-based bounds) is enforced earlier, by the clap value parsers.
     fn try_from(matches: ArgMatches) -> Result<Config, ConfigError> {
+        let find = match matches.get_one::<String>("find") {
+            None => None,
+            Some(pattern) if matches.get_flag("regex") => Some(FindPattern::Regex(
+                Regex::new(pattern).map_err(|e| ConfigError::InvalidRegex(e.to_string()))?,
+            )),
+            Some(pattern) => Some(FindPattern::Literal(pattern.clone())),
+        };
+
         let config = Config {
             rows: matches
                 .get_one::<RangeInclusive<usize>>("rows")
@@ -54,9 +72,7 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<String>("filename")
                 .filter(|name| name.as_str() != "-")
                 .map(PathBuf::from),
-            find_string: matches
-                .get_one::<String>("find")
-                .cloned(),
+            find,
             replace_string: matches
                 .get_one::<String>("replace")
                 .cloned(),
@@ -65,7 +81,7 @@ impl TryFrom<ArgMatches> for Config {
                 .map(PathBuf::from),
         };
 
-        if config.replace_string.is_some() && config.find_string.is_none() {
+        if config.replace_string.is_some() && config.find.is_none() {
             return Err(ConfigError::MissingFindForReplace);
         }
 
@@ -102,7 +118,7 @@ mod tests {
         assert!(config.cols.is_none());
         assert!(!config.sort);
         assert!(!config.delete);
-        assert!(config.find_string.is_none());
+        assert!(config.find.is_none());
         assert!(config.replace_string.is_none());
         assert!(config.output_filename.is_none());
     }
@@ -129,7 +145,7 @@ mod tests {
         assert_eq!(config.rows, Some(2..=4));
         assert_eq!(config.cols, Some(1..=10));
         assert!(config.sort);
-        assert_eq!(config.find_string.as_deref(), Some("a"));
+        assert!(matches!(config.find, Some(FindPattern::Literal(ref f)) if f == "a"));
         assert_eq!(config.replace_string.as_deref(), Some("b"));
         assert_eq!(config.output_filename, Some(PathBuf::from("out.txt")));
     }
@@ -149,6 +165,28 @@ mod tests {
 
         assert_eq!(config.rows_or_full(), 1..=usize::MAX);
         assert_eq!(config.cols_or_full(), 1..=usize::MAX);
+    }
+
+    #[test]
+    fn regex_flag_compiles_find_as_regex() {
+        let config = config_from(&["ft", "-e", "-f", r"\d+", "-r", "N", "input.txt"]).unwrap();
+        assert!(matches!(config.find, Some(FindPattern::Regex(_))));
+    }
+
+    #[test]
+    fn rejects_invalid_regex() {
+        let error =
+            config_from(&["ft", "-e", "-f", "[unclosed", "-r", "N", "input.txt"]).unwrap_err();
+        assert!(matches!(error, ConfigError::InvalidRegex(_)));
+    }
+
+    #[test]
+    fn regex_flag_requires_find() {
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "-e", "input.txt"])
+                .is_err()
+        );
     }
 
     #[test]

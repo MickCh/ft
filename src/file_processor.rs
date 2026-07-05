@@ -145,6 +145,7 @@ impl FileProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli_args::FindPattern;
     use std::io::Cursor;
 
     fn config() -> Config {
@@ -154,7 +155,7 @@ mod tests {
             sort: false,
             delete: false,
             filename: None,
-            find_string: None,
+            find: None,
             replace_string: None,
             output_filename: None,
         }
@@ -178,7 +179,7 @@ mod tests {
     #[test]
     fn streams_replace_without_buffering() {
         let mut config = config();
-        config.find_string = Some("foo".to_owned());
+        config.find = Some(FindPattern::Literal("foo".to_owned()));
         config.replace_string = Some("BAR".to_owned());
 
         let result = run(config, "a foo\nb foo\n");
@@ -228,7 +229,7 @@ mod tests {
     fn replace_respects_column_boundaries_per_line() {
         let mut config = config();
         config.cols = Some(7..=9);
-        config.find_string = Some("foo".to_owned());
+        config.find = Some(FindPattern::Literal("foo".to_owned()));
         config.replace_string = Some("BAR".to_owned());
 
         //"foo" starts at column 7 in the first line and column 9 in the second

@@ -7,7 +7,9 @@
 
 use std::ops::RangeInclusive;
 
-use crate::cli_args::Config;
+use regex::Regex;
+
+use crate::cli_args::{Config, FindPattern};
 use crate::text;
 
 /// A single per-line operation in the processing pipeline.
@@ -56,6 +58,38 @@ impl LineTransform for ReplaceInColumns {
     }
 }
 
+/// Replaces every regex match with the replacement (which may use
+/// capture group references like `$1`) within a column range.
+pub struct RegexReplaceInColumns {
+    pattern: Regex,
+    replacement: String,
+    cols: RangeInclusive<usize>,
+}
+
+impl RegexReplaceInColumns {
+    pub fn new(
+        pattern: Regex,
+        replacement: String,
+        cols: RangeInclusive<usize>,
+    ) -> RegexReplaceInColumns {
+        RegexReplaceInColumns {
+            pattern,
+            replacement,
+            cols,
+        }
+    }
+}
+
+impl LineTransform for RegexReplaceInColumns {
+    fn apply(&self, line: &str) -> String {
+        text::map_columns(line, &self.cols, |within| {
+            self.pattern
+                .replace_all(within, self.replacement.as_str())
+                .into_owned()
+        })
+    }
+}
+
 /// Build the per-line transform pipeline implied by the configuration.
 pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
     let mut pipeline: Vec<Box<dyn LineTransform>> = Vec::new();
@@ -66,12 +100,19 @@ pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
         pipeline.push(Box::new(DeleteColumns::new(cols.clone())));
     }
 
-    if let (Some(find), Some(replace)) = (&config.find_string, &config.replace_string) {
-        pipeline.push(Box::new(ReplaceInColumns::new(
-            find.clone(),
-            replace.clone(),
-            config.cols_or_full(),
-        )));
+    if let (Some(find), Some(replace)) = (&config.find, &config.replace_string) {
+        match find {
+            FindPattern::Literal(text) => pipeline.push(Box::new(ReplaceInColumns::new(
+                text.clone(),
+                replace.clone(),
+                config.cols_or_full(),
+            ))),
+            FindPattern::Regex(pattern) => pipeline.push(Box::new(RegexReplaceInColumns::new(
+                pattern.clone(),
+                replace.clone(),
+                config.cols_or_full(),
+            ))),
+        }
     }
 
     pipeline
@@ -88,7 +129,7 @@ mod tests {
             sort: false,
             delete: false,
             filename: None,
-            find_string: None,
+            find: None,
             replace_string: None,
             output_filename: None,
         }
@@ -110,6 +151,30 @@ mod tests {
             transform.apply("Test01234567891231234567"),
             "Test0ABCD4567891231234567"
         );
+    }
+
+    #[test]
+    fn regex_replace_in_columns_replaces_matches() {
+        let transform =
+            RegexReplaceInColumns::new(Regex::new(r"\d+").unwrap(), "N".to_owned(), 1..=usize::MAX);
+        assert_eq!(transform.apply("a1 bb22 ccc333"), "aN bbN cccN");
+    }
+
+    #[test]
+    fn regex_replace_supports_capture_groups() {
+        let transform = RegexReplaceInColumns::new(
+            Regex::new(r"(\w+)@(\w+)").unwrap(),
+            "$2.$1".to_owned(),
+            1..=usize::MAX,
+        );
+        assert_eq!(transform.apply("user@host"), "host.user");
+    }
+
+    #[test]
+    fn regex_replace_respects_column_range() {
+        let transform =
+            RegexReplaceInColumns::new(Regex::new(r"\d").unwrap(), "X".to_owned(), 1..=4);
+        assert_eq!(transform.apply("1234567890"), "XXXX567890");
     }
 
     #[test]
@@ -135,7 +200,7 @@ mod tests {
     #[test]
     fn build_pipeline_adds_replace_only_when_find_and_replace_present() {
         let mut config = config();
-        config.find_string = Some("foo".to_owned());
+        config.find = Some(FindPattern::Literal("foo".to_owned()));
         assert!(build_pipeline(&config).is_empty());
 
         config.replace_string = Some("bar".to_owned());
