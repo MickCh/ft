@@ -158,6 +158,19 @@ fn replace_with_delete_is_rejected() {
 }
 
 #[test]
+fn delete_without_any_range_is_rejected() {
+    let input = TempFile::new("delete-no-range", INPUT);
+    let output = run_ft(&["-d", input.path_str()]);
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Delete requires"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn inverted_range_is_rejected() {
     let input = TempFile::new("inverted-range", INPUT);
     let output = run_ft(&["-R", "5-2", input.path_str()]);

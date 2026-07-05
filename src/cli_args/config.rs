@@ -72,6 +72,10 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::ReplaceWithDelete);
         }
 
+        if config.delete && config.rows.is_none() && config.cols.is_none() {
+            return Err(ConfigError::DeleteWithoutRange);
+        }
+
         Ok(config)
     }
 }
@@ -147,5 +151,17 @@ mod tests {
     fn rejects_replace_with_delete() {
         let error = config_from(&["ft", "-d", "-f", "a", "-r", "b", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::ReplaceWithDelete));
+    }
+
+    #[test]
+    fn rejects_delete_without_any_range() {
+        let error = config_from(&["ft", "-d", "input.txt"]).unwrap_err();
+        assert!(matches!(error, ConfigError::DeleteWithoutRange));
+    }
+
+    #[test]
+    fn accepts_delete_with_row_or_column_range() {
+        assert!(config_from(&["ft", "-d", "-R", "2-3", "input.txt"]).is_ok());
+        assert!(config_from(&["ft", "-d", "-C", "2-3", "input.txt"]).is_ok());
     }
 }

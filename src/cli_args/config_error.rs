@@ -5,6 +5,7 @@ use std::fmt::Formatter;
 pub enum ConfigError {
     MissingFindForReplace,
     ReplaceWithDelete,
+    DeleteWithoutRange,
 }
 
 impl fmt::Display for ConfigError {
@@ -12,6 +13,9 @@ impl fmt::Display for ConfigError {
         let message = match self {
             ConfigError::MissingFindForReplace => "Find string not specified for replace operation",
             ConfigError::ReplaceWithDelete => "Replace cannot be used with delete option",
+            ConfigError::DeleteWithoutRange => {
+                "Delete requires a row range (--rows) or a column range (--cols)"
+            }
         };
 
         write!(f, "{message}")
