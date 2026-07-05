@@ -1,7 +1,10 @@
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Write};
+
 use ft::cli_args::ConfigBuilder;
 use ft::file_processor::FileProcessor;
 
-fn main() -> std::result::Result<(), String> {
+fn main() -> Result<(), String> {
     let config = ConfigBuilder::new()
         .rows()
         .cols()
@@ -10,18 +13,23 @@ fn main() -> std::result::Result<(), String> {
         .filename()
         .replace()
         .output()
-        .build();
+        .build()
+        .map_err(|e| format!("User input: {e}"))?;
 
-    let config = match config {
-        Ok(config) => config,
-        Err(e) => {
-            return Err(format!("User input: {}", e));
+    let input = File::open(&config.filename)
+        .map_err(|e| format!("Cannot open input file `{}`: {e}", config.filename))?;
+    let reader = BufReader::new(input);
+
+    let mut writer: Box<dyn Write> = match &config.output_filename {
+        Some(filename) => {
+            let file = File::create(filename)
+                .map_err(|e| format!("Cannot create output file `{filename}`: {e}"))?;
+            Box::new(BufWriter::new(file))
         }
+        None => Box::new(BufWriter::new(std::io::stdout())),
     };
 
-    let file_processor = FileProcessor::new(config);
-    match file_processor.process() {
-        Ok(ok) => Ok(ok),
-        Err(e) => Err(format!("Processing error: {}", e)),
-    }
+    FileProcessor::new(&config)
+        .run(reader, &mut writer)
+        .map_err(|e| format!("Processing error: {e}"))
 }

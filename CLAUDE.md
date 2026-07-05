@@ -22,19 +22,23 @@ CI (`.github/workflows/rust.yml`) runs `cargo build` and `cargo test` on pushes/
 
 ## Architecture
 
-Two-stage pipeline: parse CLI input into a validated `Config`, then stream the file through `FileProcessor`.
+Library crate (`src/lib.rs`) plus a thin binary (`src/main.rs`). Flow: argv → validated `Config` → transform pipeline → streaming processor. Only `main.rs` touches the filesystem; the processor works on injected `BufRead`/`Write`, so tests run against in-memory `Cursor`/`Vec<u8>`.
 
 - `src/cli_args/` — everything between argv and a valid `Config`:
   - `cli.rs` — clap `Command` definition and range parsing (`<start>-<end>`, 1-based inclusive).
   - `config_builder.rs` — `ConfigBuilder` reads clap matches, applies defaults, and validates cross-argument rules (e.g. `--replace` requires `--find`, replace and delete are mutually exclusive) in `build()`.
-  - `config.rs` — immutable `Config` consumed by the processor. "Range not provided" is encoded as the full range `1..=usize::MAX`; the `is_*_provided()` helpers detect this.
+  - `config.rs` — immutable `Config`. "Range not provided" is encoded as the full range `1..=usize::MAX`; the `is_*_provided()` helpers detect this.
   - `config_error.rs` — `ConfigError` enum with `Display` for user-facing validation messages.
-- `src/file_processor.rs` — `FileProcessor` owns the `Config` and streams the input line by line (`bstr::for_byte_line_with_terminator`, so line terminators stay attached to lines). Output goes to `--output` file or stdout via `Box<dyn Write>`.
-- `src/constants.rs` — platform-dependent `NEW_LINE`.
+- `src/transform.rs` — `LineTransform` trait and its implementations (`DeleteColumns`, `ReplaceInColumns`); `build_pipeline(&Config)` derives the pipeline once. A new per-line operation is a new transform here, not a new branch in the processing loop.
+- `src/text.rs` — pure char-indexed helpers (`substring`, `remove_columns`, `replace_in_columns`, `split_line_terminator`); all UTF-8 edge-case tests live here.
+- `src/file_processor.rs` — `FileProcessor::run<R: BufRead, W: Write>` streams line by line (`bstr::for_byte_line_with_terminator`), applies row selection (delete mode keeps out-of-range lines; selection mode drops them), runs the transform pipeline on content with the terminator split off and re-attached (original terminators, including CRLF, are preserved).
+- `src/constants.rs` — platform-dependent `NEW_LINE` (only used when sorting forces a terminator onto an unterminated line).
 
-Key processing concept: operations are either streamable (delete, find/replace — each line written immediately) or *sequence-breaking* (sort — lines inside the row range must be buffered and only flushed once the range ends; see `Config::is_sequence_breaking` and the `non_sequence_vec` buffering in `process_single_line`).
+Key processing concept: transforms stream (each line written immediately), but sort is *sequence-breaking* — lines inside the row range are buffered in `sort_buffer` and flushed sorted (by the column-range key, `sort_by_cached_key`) once the row range ends or at EOF.
 
-All column/row semantics are 1-based inclusive, and column indexing is by `char`, not by byte (see the UTF-8 tests in `file_processor.rs`).
+All column/row semantics are 1-based inclusive, and column indexing is by `char`, not by byte.
+
+Tests: unit tests live next to the code; end-to-end CLI tests in `tests/cli.rs` run the real binary via `env!("CARGO_BIN_EXE_ft")` — extend those whenever CLI behavior changes.
 
 ## Conventions
 

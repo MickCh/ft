@@ -1,555 +1,272 @@
-use crate::cli_args::Config;
+//! Streaming orchestrator: applies row selection, the per-line transform
+//! pipeline and optional sorting to any `BufRead` source and `Write` sink.
 
+use crate::cli_args::Config;
 use crate::constants::NEW_LINE;
+use crate::text;
+use crate::transform::{self, LineTransform};
+
 use bstr::io::BufReadExt;
-use std::cmp;
 use std::io;
-use std::io::BufReader;
-use std::io::BufWriter;
 use std::io::prelude::*;
+use std::ops::RangeInclusive;
 use std::str::from_utf8;
 
+/// A buffered line split into content and its original terminator.
+struct Line {
+    content: String,
+    terminator: String,
+}
+
 pub struct FileProcessor {
-    config: Config,
+    rows: RangeInclusive<usize>,
+    keep_lines_outside_rows: bool,
+    delete_lines_in_rows: bool,
+    //sorting requires buffering the whole row range before writing;
+    //`None` means lines stream straight to the writer
+    sort_key_cols: Option<RangeInclusive<usize>>,
+    transforms: Vec<Box<dyn LineTransform>>,
 }
 
 impl FileProcessor {
-    pub fn new(config: Config) -> FileProcessor {
-        FileProcessor { config }
+    pub fn new(config: &Config) -> FileProcessor {
+        FileProcessor {
+            rows: config.rows.clone(),
+            //delete mode keeps lines outside the row range,
+            //selection mode (no delete) drops them
+            keep_lines_outside_rows: config.delete,
+            delete_lines_in_rows: config.delete
+                && config.is_rows_range_provided()
+                && !config.is_cols_range_provided(),
+            sort_key_cols: config.sort.then(|| config.cols.clone()),
+            transforms: transform::build_pipeline(config),
+        }
     }
 
-    pub fn process(&self) -> std::io::Result<()> {
-        let is_sequence_breaking = self.config.is_sequence_breaking();
+    /// Stream `reader` line by line into `writer`, applying the configured
+    /// row selection, per-line transforms and optional sorting.
+    pub fn run<R: BufRead, W: Write>(&self, mut reader: R, writer: &mut W) -> io::Result<()> {
+        let mut sort_buffer: Vec<Line> = Vec::new();
+        let mut line_number = 0usize;
+        let mut buffer_flushed = false;
 
-        let filename = &self.config.filename;
-        let reader = std::fs::File::open(filename)?;
-        let mut buffer_reader = BufReader::new(reader);
-
-        //rethink how to store data
-        //I tried to do everything is single loop but maybe need to change that approach
-        //I have 3 section now
-        //1. Before row range
-        //2. Insize of row range (modified rows)
-        //3. After row range
-
-        let mut writer: Box<dyn Write> = match &self.config.output_filename {
-            Some(fname) => {
-                let file = std::fs::File::create(fname)?;
-                Box::new(BufWriter::new(file))
-            }
-            None => Box::new(std::io::stdout()),
-        };
-
-        let mut non_sequence_vec: Vec<String> = Vec::new();
-        let mut current_line_number = 0usize;
-        let mut sequence_stored = false;
-
-        buffer_reader.for_byte_line_with_terminator(|line| {
-            current_line_number += 1;
-            self.process_single_line(
-                line,
-                current_line_number,
-                is_sequence_breaking,
-                &mut non_sequence_vec,
-                &mut writer,
-                &mut sequence_stored,
+        reader.for_byte_line_with_terminator(|raw_line| {
+            line_number += 1;
+            self.process_line(
+                raw_line,
+                line_number,
+                &mut sort_buffer,
+                &mut buffer_flushed,
+                writer,
             )
+            .map(|_| true)
         })?;
 
-        if !sequence_stored {
-            self.write_modified_lines(&non_sequence_vec, &mut writer)?;
+        if !buffer_flushed {
+            self.flush_sorted(&mut sort_buffer, writer)?;
         }
-
         writer.flush()
     }
 
-    fn process_single_line(
+    fn process_line<W: Write>(
         &self,
-        line: &[u8],
-        current_line_number: usize,
-        is_sequence_breaking: bool,
-        non_sequence_vec: &mut Vec<String>,
-        writer: &mut Box<dyn Write>,
-        sequence_stored: &mut bool,
-    ) -> io::Result<bool> {
-        let line_in_provided_rows = self
-            .config
-            .rows
-            .contains(&current_line_number);
-
-        if !line_in_provided_rows {
-            //delete mode keeps lines outside the row range,
-            //selection mode (no delete) drops them
-            if self.config.delete {
-                writer.write_all(line)?;
+        raw_line: &[u8],
+        line_number: usize,
+        sort_buffer: &mut Vec<Line>,
+        buffer_flushed: &mut bool,
+        writer: &mut W,
+    ) -> io::Result<()> {
+        if !self.rows.contains(&line_number) {
+            if self.keep_lines_outside_rows {
+                writer.write_all(raw_line)?;
             }
-            return Ok(true);
+            return Ok(());
         }
 
-        if self.config.delete
-            && self.config.is_rows_range_provided()
-            && !self.config.is_cols_range_provided()
-        {
-            //don't add lines when rows range is given without cols range
-            //do nothing - it will remove a line
-            return Ok(true);
+        if self.delete_lines_in_rows {
+            return Ok(());
         }
 
-        let utf8_line = from_utf8(line).map_err(|e| {
+        let utf8_line = from_utf8(raw_line).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("line {current_line_number} is not valid UTF-8: {e}"),
+                format!("line {line_number} is not valid UTF-8: {e}"),
             )
         })?;
 
-        if is_sequence_breaking {
-            non_sequence_vec.push(utf8_line.to_owned());
+        let (content, terminator) = text::split_line_terminator(utf8_line);
+        let content = self.apply_transforms(content);
 
-            if current_line_number >= *self.config.rows.end() {
-                *sequence_stored = self.write_modified_lines(non_sequence_vec, writer)?;
+        if self.sort_key_cols.is_some() {
+            sort_buffer.push(Line {
+                content,
+                terminator: terminator.to_owned(),
+            });
+            if line_number >= *self.rows.end() {
+                self.flush_sorted(sort_buffer, writer)?;
+                *buffer_flushed = true;
             }
         } else {
-            writer.write_all(self.modify_line(utf8_line).as_bytes())?;
+            writer.write_all(content.as_bytes())?;
+            writer.write_all(terminator.as_bytes())?;
         }
 
-        Ok(true)
+        Ok(())
     }
 
-    fn write_modified_lines(
-        &self,
-        lines: &[String],
-        writer: &mut Box<dyn Write>,
-    ) -> io::Result<bool> {
-        for i in &self.modify_lines(lines) {
-            writer.write_all(i.as_bytes())?;
-        }
-        Ok(true)
-    }
-
-    fn modify_lines(&self, lines: &[String]) -> Vec<String> {
-        let (col_start, col_end) = self.config.cols.clone().into_inner();
-
-        let mut result: Vec<String> = lines
+    fn apply_transforms(&self, content: &str) -> String {
+        self.transforms
             .iter()
-            .map(|line| self.modify_line(line))
-            .collect();
-
-        if self.config.sort {
-            result.sort_by(|line1, line2| {
-                let line1_sub = self.get_substring(line1, col_start, col_end, false);
-                let line2_sub = self.get_substring(line2, col_start, col_end, false);
-
-                line1_sub.cmp(&line2_sub)
-            });
-        }
-        result
+            .fold(content.to_owned(), |line, transform| transform.apply(&line))
     }
 
-    fn modify_line(&self, utf8_line: &str) -> String {
-        let (col_start, col_end) = self.config.cols.clone().into_inner();
+    fn flush_sorted<W: Write>(&self, buffer: &mut Vec<Line>, writer: &mut W) -> io::Result<()> {
+        let Some(cols) = &self.sort_key_cols else {
+            return Ok(());
+        };
 
-        if self.config.delete && self.config.is_cols_range_provided() {
-            let (modified, line) =
-                self.str_remove_endings(utf8_line.to_owned(), NEW_LINE.to_string());
+        buffer.sort_by_cached_key(|line| text::substring(&line.content, cols));
 
-            let result = self.get_substring(line.as_str(), col_start, col_end, true);
-
-            if modified {
-                return self.append_new_line(result);
-            }
-            return result;
-        }
-
-        if let (Some(find), Some(replace)) = (&self.config.find_string, &self.config.replace_string)
-        {
-            let (modified, line) =
-                self.str_remove_endings(utf8_line.to_owned(), NEW_LINE.to_string());
-
-            let result = self.line_replace(
-                line.as_str(),
-                find.as_str(),
-                replace.as_str(),
-                col_start,
-                col_end,
-            );
-
-            if modified {
-                return self.append_new_line(result);
-            }
-            return result;
-        }
-
-        utf8_line.to_owned()
-    }
-
-    fn append_new_line(&self, line: String) -> String {
-        format!("{}{}", line, NEW_LINE)
-    }
-
-    fn str_remove_endings(&self, input: String, suffix: String) -> (bool, String) {
-        if suffix.is_empty() {
-            return (false, input);
-        }
-
-        let chr_ind = input
-            .char_indices()
-            .nth_back(suffix.chars().count() - 1);
-
-        if let Some(value) = chr_ind {
-            let index = value.0;
-            if input[index..] == suffix {
-                return (true, input[..index].to_string());
+        let last_index = buffer.len().saturating_sub(1);
+        for (index, line) in buffer.iter().enumerate() {
+            writer.write_all(line.content.as_bytes())?;
+            if !line.terminator.is_empty() {
+                writer.write_all(line.terminator.as_bytes())?;
+            } else if index < last_index {
+                //a line missing its terminator must not glue to the next one
+                writer.write_all(NEW_LINE.as_bytes())?;
             }
         }
-        (false, input)
-    }
-
-    fn get_substring(
-        &self,
-        line_str: &str,
-        start: usize,
-        end: usize,
-        exclude_range: bool,
-    ) -> String {
-        let vec: Vec<char> = line_str.chars().collect();
-        let vec_length = vec.len();
-
-        if start > vec_length || start > end {
-            return line_str.to_owned();
-        }
-
-        let end = cmp::min(end, vec_length);
-
-        match exclude_range {
-            true => {
-                //unknown real capacity (possible UTF8 chars)
-                let chunk1: String = vec[0..(start - 1)].iter().collect();
-                let chunk2: String = vec[end..vec_length].iter().collect();
-                format!("{}{}", chunk1, chunk2)
-            }
-            false => vec[(start - 1)..end].iter().collect(),
-        }
-    }
-
-    fn line_replace(
-        &self,
-        line_str: &str,
-        find: &str,
-        replace: &str,
-        start: usize,
-        end: usize,
-    ) -> String {
-        let vec: Vec<char> = line_str.chars().collect();
-        let vec_length = vec.len();
-
-        if start > vec_length || start > end {
-            return line_str.to_owned();
-        }
-
-        let end = cmp::min(end, vec_length);
-
-        let chunk1 = &vec[0..(start - 1)];
-        let chunk2 = &vec[(start - 1)..end];
-        let chunk3 = &vec[end..vec_length];
-
-        let chunk2_str: String = chunk2.iter().collect();
-        let replaced = str::replace(&chunk2_str, find, replace);
-
-        let capacity = chunk1.len() + replaced.len() + chunk3.len();
-
-        let mut result = String::with_capacity(capacity);
-        result.extend(chunk1);
-        result.push_str(&replaced);
-        result.extend(chunk3);
-        result
+        buffer.clear();
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ops::RangeInclusive;
+    use std::io::Cursor;
 
-    #[test]
-    fn test_get_substring() {
-        let file_processor = create_file_processor();
+    fn config() -> Config {
+        Config {
+            rows: 1..=usize::MAX,
+            cols: 1..=usize::MAX,
+            sort: false,
+            delete: false,
+            filename: String::new(),
+            find_string: None,
+            replace_string: None,
+            output_filename: None,
+        }
+    }
 
-        //pos:           123456789012345678901
-        let line_utf8 = "ABCabcąłć😊😍😁123śę";
-
-        let result = file_processor.get_substring(line_utf8, 1, 3, false);
-        assert_eq!(result, "ABC");
-        let result = file_processor.get_substring(line_utf8, 1, 3, true);
-        assert_eq!(result, "abcąłć😊😍😁123śę");
-
-        let result = file_processor.get_substring(line_utf8, 1, 6, false);
-        assert_eq!(result, "ABCabc");
-        let result = file_processor.get_substring(line_utf8, 1, 6, true);
-        assert_eq!(result, "ąłć😊😍😁123śę");
-
-        let result = file_processor.get_substring(line_utf8, 1, 9, false);
-        assert_eq!(result, "ABCabcąłć");
-        let result = file_processor.get_substring(line_utf8, 1, 9, true);
-        assert_eq!(result, "😊😍😁123śę");
-
-        let result = file_processor.get_substring(line_utf8, 1, 11, false);
-        assert_eq!(result, "ABCabcąłć😊😍");
-        let result = file_processor.get_substring(line_utf8, 1, 11, true);
-        assert_eq!(result, "😁123śę");
-
-        let result = file_processor.get_substring(line_utf8, 1, 16, false);
-        assert_eq!(result, "ABCabcąłć😊😍😁123ś");
-        let result = file_processor.get_substring(line_utf8, 1, 16, true);
-        assert_eq!(result, "ę");
-
-        let result = file_processor.get_substring(line_utf8, 1, 17, false);
-        assert_eq!(result, "ABCabcąłć😊😍😁123śę");
-
-        let result = file_processor.get_substring(line_utf8, 1, 18, false);
-        assert_eq!(result, "ABCabcąłć😊😍😁123śę");
-        let result = file_processor.get_substring(line_utf8, 1, 18, true);
-        assert_eq!(result, "");
-
-        let result = file_processor.get_substring(line_utf8, 1, 30, false);
-        assert_eq!(result, "ABCabcąłć😊😍😁123śę");
-
-        let result = file_processor.get_substring(line_utf8, 4, 30, false);
-        assert_eq!(result, "abcąłć😊😍😁123śę");
-        let result = file_processor.get_substring(line_utf8, 4, 30, true);
-        assert_eq!(result, "ABC");
-
-        let result = file_processor.get_substring(line_utf8, 9, 30, false);
-        assert_eq!(result, "ć😊😍😁123śę");
-        let result = file_processor.get_substring(line_utf8, 9, 30, true);
-        assert_eq!(result, "ABCabcął");
-
-        let result = file_processor.get_substring(line_utf8, 10, 12, false);
-        assert_eq!(result, "😊😍😁");
-        let result = file_processor.get_substring(line_utf8, 10, 12, true);
-        assert_eq!(result, "ABCabcąłć123śę");
-
-        let result = file_processor.get_substring(line_utf8, 11, 11, false);
-        assert_eq!(result, "😍");
-        let result = file_processor.get_substring(line_utf8, 11, 11, true);
-        assert_eq!(result, "ABCabcąłć😊😁123śę");
+    fn run(config: Config, input: &str) -> String {
+        let processor = FileProcessor::new(&config);
+        let mut output = Vec::new();
+        processor
+            .run(Cursor::new(input.as_bytes()), &mut output)
+            .expect("processing failed");
+        String::from_utf8(output).expect("output is not valid UTF-8")
     }
 
     #[test]
-    fn test_line_replace() {
-        let file_processor = create_file_processor();
-
-        //pos:          123456789012345678901234
-        let line_str = "Test01234567891231234567";
-
-        let result = file_processor.line_replace(line_str, "Test", "Passed", 1, usize::MAX);
-        assert_eq!(result, "Passed01234567891231234567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABC", 1, usize::MAX);
-        assert_eq!(result, "Test0ABC456789ABCABC4567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABCDEF", 1, usize::MAX);
-        assert_eq!(result, "Test0ABCDEF456789ABCDEFABCDEF4567");
-
-        let result = file_processor.line_replace(line_str, "123", "", 1, usize::MAX);
-        assert_eq!(result, "Test04567894567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABCD", 6, 8);
-        assert_eq!(result, "Test0ABCD4567891231234567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABCD", 7, 8);
-        assert_eq!(result, "Test01234567891231234567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABCD", 6, 7);
-        assert_eq!(result, "Test01234567891231234567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABCD", 15, 20);
-        assert_eq!(result, "Test0123456789ABCDABCD4567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABCD", 21, 40);
-        assert_eq!(result, "Test01234567891231234567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABCD", 30, 40);
-        assert_eq!(result, "Test01234567891231234567");
-
-        let result = file_processor.line_replace(line_str, "123", "ABCD", 10, 5);
-        assert_eq!(result, "Test01234567891231234567");
+    fn passes_input_through_by_default() {
+        let input = "line1\nline2\nline3\n";
+        assert_eq!(run(config(), input), input);
     }
 
     #[test]
-    fn test_modify_line() {
-        //pos:          123456789012345678901234
-        let line_str = "Test01234567891231234567";
+    fn streams_replace_without_buffering() {
+        let mut config = config();
+        config.find_string = Some("foo".to_owned());
+        config.replace_string = Some("BAR".to_owned());
 
-        //1
-        //Given - delete & replace disabled
-        //When - call function
-        //Then - the same string
-        let file_processor = FileProcessor::new(Config {
-            cols: RangeInclusive::new(1usize, usize::MAX),
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: false,
-            filename: "".to_owned(),
-            find_string: None,
-            replace_string: None,
-            sort: false,
-            output_filename: None,
-        });
-        let result = file_processor.modify_line(line_str);
-        assert_eq!(result, line_str);
-
-        //2
-        //Given - delete enabled with column range covered string length provided
-        //When - call function
-        //Then - empty string
-        let file_processor = FileProcessor::new(Config {
-            cols: RangeInclusive::new(1usize, 50), //provided range of columns
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: true,
-            filename: "".to_owned(),
-            find_string: None,
-            replace_string: None,
-            sort: false,
-            output_filename: None,
-        });
-        let result = file_processor.modify_line(line_str);
-        assert_eq!(result, "");
-
-        //3
-        //Given - delete enabled with column range 5-10 provided
-        //When - call function
-        //Then - input string without chars 5-10
-        let file_processor = FileProcessor::new(Config {
-            cols: RangeInclusive::new(5, 10), //provided range of columns
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: true,
-            filename: "".to_owned(),
-            find_string: None,
-            replace_string: None,
-            sort: false,
-            output_filename: None,
-        });
-        let result = file_processor.modify_line(line_str);
-        assert_eq!(result, "Test67891231234567");
-
-        //4
-        //Given - delete enabled with column range 5-10 provided and find/replace provided
-        //When - call function
-        //Then - input string without chars 5-10 (only delete worked)
-        let file_processor = FileProcessor::new(Config {
-            cols: RangeInclusive::new(5, 10), //provided range of columns
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: true,
-            filename: "".to_owned(),
-            find_string: Some("123".to_owned()),
-            replace_string: Some("ABCD".to_owned()),
-            sort: false,
-            output_filename: None,
-        });
-        let result = file_processor.modify_line(line_str);
-        assert_eq!(result, "Test67891231234567");
-
-        //5
-        //Given - delete disabled but find (123)/replace (ABCD) with column range 5-10 provided
-        //When - call function
-        //Then - input string with first chars (pos. 5-7) replaces by ABCD
-        let file_processor = FileProcessor::new(Config {
-            cols: RangeInclusive::new(5, 10), //provided range of columns
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: false,
-            filename: "".to_owned(),
-            find_string: Some("123".to_owned()),
-            replace_string: Some("ABCD".to_owned()),
-            sort: false,
-            output_filename: None,
-        });
-        let result = file_processor.modify_line(line_str);
-        assert_eq!(result, "Test0ABCD4567891231234567");
-    }
-
-    fn create_file_processor() -> FileProcessor {
-        let config = Config {
-            cols: RangeInclusive::new(1usize, usize::MAX),
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: false,
-            filename: "".to_owned(),
-            find_string: None,
-            replace_string: None,
-            sort: false,
-            output_filename: None,
-        };
-
-        FileProcessor::new(config)
+        let result = run(config, "a foo\nb foo\n");
+        assert_eq!(result, "a BAR\nb BAR\n");
     }
 
     #[test]
-    fn test_modify_lines() {
-        let lines: Vec<&str> = vec!["Line1_02", "Line2_03", "Line3_01"];
-        let string_vec: Vec<String> = lines
-            .iter()
-            .map(|&line| line.to_string())
-            .collect();
+    fn sorts_whole_input() {
+        let mut config = config();
+        config.sort = true;
 
-        //1
-        //Given - Ranges/delete/sort/find/replace with default values (not provided)
-        //When - call function
-        //Then - the same lines w/o modifications
-        let file_processor = FileProcessor::new(Config {
-            cols: RangeInclusive::new(1usize, usize::MAX),
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: false,
-            filename: "".to_owned(),
-            find_string: None,
-            replace_string: None,
-            sort: false,
-            output_filename: None,
-        });
+        let result = run(config, "delta\nalpha\ncharlie\nbravo\n");
+        assert_eq!(result, "alpha\nbravo\ncharlie\ndelta\n");
+    }
 
-        let result = file_processor.modify_lines(&string_vec);
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], "Line1_02");
-        assert_eq!(result[1], "Line2_03");
-        assert_eq!(result[2], "Line3_01");
+    #[test]
+    fn sorts_only_selected_rows() {
+        let mut config = config();
+        config.sort = true;
+        config.rows = 2..=4;
 
-        //2
-        //Given - Delete for column range 1-2 provided
-        //When - call function
-        //Then - it returns 3 lines with removed columns 1-2
-        let file_processor = FileProcessor::new(Config {
-            cols: RangeInclusive::new(1usize, 2),
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: true,
-            filename: "".to_owned(),
-            find_string: None,
-            replace_string: None,
-            sort: false,
-            output_filename: None,
-        });
+        let result = run(config, "header\nc\na\nb\n");
+        //row 1 is dropped in selection mode, rows 2-4 are sorted
+        assert_eq!(result, "a\nb\nc\n");
+    }
 
-        let result = file_processor.modify_lines(&string_vec);
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], "ne1_02");
-        assert_eq!(result[1], "ne2_03");
-        assert_eq!(result[2], "ne3_01");
+    #[test]
+    fn sort_preserves_crlf_terminators() {
+        let mut config = config();
+        config.sort = true;
 
-        //3
-        //Given - Sort lines by column range 7-8 provided
-        //When - call function
-        //Then - it returns 3 sorted lines, sorting based on columns 7-8
-        let file_processor = FileProcessor::new(Config {
-            cols: RangeInclusive::new(7usize, 8),
-            rows: RangeInclusive::new(1usize, usize::MAX),
-            delete: false,
-            filename: "".to_owned(),
-            find_string: None,
-            replace_string: None,
-            sort: true,
-            output_filename: None,
-        });
+        let result = run(config, "b\r\na\r\n");
+        assert_eq!(result, "a\r\nb\r\n");
+    }
 
-        let result = file_processor.modify_lines(&string_vec);
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], "Line3_01");
-        assert_eq!(result[1], "Line1_02");
-        assert_eq!(result[2], "Line2_03");
+    #[test]
+    fn sort_adds_terminator_when_unterminated_line_moves_up() {
+        let mut config = config();
+        config.sort = true;
+
+        //"a" has no trailing newline and sorts before "b"
+        let result = run(config, "b\na");
+        assert_eq!(result, format!("a{}b\n", NEW_LINE));
+    }
+
+    #[test]
+    fn replace_respects_column_boundaries_per_line() {
+        let mut config = config();
+        config.cols = 7..=9;
+        config.find_string = Some("foo".to_owned());
+        config.replace_string = Some("BAR".to_owned());
+
+        //"foo" starts at column 7 in the first line and column 9 in the second
+        let result = run(config, "delta foo\ncharlie foo\n");
+        assert_eq!(result, "delta BAR\ncharlie foo\n");
+    }
+
+    #[test]
+    fn delete_keeps_lines_outside_row_range() {
+        let mut config = config();
+        config.delete = true;
+        config.rows = 2..=3;
+
+        let result = run(config, "one\ntwo\nthree\nfour\n");
+        assert_eq!(result, "one\nfour\n");
+    }
+
+    #[test]
+    fn delete_columns_applies_only_to_selected_rows() {
+        let mut config = config();
+        config.delete = true;
+        config.rows = 1..=1;
+        config.cols = 1..=4;
+
+        let result = run(config, "one one\ntwo two\n");
+        assert_eq!(result, "one\ntwo two\n");
+    }
+
+    #[test]
+    fn invalid_utf8_reports_line_number() {
+        let processor = FileProcessor::new(&config());
+        let mut output = Vec::new();
+        let input: &[u8] = b"ok\n\xFF\xFE\n";
+
+        let error = processor
+            .run(Cursor::new(input), &mut output)
+            .expect_err("invalid UTF-8 must fail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("line 2"));
     }
 }
