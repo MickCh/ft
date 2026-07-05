@@ -1,24 +1,36 @@
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
+use std::process::ExitCode;
 
 use ft::cli_args::{Config, cli};
+use ft::error::AppError;
 use ft::file_processor::FileProcessor;
 
-fn main() -> Result<(), String> {
-    let config = Config::try_from(cli().get_matches()).map_err(|e| format!("User input: {e}"))?;
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    let input = File::open(&config.filename).map_err(|e| {
-        format!(
-            "Cannot open input file `{}`: {e}",
-            config.filename.display()
-        )
+fn run() -> Result<(), AppError> {
+    let config = Config::try_from(cli().get_matches())?;
+
+    let input = File::open(&config.filename).map_err(|source| AppError::OpenInput {
+        path: config.filename.clone(),
+        source,
     })?;
     let reader = BufReader::new(input);
 
     let mut writer: Box<dyn Write> = match &config.output_filename {
         Some(path) => {
-            let file = File::create(path)
-                .map_err(|e| format!("Cannot create output file `{}`: {e}", path.display()))?;
+            let file = File::create(path).map_err(|source| AppError::CreateOutput {
+                path: path.clone(),
+                source,
+            })?;
             Box::new(BufWriter::new(file))
         }
         None => Box::new(BufWriter::new(std::io::stdout())),
@@ -26,5 +38,5 @@ fn main() -> Result<(), String> {
 
     FileProcessor::new(&config)
         .run(reader, &mut writer)
-        .map_err(|e| format!("Processing error: {e}"))
+        .map_err(AppError::Processing)
 }

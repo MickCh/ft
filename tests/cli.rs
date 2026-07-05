@@ -172,7 +172,13 @@ fn zero_based_range_is_rejected() {
 }
 
 #[test]
-fn missing_input_file_fails() {
+fn missing_input_file_fails_with_message_on_stderr() {
     let output = run_ft(&["/nonexistent/ft-test-missing.txt"]);
     assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Cannot open input file"),
+        "unexpected stderr: {stderr}"
+    );
 }
