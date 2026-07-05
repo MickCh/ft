@@ -127,6 +127,8 @@ mod tests {
             rows: None,
             cols: None,
             sort: false,
+            numeric_sort: false,
+            reverse_sort: false,
             delete: false,
             filename: None,
             find: None,

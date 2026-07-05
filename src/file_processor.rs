@@ -18,13 +18,55 @@ struct Line {
     terminator: String,
 }
 
+/// How to order the buffered lines: by which columns, compared
+/// lexicographically or numerically, ascending or descending.
+struct SortSpec {
+    cols: RangeInclusive<usize>,
+    numeric: bool,
+    reverse: bool,
+}
+
+/// An `Ord` wrapper around the parsed numeric sort key.
+/// Lines that do not parse as a number sort before all numbers.
+struct NumericKey(f64);
+
+impl NumericKey {
+    fn parse(text: &str) -> NumericKey {
+        NumericKey(
+            text.trim()
+                .parse()
+                .unwrap_or(f64::NEG_INFINITY),
+        )
+    }
+}
+
+impl PartialEq for NumericKey {
+    fn eq(&self, other: &NumericKey) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for NumericKey {}
+
+impl PartialOrd for NumericKey {
+    fn partial_cmp(&self, other: &NumericKey) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NumericKey {
+    fn cmp(&self, other: &NumericKey) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
 pub struct FileProcessor {
     rows: RangeInclusive<usize>,
     keep_lines_outside_rows: bool,
     delete_lines_in_rows: bool,
     //sorting requires buffering the whole row range before writing;
     //`None` means lines stream straight to the writer
-    sort_key_cols: Option<RangeInclusive<usize>>,
+    sort: Option<SortSpec>,
     transforms: Vec<Box<dyn LineTransform>>,
 }
 
@@ -36,9 +78,11 @@ impl FileProcessor {
             //selection mode (no delete) drops them
             keep_lines_outside_rows: config.delete,
             delete_lines_in_rows: config.delete && config.rows.is_some() && config.cols.is_none(),
-            sort_key_cols: config
-                .sort
-                .then(|| config.cols_or_full()),
+            sort: config.sort.then(|| SortSpec {
+                cols: config.cols_or_full(),
+                numeric: config.numeric_sort,
+                reverse: config.reverse_sort,
+            }),
             transforms: transform::build_pipeline(config),
         }
     }
@@ -97,7 +141,7 @@ impl FileProcessor {
         let (content, terminator) = text::split_line_terminator(utf8_line);
         let content = self.apply_transforms(content);
 
-        if self.sort_key_cols.is_some() {
+        if self.sort.is_some() {
             sort_buffer.push(Line {
                 content,
                 terminator: terminator.to_owned(),
@@ -121,11 +165,21 @@ impl FileProcessor {
     }
 
     fn flush_sorted<W: Write>(&self, buffer: &mut Vec<Line>, writer: &mut W) -> io::Result<()> {
-        let Some(cols) = &self.sort_key_cols else {
+        let Some(spec) = &self.sort else {
             return Ok(());
         };
 
-        buffer.sort_by_cached_key(|line| text::substring(&line.content, cols));
+        //`Reverse` keeps the sort stable in descending order too
+        use std::cmp::Reverse;
+        let text_key = |line: &Line| text::substring(&line.content, &spec.cols);
+        match (spec.numeric, spec.reverse) {
+            (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
+            (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
+            (true, false) => buffer.sort_by_cached_key(|line| NumericKey::parse(&text_key(line))),
+            (true, true) => {
+                buffer.sort_by_cached_key(|line| Reverse(NumericKey::parse(&text_key(line))))
+            }
+        }
 
         let last_index = buffer.len().saturating_sub(1);
         for (index, line) in buffer.iter().enumerate() {
@@ -153,6 +207,8 @@ mod tests {
             rows: None,
             cols: None,
             sort: false,
+            numeric_sort: false,
+            reverse_sort: false,
             delete: false,
             filename: None,
             find: None,
@@ -204,6 +260,49 @@ mod tests {
         let result = run(config, "header\nc\na\nb\n");
         //row 1 is dropped in selection mode, rows 2-4 are sorted
         assert_eq!(result, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn numeric_sort_orders_by_value_not_lexicographically() {
+        let mut config = config();
+        config.sort = true;
+        config.numeric_sort = true;
+
+        //lexicographic order would be 10, 2, 9
+        let result = run(config, "10\n9\n2\n");
+        assert_eq!(result, "2\n9\n10\n");
+    }
+
+    #[test]
+    fn numeric_sort_puts_non_numeric_lines_first() {
+        let mut config = config();
+        config.sort = true;
+        config.numeric_sort = true;
+
+        let result = run(config, "7\nabc\n-1.5\n");
+        assert_eq!(result, "abc\n-1.5\n7\n");
+    }
+
+    #[test]
+    fn reverse_sort_orders_descending() {
+        let mut config = config();
+        config.sort = true;
+        config.reverse_sort = true;
+
+        let result = run(config, "alpha\ncharlie\nbravo\n");
+        assert_eq!(result, "charlie\nbravo\nalpha\n");
+    }
+
+    #[test]
+    fn numeric_reverse_sort_with_column_key() {
+        let mut config = config();
+        config.sort = true;
+        config.numeric_sort = true;
+        config.reverse_sort = true;
+        config.cols = Some(3..=4);
+
+        let result = run(config, "a  2\nb 10\nc  9\n");
+        assert_eq!(result, "b 10\nc  9\na  2\n");
     }
 
     #[test]

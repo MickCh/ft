@@ -17,6 +17,8 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `-R, --rows <from>-<to>` | Row range to process (default: all rows) |
 | `-C, --cols <from>-<to>` | Column range to process (default: all columns) |
 | `-s, --sort` | Sort the selected rows, using the column range as the sort key |
+| `-n, --numeric` | Sort numerically instead of lexicographically (requires `--sort`) |
+| `--reverse` | Sort in descending order (requires `--sort`) |
 | `-d, --delete` | Delete the selected rows, or the column range within them |
 | `-f, --find <text>` | Substring to find |
 | `-r, --replace <text>` | Replacement text (requires `--find`) |
@@ -29,6 +31,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - Without `--delete`, the row range **selects** lines: only rows inside the range are output (and transformed). Without a row range, the whole file is processed.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.
+- Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
 - Original line endings (LF or CRLF) are preserved.
 - `--replace` cannot be combined with `--delete`, and `--delete` requires a row or column range.
 
@@ -56,6 +59,9 @@ ft -s -C 5-12 -o out.txt input.txt
 
 # Use in a pipeline: sort the output of another command
 grep ERROR app.log | ft -s -C 1-19
+
+# Numeric, descending sort by the value in columns 20-26
+ft -s -n --reverse -C 20-26 input.txt
 
 # Sort only rows 2-100 (e.g. keep a header line first... and select just that block)
 ft -s -R 2-100 input.txt

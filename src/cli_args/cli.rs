@@ -30,6 +30,23 @@ pub fn cli() -> Command {
                 .help("Sort specified region (rows/columns)"),
         )
         .arg(
+            Arg::new("numeric")
+                .short('n')
+                .long("numeric")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("sort")
+                .help("Sort numerically instead of lexicographically (requires --sort)"),
+        )
+        .arg(
+            Arg::new("reverse")
+                .long("reverse")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("sort")
+                .help("Sort in descending order (requires --sort)"),
+        )
+        .arg(
             Arg::new("delete")
                 .short('d')
                 .long("delete")

@@ -20,6 +20,8 @@ pub struct Config {
     pub rows: Option<RangeInclusive<usize>>,
     pub cols: Option<RangeInclusive<usize>>,
     pub sort: bool,
+    pub numeric_sort: bool,
+    pub reverse_sort: bool,
     pub delete: bool,
     //`None` means the input comes from stdin
     pub filename: Option<PathBuf>,
@@ -67,6 +69,8 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<RangeInclusive<usize>>("columns")
                 .cloned(),
             sort: matches.get_flag("sort"),
+            numeric_sort: matches.get_flag("numeric"),
+            reverse_sort: matches.get_flag("reverse"),
             delete: matches.get_flag("delete"),
             filename: matches
                 .get_one::<String>("filename")
@@ -165,6 +169,23 @@ mod tests {
 
         assert_eq!(config.rows_or_full(), 1..=usize::MAX);
         assert_eq!(config.cols_or_full(), 1..=usize::MAX);
+    }
+
+    #[test]
+    fn numeric_and_reverse_require_sort() {
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "-n", "input.txt"])
+                .is_err()
+        );
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "--reverse", "input.txt"])
+                .is_err()
+        );
+
+        let config = config_from(&["ft", "-s", "-n", "--reverse", "input.txt"]).unwrap();
+        assert!(config.sort && config.numeric_sort && config.reverse_sort);
     }
 
     #[test]

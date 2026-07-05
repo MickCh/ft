@@ -109,6 +109,27 @@ fn sort_uses_column_range_as_key() {
 }
 
 #[test]
+fn numeric_sort_works() {
+    let input = TempFile::new("sort-numeric", "10\n9\n2\n");
+    let stdout = run_ft_stdout(&["-s", "-n", input.path_str()]);
+    assert_eq!(stdout, "2\n9\n10\n");
+}
+
+#[test]
+fn reverse_sort_works() {
+    let input = TempFile::new("sort-reverse", INPUT);
+    let stdout = run_ft_stdout(&["-s", "--reverse", input.path_str()]);
+    assert_eq!(stdout, "delta foo\ncharlie foo\nbravo foo\nalpha foo\n");
+}
+
+#[test]
+fn numeric_without_sort_is_rejected() {
+    let input = TempFile::new("numeric-no-sort", INPUT);
+    let output = run_ft(&["-n", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn sort_applies_only_to_selected_rows() {
     let input = TempFile::new("sort-rows", INPUT);
     let stdout = run_ft_stdout(&["-s", "-R", "2-4", input.path_str()]);
