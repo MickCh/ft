@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::process::ExitCode;
 
 use ft::cli_args::{Config, cli};
@@ -19,11 +19,16 @@ fn main() -> ExitCode {
 fn run() -> Result<(), AppError> {
     let config = Config::try_from(cli().get_matches())?;
 
-    let input = File::open(&config.filename).map_err(|source| AppError::OpenInput {
-        path: config.filename.clone(),
-        source,
-    })?;
-    let reader = BufReader::new(input);
+    let reader: Box<dyn BufRead> = match &config.filename {
+        Some(path) => {
+            let file = File::open(path).map_err(|source| AppError::OpenInput {
+                path: path.clone(),
+                source,
+            })?;
+            Box::new(BufReader::new(file))
+        }
+        None => Box::new(std::io::stdin().lock()),
+    };
 
     let mut writer: Box<dyn Write> = match &config.output_filename {
         Some(path) => {

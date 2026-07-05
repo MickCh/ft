@@ -153,7 +153,7 @@ mod tests {
             cols: None,
             sort: false,
             delete: false,
-            filename: std::path::PathBuf::new(),
+            filename: None,
             find_string: None,
             replace_string: None,
             output_filename: None,

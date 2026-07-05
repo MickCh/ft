@@ -7,8 +7,10 @@ A small command-line tool for transforming text files: select row ranges, delete
 ## Usage
 
 ```
-ft [OPTIONS] <filename>
+ft [OPTIONS] [filename]
 ```
+
+When `filename` is omitted (or given as `-`), `ft` reads from standard input, so it works in pipelines.
 
 | Option | Description |
 |---|---|
@@ -46,6 +48,9 @@ ft -C 10-20 -f foo -r bar input.txt
 
 # Sort the whole file by columns 5-12, write the result to out.txt
 ft -s -C 5-12 -o out.txt input.txt
+
+# Use in a pipeline: sort the output of another command
+grep ERROR app.log | ft -s -C 1-19
 
 # Sort only rows 2-100 (e.g. keep a header line first... and select just that block)
 ft -s -R 2-100 input.txt

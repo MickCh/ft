@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 const INPUT: &str = "delta foo\nalpha foo\ncharlie foo\nbravo foo\n";
 
@@ -32,6 +33,27 @@ fn run_ft(args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("failed to run ft binary")
+}
+
+fn run_ft_with_stdin(args: &[&str], input: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ft"))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ft binary");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin not captured")
+        .write_all(input.as_bytes())
+        .expect("failed to write to ft stdin");
+
+    child
+        .wait_with_output()
+        .expect("failed to wait for ft binary")
 }
 
 fn run_ft_stdout(args: &[&str]) -> String {
@@ -155,6 +177,23 @@ fn replace_with_delete_is_rejected() {
     let input = TempFile::new("replace-with-delete", INPUT);
     let output = run_ft(&["-d", "-f", "foo", "-r", "BAR", input.path_str()]);
     assert!(!output.status.success());
+}
+
+#[test]
+fn reads_stdin_when_no_filename_given() {
+    let output = run_ft_with_stdin(&["-s"], INPUT);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "alpha foo\nbravo foo\ncharlie foo\ndelta foo\n"
+    );
+}
+
+#[test]
+fn dash_filename_reads_stdin() {
+    let output = run_ft_with_stdin(&["-f", "foo", "-r", "BAR", "-"], "one foo\n");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "one BAR\n");
 }
 
 #[test]

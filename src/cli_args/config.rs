@@ -11,7 +11,8 @@ pub struct Config {
     pub cols: Option<RangeInclusive<usize>>,
     pub sort: bool,
     pub delete: bool,
-    pub filename: PathBuf,
+    //`None` means the input comes from stdin
+    pub filename: Option<PathBuf>,
     pub find_string: Option<String>,
     pub replace_string: Option<String>,
     pub output_filename: Option<PathBuf>,
@@ -51,8 +52,8 @@ impl TryFrom<ArgMatches> for Config {
             delete: matches.get_flag("delete"),
             filename: matches
                 .get_one::<String>("filename")
-                .map(PathBuf::from)
-                .expect("filename is a required argument"),
+                .filter(|name| name.as_str() != "-")
+                .map(PathBuf::from),
             find_string: matches
                 .get_one::<String>("find")
                 .cloned(),
@@ -96,7 +97,7 @@ mod tests {
     fn defaults_when_only_filename_given() {
         let config = config_from(&["ft", "input.txt"]).unwrap();
 
-        assert_eq!(config.filename, PathBuf::from("input.txt"));
+        assert_eq!(config.filename, Some(PathBuf::from("input.txt")));
         assert!(config.rows.is_none());
         assert!(config.cols.is_none());
         assert!(!config.sort);
@@ -131,6 +132,15 @@ mod tests {
         assert_eq!(config.find_string.as_deref(), Some("a"));
         assert_eq!(config.replace_string.as_deref(), Some("b"));
         assert_eq!(config.output_filename, Some(PathBuf::from("out.txt")));
+    }
+
+    #[test]
+    fn omitted_or_dash_filename_means_stdin() {
+        let config = config_from(&["ft"]).unwrap();
+        assert!(config.filename.is_none());
+
+        let config = config_from(&["ft", "-"]).unwrap();
+        assert!(config.filename.is_none());
     }
 
     #[test]

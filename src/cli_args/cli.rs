@@ -58,7 +58,11 @@ pub fn cli() -> Command {
                 .required(false)
                 .help("Output filename"),
         )
-        .arg(Arg::new("filename").required(true))
+        .arg(
+            Arg::new("filename")
+                .required(false)
+                .help("Input file; reads standard input when omitted or `-`"),
+        )
 }
 
 fn parse_range_lines(input: &str) -> Result<RangeInclusive<usize>, String> {
