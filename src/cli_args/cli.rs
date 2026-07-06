@@ -136,14 +136,16 @@ pub fn cli() -> Command {
                 .short('f')
                 .long("find")
                 .required(false)
-                .help("Set substring to find"),
+                .action(ArgAction::Append)
+                .help("Set substring to find (repeatable, pairing up with --replace)"),
         )
         .arg(
             Arg::new("replace")
                 .short('r')
                 .long("replace")
                 .required(false)
-                .help("Set substring to replace (find is required)"),
+                .action(ArgAction::Append)
+                .help("Set substring to replace (repeatable, one per --find)"),
         )
         .arg(
             Arg::new("regex")

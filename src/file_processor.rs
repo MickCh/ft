@@ -317,8 +317,8 @@ mod tests {
             invert: false,
             unique: false,
             filename: None,
-            find: None,
-            replace_string: None,
+            finds: Vec::new(),
+            replace_strings: Vec::new(),
             output_filename: None,
         }
     }
@@ -341,11 +341,25 @@ mod tests {
     #[test]
     fn streams_replace_without_buffering() {
         let mut config = config();
-        config.find = Some(FindPattern::Literal("foo".to_owned()));
-        config.replace_string = Some("BAR".to_owned());
+        config.finds = vec![FindPattern::Literal("foo".to_owned())];
+        config.replace_strings = vec!["BAR".to_owned()];
 
         let result = run(config, "a foo\nb foo\n");
         assert_eq!(result, "a BAR\nb BAR\n");
+    }
+
+    #[test]
+    fn applies_multiple_find_replace_pairs_per_line() {
+        let mut config = config();
+        config.finds = vec![
+            FindPattern::Literal("cat".to_owned()),
+            FindPattern::Literal("dog".to_owned()),
+        ];
+        config.replace_strings = vec!["dog".to_owned(), "wolf".to_owned()];
+
+        //cat->dog runs first, then dog->wolf rewrites both
+        let result = run(config, "cat and dog\n");
+        assert_eq!(result, "wolf and wolf\n");
     }
 
     #[test]
@@ -434,8 +448,8 @@ mod tests {
     fn replace_respects_column_boundaries_per_line() {
         let mut config = config();
         config.cols = Some(7..=9);
-        config.find = Some(FindPattern::Literal("foo".to_owned()));
-        config.replace_string = Some("BAR".to_owned());
+        config.finds = vec![FindPattern::Literal("foo".to_owned())];
+        config.replace_strings = vec!["BAR".to_owned()];
 
         //"foo" starts at column 7 in the first line and column 9 in the second
         let result = run(config, "delta foo\ncharlie foo\n");

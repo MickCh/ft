@@ -80,6 +80,34 @@ fn replace_works_without_delete() {
 }
 
 #[test]
+fn multiple_find_replace_pairs_apply_in_order() {
+    let input = TempFile::new("replace-pairs", "cat dog\n");
+    //cat->dog runs first, then dog->wolf rewrites both occurrences
+    let stdout = run_ft_stdout(&[
+        "-f",
+        "cat",
+        "-r",
+        "dog",
+        "-f",
+        "dog",
+        "-r",
+        "wolf",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "wolf wolf\n");
+}
+
+#[test]
+fn unbalanced_find_replace_pairs_are_rejected() {
+    let output = run_ft(&["-f", "a", "-r", "1", "-f", "b", "input.txt"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--replace"),
+        "stderr should explain the find/replace mismatch"
+    );
+}
+
+#[test]
 fn replace_applies_only_to_selected_rows() {
     let input = TempFile::new("replace-rows", INPUT);
     let stdout = run_ft_stdout(&["-R", "2-3", "-f", "foo", "-r", "BAR", input.path_str()]);

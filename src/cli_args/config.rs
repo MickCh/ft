@@ -38,8 +38,9 @@ pub struct Config {
     pub unique: bool,
     //`None` means the input comes from stdin
     pub filename: Option<PathBuf>,
-    pub find: Option<FindPattern>,
-    pub replace_string: Option<String>,
+    //find/replace pairs are zipped by position and applied in order
+    pub finds: Vec<FindPattern>,
+    pub replace_strings: Vec<String>,
     pub output_filename: Option<PathBuf>,
 }
 
@@ -75,7 +76,7 @@ impl Config {
     pub fn has_column_operation(&self) -> bool {
         self.delete
             || self.sort
-            || self.find.is_some()
+            || !self.finds.is_empty()
             || self.upper
             || self.lower
             || self.trim
@@ -101,16 +102,24 @@ impl TryFrom<ArgMatches> for Config {
                     .map_err(|e| ConfigError::InvalidRegex(e.to_string()))
             })
             .transpose()?;
-        let find = match matches.get_one::<String>("find") {
-            None => None,
-            Some(pattern) if matches.get_flag("regex") => Some(FindPattern::Regex(
-                RegexBuilder::new(pattern)
-                    .case_insensitive(ignore_case)
-                    .build()
-                    .map_err(|e| ConfigError::InvalidRegex(e.to_string()))?,
-            )),
-            Some(pattern) => Some(FindPattern::Literal(pattern.clone())),
-        };
+        let regex_mode = matches.get_flag("regex");
+        let finds = matches
+            .get_many::<String>("find")
+            .into_iter()
+            .flatten()
+            .map(|pattern| {
+                if regex_mode {
+                    Ok(FindPattern::Regex(
+                        RegexBuilder::new(pattern)
+                            .case_insensitive(ignore_case)
+                            .build()
+                            .map_err(|e| ConfigError::InvalidRegex(e.to_string()))?,
+                    ))
+                } else {
+                    Ok(FindPattern::Literal(pattern.clone()))
+                }
+            })
+            .collect::<Result<Vec<FindPattern>, ConfigError>>()?;
 
         let config = Config {
             rows: matches
@@ -139,21 +148,31 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<String>("filename")
                 .filter(|name| name.as_str() != "-")
                 .map(PathBuf::from),
-            find,
-            replace_string: matches
-                .get_one::<String>("replace")
-                .cloned(),
+            finds,
+            replace_strings: matches
+                .get_many::<String>("replace")
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect(),
             output_filename: matches
                 .get_one::<String>("output")
                 .map(PathBuf::from),
         };
 
-        if config.replace_string.is_some() && config.find.is_none() {
-            return Err(ConfigError::MissingFindForReplace);
-        }
-
-        if config.replace_string.is_some() && config.delete {
-            return Err(ConfigError::ReplaceWithDelete);
+        if !config.replace_strings.is_empty() {
+            if config.finds.is_empty() {
+                return Err(ConfigError::MissingFindForReplace);
+            }
+            if config.finds.len() != config.replace_strings.len() {
+                return Err(ConfigError::FindReplaceCountMismatch {
+                    finds: config.finds.len(),
+                    replaces: config.replace_strings.len(),
+                });
+            }
+            if config.delete {
+                return Err(ConfigError::ReplaceWithDelete);
+            }
         }
 
         if config.delete && config.rows.is_none() && config.cols.is_none() && config.grep.is_none()
@@ -161,7 +180,7 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::DeleteWithoutRange);
         }
 
-        if config.ignore_case && config.find.is_none() && config.grep.is_none() {
+        if config.ignore_case && config.finds.is_empty() && config.grep.is_none() {
             return Err(ConfigError::IgnoreCaseWithoutPattern);
         }
 
@@ -190,8 +209,8 @@ mod tests {
         assert!(config.cols.is_none());
         assert!(!config.sort);
         assert!(!config.delete);
-        assert!(config.find.is_none());
-        assert!(config.replace_string.is_none());
+        assert!(config.finds.is_empty());
+        assert!(config.replace_strings.is_empty());
         assert!(config.output_filename.is_none());
     }
 
@@ -217,8 +236,8 @@ mod tests {
         assert_eq!(config.rows, Some(RangeSpec::from(2..=4)));
         assert_eq!(config.cols, Some(1..=10));
         assert!(config.sort);
-        assert!(matches!(config.find, Some(FindPattern::Literal(ref f)) if f == "a"));
-        assert_eq!(config.replace_string.as_deref(), Some("b"));
+        assert!(matches!(config.finds.as_slice(), [FindPattern::Literal(f)] if f == "a"));
+        assert_eq!(config.replace_strings, ["b"]);
         assert_eq!(config.output_filename, Some(PathBuf::from("out.txt")));
     }
 
@@ -288,7 +307,41 @@ mod tests {
     #[test]
     fn regex_flag_compiles_find_as_regex() {
         let config = config_from(&["ft", "-e", "-f", r"\d+", "-r", "N", "input.txt"]).unwrap();
-        assert!(matches!(config.find, Some(FindPattern::Regex(_))));
+        assert!(matches!(config.finds.as_slice(), [FindPattern::Regex(_)]));
+    }
+
+    #[test]
+    fn collects_multiple_find_replace_pairs_in_order() {
+        let config = config_from(&[
+            "ft",
+            "-f",
+            "a",
+            "-r",
+            "1",
+            "-f",
+            "b",
+            "-r",
+            "2",
+            "input.txt",
+        ])
+        .unwrap();
+
+        assert!(
+            matches!(config.finds.as_slice(), [FindPattern::Literal(x), FindPattern::Literal(y)] if x == "a" && y == "b")
+        );
+        assert_eq!(config.replace_strings, ["1", "2"]);
+    }
+
+    #[test]
+    fn rejects_more_finds_than_replaces() {
+        let error = config_from(&["ft", "-f", "a", "-r", "1", "-f", "b", "input.txt"]).unwrap_err();
+        assert!(matches!(
+            error,
+            ConfigError::FindReplaceCountMismatch {
+                finds: 2,
+                replaces: 1
+            }
+        ));
     }
 
     #[test]
@@ -300,7 +353,7 @@ mod tests {
     #[test]
     fn ignore_case_makes_regex_case_insensitive() {
         let config = config_from(&["ft", "-e", "--ignore-case", "-f", "abc", "input.txt"]).unwrap();
-        let Some(FindPattern::Regex(pattern)) = config.find else {
+        let [FindPattern::Regex(pattern)] = config.finds.as_slice() else {
             panic!("expected a regex find pattern");
         };
         assert!(pattern.is_match("ABC"));

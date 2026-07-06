@@ -26,8 +26,8 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `-u, --unique` | Drop duplicate rows, comparing the column range (first wins) |
 | `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them) |
 | `--invert` | Invert the `--grep` match, like `grep -v` (requires `--grep`) |
-| `-f, --find <text>` | Substring to find |
-| `-r, --replace <text>` | Replacement text (requires `--find`) |
+| `-f, --find <text>` | Substring to find (repeatable, paired with `--replace`) |
+| `-r, --replace <text>` | Replacement text (repeatable, one per `--find`) |
 | `-e, --regex` | Treat the find pattern as a regular expression (requires `--find`) |
 | `--ignore-case` | Match the find pattern case-insensitively (requires `--find`) |
 | `--upper` | Convert the column range to uppercase |
@@ -45,6 +45,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - With `--fields`, the column range counts **delimited fields** instead of characters: `-F , -C 2` addresses the second comma-separated field, per line. All column-based operations (select, delete, sort key, find/replace scope, `--grep`, `--unique`, case/trim) work on fields the same way; deleting fields also removes one adjacent delimiter, like `cut`. The delimiter may be more than one character.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.
+- `--find` and `--replace` may be repeated to run several substitutions: the *n*-th `--find` pairs with the *n*-th `--replace`, and the pairs apply left to right, so a later pair can rewrite what an earlier one produced. The number of finds and replaces must match.
 - `--grep` filters rows by content, complementing the positional row range: only rows inside `--rows` *and* matching the pattern are processed. With `--delete`, matching rows are deleted instead. The match is scoped to the column range.
 - `--upper`, `--lower` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
@@ -91,6 +92,9 @@ ft -e -f '(\w+)@(\w+)' -r '$2.$1' input.txt
 
 # Case-insensitive replace: rewrites foo, FOO, Foo, ...
 ft --ignore-case -f foo -r bar input.txt
+
+# Several substitutions in one pass (applied left to right)
+ft -f cat -r dog -f red -r blue input.txt
 
 # Uppercase columns 1-3, trim whitespace around every line
 ft --upper -C 1-3 input.txt

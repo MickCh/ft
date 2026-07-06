@@ -216,7 +216,13 @@ pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
         pipeline.push(Box::new(SelectColumns::new(config.col_span())));
     }
 
-    if let (Some(find), Some(replace)) = (&config.find, &config.replace_string) {
+    //each --find pairs with the --replace at the same position; the
+    //pairs run in order, so a later one can rewrite an earlier result
+    for (find, replace) in config
+        .finds
+        .iter()
+        .zip(&config.replace_strings)
+    {
         match find {
             FindPattern::Literal(text) if config.ignore_case => pipeline.push(Box::new(
                 ReplaceInColumnsIgnoreCase::new(text, replace.clone(), config.col_span()),
@@ -270,8 +276,8 @@ mod tests {
             invert: false,
             unique: false,
             filename: None,
-            find: None,
-            replace_string: None,
+            finds: Vec::new(),
+            replace_strings: Vec::new(),
             output_filename: None,
         }
     }
@@ -323,8 +329,8 @@ mod tests {
     fn build_pipeline_orders_replace_before_case_transforms() {
         let mut config = config();
         config.upper = true;
-        config.find = Some(FindPattern::Literal("foo".to_owned()));
-        config.replace_string = Some("bar".to_owned());
+        config.finds = vec![FindPattern::Literal("foo".to_owned())];
+        config.replace_strings = vec!["bar".to_owned()];
 
         let pipeline = build_pipeline(&config);
         assert_eq!(pipeline.len(), 2);
@@ -454,8 +460,8 @@ mod tests {
         //find/replace is scoped by the column range
         let mut replace_config = config();
         replace_config.cols = Some(5..=10);
-        replace_config.find = Some(FindPattern::Literal("a".to_owned()));
-        replace_config.replace_string = Some("b".to_owned());
+        replace_config.finds = vec![FindPattern::Literal("a".to_owned())];
+        replace_config.replace_strings = vec!["b".to_owned()];
         let pipeline = build_pipeline(&replace_config);
         assert_eq!(pipeline.len(), 1);
         assert_eq!(pipeline[0].apply("aaaa aaaa"), "aaaa bbbb");
@@ -479,10 +485,28 @@ mod tests {
     #[test]
     fn build_pipeline_adds_replace_only_when_find_and_replace_present() {
         let mut config = config();
-        config.find = Some(FindPattern::Literal("foo".to_owned()));
+        config.finds = vec![FindPattern::Literal("foo".to_owned())];
         assert!(build_pipeline(&config).is_empty());
 
-        config.replace_string = Some("bar".to_owned());
+        config.replace_strings = vec!["bar".to_owned()];
         assert_eq!(build_pipeline(&config).len(), 1);
+    }
+
+    #[test]
+    fn build_pipeline_adds_one_transform_per_find_replace_pair() {
+        let mut config = config();
+        config.finds = vec![
+            FindPattern::Literal("a".to_owned()),
+            FindPattern::Literal("b".to_owned()),
+        ];
+        config.replace_strings = vec!["b".to_owned(), "c".to_owned()];
+
+        let pipeline = build_pipeline(&config);
+        assert_eq!(pipeline.len(), 2);
+        //pairs run in order: a->b then b->c turns "a" into "c"
+        let result = pipeline
+            .iter()
+            .fold("a".to_owned(), |line, transform| transform.apply(&line));
+        assert_eq!(result, "c");
     }
 }
