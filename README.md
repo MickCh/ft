@@ -29,6 +29,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 
 - Row and column ranges are **1-based and inclusive**; columns are counted in characters, not bytes, so multi-byte UTF-8 text (including emoji) is handled correctly.
 - Without `--delete`, the row range **selects** lines: only rows inside the range are output (and transformed). Without a row range, the whole file is processed.
+- A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
@@ -46,6 +47,9 @@ ft -d -R 2-5 input.txt
 
 # Delete columns 1-8 in every line (e.g. strip a fixed-width prefix)
 ft -d -C 1-8 input.txt
+
+# Keep only columns 1-8 of every line (like cut)
+ft -C 1-8 input.txt
 
 # Replace "foo" with "bar", but only in columns 10-20
 ft -C 10-20 -f foo -r bar input.txt

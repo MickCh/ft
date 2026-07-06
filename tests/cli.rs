@@ -144,6 +144,21 @@ fn rows_range_selects_lines() {
 }
 
 #[test]
+fn cols_range_alone_selects_columns() {
+    let input = TempFile::new("select-cols", INPUT);
+    let stdout = run_ft_stdout(&["-C", "1-5", input.path_str()]);
+    assert_eq!(stdout, "delta\nalpha\ncharl\nbravo\n");
+}
+
+#[test]
+fn cols_selection_combines_with_row_selection() {
+    let input = TempFile::new("select-rows-cols", INPUT);
+    let stdout = run_ft_stdout(&["-R", "2-3", "-C", "7-9", input.path_str()]);
+    //"alpha foo" has "foo" at columns 7-9; "charlie foo" has "e f" there
+    assert_eq!(stdout, "foo\ne f\n");
+}
+
+#[test]
 fn delete_removes_rows_in_range() {
     let input = TempFile::new("delete-rows", INPUT);
     let stdout = run_ft_stdout(&["-d", "-R", "2-3", input.path_str()]);

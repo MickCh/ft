@@ -18,6 +18,23 @@ pub trait LineTransform {
     fn apply(&self, line: &str) -> String;
 }
 
+/// Keeps only the characters within a column range (like `cut`).
+pub struct SelectColumns {
+    cols: RangeInclusive<usize>,
+}
+
+impl SelectColumns {
+    pub fn new(cols: RangeInclusive<usize>) -> SelectColumns {
+        SelectColumns { cols }
+    }
+}
+
+impl LineTransform for SelectColumns {
+    fn apply(&self, line: &str) -> String {
+        text::select_columns(line, &self.cols)
+    }
+}
+
 /// Removes the characters within a column range.
 pub struct DeleteColumns {
     cols: RangeInclusive<usize>,
@@ -100,6 +117,17 @@ pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
         pipeline.push(Box::new(DeleteColumns::new(cols.clone())));
     }
 
+    //with no operation claiming the column range (delete removes it,
+    //sort keys on it, find/replace is scoped by it), `--cols` alone
+    //selects the range, mirroring how `--rows` alone selects lines
+    if !config.delete
+        && !config.sort
+        && config.find.is_none()
+        && let Some(cols) = &config.cols
+    {
+        pipeline.push(Box::new(SelectColumns::new(cols.clone())));
+    }
+
     if let (Some(find), Some(replace)) = (&config.find, &config.replace_string) {
         match find {
             FindPattern::Literal(text) => pipeline.push(Box::new(ReplaceInColumns::new(
@@ -180,8 +208,41 @@ mod tests {
     }
 
     #[test]
+    fn select_columns_keeps_only_range() {
+        let transform = SelectColumns::new(5..=10);
+        assert_eq!(transform.apply("Test01234567891231234567"), "012345");
+        //a line shorter than the range start selects nothing
+        assert_eq!(transform.apply("abc"), "");
+    }
+
+    #[test]
     fn build_pipeline_is_empty_by_default() {
         assert!(build_pipeline(&config()).is_empty());
+    }
+
+    #[test]
+    fn build_pipeline_selects_columns_when_no_other_operation() {
+        let mut config = config();
+        config.cols = Some(5..=10);
+        assert_eq!(build_pipeline(&config).len(), 1);
+    }
+
+    #[test]
+    fn build_pipeline_does_not_select_columns_when_they_key_another_operation() {
+        //sort uses the column range as its key
+        let mut sort_config = config();
+        sort_config.cols = Some(5..=10);
+        sort_config.sort = true;
+        assert!(build_pipeline(&sort_config).is_empty());
+
+        //find/replace is scoped by the column range
+        let mut replace_config = config();
+        replace_config.cols = Some(5..=10);
+        replace_config.find = Some(FindPattern::Literal("a".to_owned()));
+        replace_config.replace_string = Some("b".to_owned());
+        let pipeline = build_pipeline(&replace_config);
+        assert_eq!(pipeline.len(), 1);
+        assert_eq!(pipeline[0].apply("aaaa aaaa"), "aaaa bbbb");
     }
 
     #[test]

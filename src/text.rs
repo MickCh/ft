@@ -27,6 +27,20 @@ pub fn substring(line: &str, cols: &RangeInclusive<usize>) -> String {
     chars[(start - 1)..end].iter().collect()
 }
 
+/// Return only the characters within the column range, like `cut`:
+/// a range that lies entirely beyond the line yields an empty string.
+pub fn select_columns(line: &str, cols: &RangeInclusive<usize>) -> String {
+    let (start, end) = clamp_start(cols);
+    let chars: Vec<char> = line.chars().collect();
+
+    if start > chars.len() || start > end {
+        return String::new();
+    }
+    let end = end.min(chars.len());
+
+    chars[(start - 1)..end].iter().collect()
+}
+
 /// Return the line with the characters within the column range removed.
 pub fn remove_columns(line: &str, cols: &RangeInclusive<usize>) -> String {
     let (start, end) = clamp_start(cols);
@@ -118,6 +132,21 @@ mod tests {
         assert_eq!(substring(line_utf8, &(11..=11)), "😍");
         //start beyond line length leaves the line unchanged
         assert_eq!(substring(line_utf8, &(20..=30)), line_utf8);
+    }
+
+    #[test]
+    fn test_select_columns() {
+        //pos:           123456789012345678901
+        let line_utf8 = "ABCabcąłć😊😍😁123śę";
+
+        assert_eq!(select_columns(line_utf8, &(1..=3)), "ABC");
+        assert_eq!(select_columns(line_utf8, &(10..=12)), "😊😍😁");
+        assert_eq!(select_columns(line_utf8, &(11..=11)), "😍");
+        //end beyond line length is clamped
+        assert_eq!(select_columns(line_utf8, &(16..=30)), "śę");
+        //unlike `substring`, a range beyond the line selects nothing
+        assert_eq!(select_columns(line_utf8, &(20..=30)), "");
+        assert_eq!(select_columns("", &(1..=5)), "");
     }
 
     #[test]
