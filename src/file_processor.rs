@@ -4,6 +4,7 @@
 use crate::cli_args::Config;
 use crate::constants::NEW_LINE;
 use crate::predicate::{self, LinePredicate};
+use crate::ranges::RangeSet;
 use crate::text;
 use crate::transform::{self, LineTransform};
 
@@ -83,7 +84,7 @@ impl Ord for NumericKey {
 }
 
 pub struct FileProcessor {
-    rows: RangeInclusive<usize>,
+    rows: RangeSet,
     keep_lines_outside_rows: bool,
     delete_lines_in_rows: bool,
     //`None` means lines stream straight to the writer
@@ -149,7 +150,7 @@ impl FileProcessor {
         state: &mut RunState,
         writer: &mut W,
     ) -> io::Result<()> {
-        if !self.rows.contains(&line_number) {
+        if !self.rows.contains(line_number) {
             if self.keep_lines_outside_rows {
                 writer.write_all(raw_line)?;
             }
@@ -191,7 +192,7 @@ impl FileProcessor {
                 content,
                 terminator: terminator.to_owned(),
             });
-            if line_number >= *self.rows.end() {
+            if line_number >= self.rows.end() {
                 self.flush_reordered(state, writer)?;
                 state.buffer_flushed = true;
             }
@@ -343,7 +344,7 @@ mod tests {
     fn sorts_only_selected_rows() {
         let mut config = config();
         config.sort = true;
-        config.rows = Some(2..=4);
+        config.rows = Some((2..=4).into());
 
         let result = run(config, "header\nc\na\nb\n");
         //row 1 is dropped in selection mode, rows 2-4 are sorted
@@ -428,7 +429,7 @@ mod tests {
     fn delete_keeps_lines_outside_row_range() {
         let mut config = config();
         config.delete = true;
-        config.rows = Some(2..=3);
+        config.rows = Some((2..=3).into());
 
         let result = run(config, "one\ntwo\nthree\nfour\n");
         assert_eq!(result, "one\nfour\n");
@@ -438,7 +439,7 @@ mod tests {
     fn delete_columns_applies_only_to_selected_rows() {
         let mut config = config();
         config.delete = true;
-        config.rows = Some(1..=1);
+        config.rows = Some((1..=1).into());
         config.cols = Some(1..=4);
 
         let result = run(config, "one one\ntwo two\n");
@@ -467,7 +468,7 @@ mod tests {
     #[test]
     fn grep_filters_within_row_range_only() {
         let mut config = config();
-        config.rows = Some(1..=2);
+        config.rows = Some((1..=2).into());
         config.grep = Some(regex::Regex::new("keep").unwrap());
 
         //row 3 matches but lies outside the selected rows
@@ -498,7 +499,7 @@ mod tests {
     fn tac_reverses_only_selected_rows() {
         let mut config = config();
         config.tac = true;
-        config.rows = Some(2..=3);
+        config.rows = Some((2..=3).into());
 
         let result = run(config, "header\nb\na\ntail\n");
         //selection mode keeps only rows 2-3, reversed

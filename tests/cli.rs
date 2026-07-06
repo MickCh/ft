@@ -144,6 +144,41 @@ fn rows_range_selects_lines() {
 }
 
 #[test]
+fn rows_accept_a_list_of_ranges() {
+    let input = TempFile::new("rows-list", INPUT);
+    let stdout = run_ft_stdout(&["-R", "1,3-4", input.path_str()]);
+    assert_eq!(stdout, "delta foo\ncharlie foo\nbravo foo\n");
+}
+
+#[test]
+fn rows_accept_open_ended_ranges() {
+    let input = TempFile::new("rows-open", INPUT);
+    assert_eq!(
+        run_ft_stdout(&["-R", "3-", input.path_str()]),
+        "charlie foo\nbravo foo\n"
+    );
+    assert_eq!(
+        run_ft_stdout(&["-R", "-1", input.path_str()]),
+        "delta foo\n"
+    );
+}
+
+#[test]
+fn delete_removes_a_list_of_row_ranges() {
+    let input = TempFile::new("delete-rows-list", INPUT);
+    let stdout = run_ft_stdout(&["-d", "-R", "1,4", input.path_str()]);
+    assert_eq!(stdout, "alpha foo\ncharlie foo\n");
+}
+
+#[test]
+fn columns_accept_open_ended_range() {
+    let input = TempFile::new("cols-open", INPUT);
+    let stdout = run_ft_stdout(&["-C", "7-", input.path_str()]);
+    //"charlie foo" has its 7th character at "e"
+    assert_eq!(stdout, "foo\nfoo\ne foo\nfoo\n");
+}
+
+#[test]
 fn cols_range_alone_selects_columns() {
     let input = TempFile::new("select-cols", INPUT);
     let stdout = run_ft_stdout(&["-C", "1-5", input.path_str()]);

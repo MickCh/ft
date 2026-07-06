@@ -1,6 +1,8 @@
 use clap::{Arg, ArgAction, Command, crate_name, crate_version};
 use std::ops::RangeInclusive;
 
+use crate::ranges::RangeSet;
+
 pub fn cli() -> Command {
     Command::new(crate_name!())
         .version(crate_version!())
@@ -10,16 +12,18 @@ pub fn cli() -> Command {
                 .short('R')
                 .long("rows")
                 .required(false)
-                .value_parser(parse_range_lines)
-                .help("Set range of processed rows"),
+                .allow_hyphen_values(true)
+                .value_parser(parse_row_ranges)
+                .help("Rows to process: e.g. 3, 2-5, 10-, -5, or a list like 1-5,10-20"),
         )
         .arg(
             Arg::new("columns")
                 .short('C')
                 .long("cols")
                 .required(false)
-                .value_parser(parse_range_lines)
-                .help("Set range of processed columns"),
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_range)
+                .help("Columns to process: e.g. 3, 2-5, 10- or -5"),
         )
         .arg(
             Arg::new("sort")
@@ -162,30 +166,57 @@ pub fn cli() -> Command {
         )
 }
 
-fn parse_range_lines(input: &str) -> Result<RangeInclusive<usize>, String> {
-    let parts: Vec<&str> = input.split('-').collect();
+/// Parse a row specification: a comma-separated list of range parts.
+fn parse_row_ranges(input: &str) -> Result<RangeSet, String> {
+    let parts = input
+        .split(',')
+        .map(parse_range_part)
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(RangeSet::new(parts))
+}
 
-    if parts.len() != 2 {
-        return Err("Invalid range format, expected: <value1>-<value2>".to_owned());
+/// Parse a column specification: a single range part (columns address
+/// one contiguous slice of the line, so lists are not supported).
+fn parse_column_range(input: &str) -> Result<RangeInclusive<usize>, String> {
+    if input.contains(',') {
+        return Err("Columns accept a single range, not a list".to_owned());
     }
+    parse_range_part(input)
+}
 
-    let from: usize = parts[0]
-        .parse()
-        .map_err(|_| format!("First value `{input}` isn't a number"))?;
-
-    let to: usize = parts[1]
-        .parse()
-        .map_err(|_| format!("Second value `{input}` isn't a number"))?;
-
-    if from < 1 {
-        return Err("Range is 1-based, start must be at least 1".to_owned());
-    }
+/// Parse one range part: `<from>-<to>`, `<from>-` (to the end),
+/// `-<to>` (from 1) or a single number.
+fn parse_range_part(part: &str) -> Result<RangeInclusive<usize>, String> {
+    let (from, to) = match *part
+        .split('-')
+        .collect::<Vec<&str>>()
+        .as_slice()
+    {
+        [single] => {
+            let value = parse_bound(single)?;
+            (value, value)
+        }
+        [from, ""] => (parse_bound(from)?, usize::MAX),
+        ["", to] => (1, parse_bound(to)?),
+        [from, to] => (parse_bound(from)?, parse_bound(to)?),
+        _ => return Err(format!("Invalid range `{part}`, expected <from>-<to>")),
+    };
 
     if from > to {
         return Err("Range start cannot be greater than its end".to_owned());
     }
 
-    Ok(RangeInclusive::new(from, to))
+    Ok(from..=to)
+}
+
+fn parse_bound(value: &str) -> Result<usize, String> {
+    let bound: usize = value
+        .parse()
+        .map_err(|_| format!("Range value `{value}` isn't a number"))?;
+    if bound < 1 {
+        return Err("Ranges are 1-based, values must be at least 1".to_owned());
+    }
+    Ok(bound)
 }
 
 #[cfg(test)]
@@ -199,28 +230,54 @@ mod tests {
 
     #[test]
     fn parses_valid_range() {
-        assert_eq!(parse_range_lines("2-5").unwrap(), 2..=5);
-        assert_eq!(parse_range_lines("7-7").unwrap(), 7..=7);
+        assert_eq!(parse_range_part("2-5").unwrap(), 2..=5);
+        assert_eq!(parse_range_part("7-7").unwrap(), 7..=7);
+    }
+
+    #[test]
+    fn parses_single_number_as_one_element_range() {
+        assert_eq!(parse_range_part("15").unwrap(), 15..=15);
+    }
+
+    #[test]
+    fn parses_open_ended_ranges() {
+        assert_eq!(parse_range_part("10-").unwrap(), 10..=usize::MAX);
+        assert_eq!(parse_range_part("-5").unwrap(), 1..=5);
+    }
+
+    #[test]
+    fn parses_range_list_into_a_set() {
+        let set = parse_row_ranges("1-2,5-6,4").unwrap();
+        assert_eq!(set, RangeSet::new(vec![1..=2, 4..=6]));
     }
 
     #[test]
     fn rejects_inverted_range() {
-        assert!(parse_range_lines("5-2").is_err());
+        assert!(parse_range_part("5-2").is_err());
     }
 
     #[test]
-    fn rejects_zero_start() {
-        assert!(parse_range_lines("0-5").is_err());
+    fn rejects_zero_values() {
+        assert!(parse_range_part("0-5").is_err());
+        assert!(parse_range_part("0").is_err());
     }
 
     #[test]
     fn rejects_non_numeric_values() {
-        assert!(parse_range_lines("a-5").is_err());
-        assert!(parse_range_lines("1-b").is_err());
+        assert!(parse_range_part("a-5").is_err());
+        assert!(parse_range_part("1-b").is_err());
+        assert!(parse_range_part("-").is_err());
+        assert!(parse_range_part("").is_err());
     }
 
     #[test]
-    fn rejects_missing_separator() {
-        assert!(parse_range_lines("15").is_err());
+    fn rejects_list_with_empty_part() {
+        assert!(parse_row_ranges("1-2,").is_err());
+    }
+
+    #[test]
+    fn column_range_rejects_lists() {
+        assert!(parse_column_range("1-2,4-5").is_err());
+        assert_eq!(parse_column_range("3-").unwrap(), 3..=usize::MAX);
     }
 }

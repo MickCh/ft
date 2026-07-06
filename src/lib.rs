@@ -3,5 +3,6 @@ pub mod constants;
 pub mod error;
 pub mod file_processor;
 pub mod predicate;
+pub mod ranges;
 pub mod text;
 pub mod transform;
