@@ -42,6 +42,7 @@ pub struct Config {
     pub finds: Vec<FindPattern>,
     pub replace_strings: Vec<String>,
     pub output_filename: Option<PathBuf>,
+    pub in_place: bool,
 }
 
 impl Config {
@@ -158,6 +159,7 @@ impl TryFrom<ArgMatches> for Config {
             output_filename: matches
                 .get_one::<String>("output")
                 .map(PathBuf::from),
+            in_place: matches.get_flag("in-place"),
         };
 
         if !config.replace_strings.is_empty() {
@@ -182,6 +184,10 @@ impl TryFrom<ArgMatches> for Config {
 
         if config.ignore_case && config.finds.is_empty() && config.grep.is_none() {
             return Err(ConfigError::IgnoreCaseWithoutPattern);
+        }
+
+        if config.in_place && config.filename.is_none() {
+            return Err(ConfigError::InPlaceWithoutFile);
         }
 
         Ok(config)
@@ -437,5 +443,26 @@ mod tests {
     fn accepts_delete_with_row_or_column_range() {
         assert!(config_from(&["ft", "-d", "-R", "2-3", "input.txt"]).is_ok());
         assert!(config_from(&["ft", "-d", "-C", "2-3", "input.txt"]).is_ok());
+    }
+
+    #[test]
+    fn in_place_flag_is_read() {
+        let config = config_from(&["ft", "-i", "input.txt"]).unwrap();
+        assert!(config.in_place);
+    }
+
+    #[test]
+    fn in_place_requires_a_file() {
+        let error = config_from(&["ft", "-i"]).unwrap_err();
+        assert!(matches!(error, ConfigError::InPlaceWithoutFile));
+    }
+
+    #[test]
+    fn in_place_conflicts_with_output() {
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "-i", "-o", "out.txt", "input.txt"])
+                .is_err()
+        );
     }
 }

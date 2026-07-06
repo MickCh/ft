@@ -279,6 +279,7 @@ mod tests {
             finds: Vec::new(),
             replace_strings: Vec::new(),
             output_filename: None,
+            in_place: false,
         }
     }
 

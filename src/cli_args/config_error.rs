@@ -8,6 +8,7 @@ pub enum ConfigError {
     ReplaceWithDelete,
     DeleteWithoutRange,
     IgnoreCaseWithoutPattern,
+    InPlaceWithoutFile,
     InvalidRegex(String),
 }
 
@@ -34,6 +35,12 @@ impl fmt::Display for ConfigError {
             }
             ConfigError::IgnoreCaseWithoutPattern => {
                 write!(f, "Ignore-case requires a pattern (--find or --grep)")
+            }
+            ConfigError::InPlaceWithoutFile => {
+                write!(
+                    f,
+                    "In-place editing needs an input file, not standard input"
+                )
             }
             ConfigError::InvalidRegex(error) => write!(f, "Invalid regular expression: {error}"),
         }

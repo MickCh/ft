@@ -34,6 +34,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `--lower` | Convert the column range to lowercase |
 | `--trim` | Trim whitespace at both ends of the column range |
 | `-o, --output <file>` | Write to a file instead of stdout |
+| `-i, --in-place` | Edit the input file in place (needs a file, conflicts with `-o`) |
 
 ### Semantics
 
@@ -52,6 +53,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - `--unique` keeps the first row per key (the column range, or the whole line without one) and drops later duplicates; combined with `--sort`, "first" means first in sorted order, like `sort -u`.
 - `--sort`, `--tac` and `--shuffle` are mutually exclusive reordering operations; each buffers the selected rows before writing them out.
 - Original line endings (LF or CRLF) are preserved.
+- `--in-place` rewrites the input file itself: the result is written to a temporary file in the same directory and then atomically renamed over the original, so an interrupted run never truncates the input. It needs a real input file (not stdin) and cannot be combined with `--output`.
 - `--replace` cannot be combined with `--delete`, and `--delete` requires a row or column range.
 
 ### Examples
@@ -113,6 +115,9 @@ ft --shuffle -R 2-100 input.txt
 
 # Sort the whole file by columns 5-12, write the result to out.txt
 ft -s -C 5-12 -o out.txt input.txt
+
+# Edit a file in place (atomic replace)
+ft -i -f foo -r bar input.txt
 
 # Use in a pipeline: sort the output of another command
 grep ERROR app.log | ft -s -C 1-19

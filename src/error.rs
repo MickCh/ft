@@ -11,6 +11,7 @@ pub enum AppError {
     InvalidArguments(ConfigError),
     OpenInput { path: PathBuf, source: io::Error },
     CreateOutput { path: PathBuf, source: io::Error },
+    ReplaceInput { path: PathBuf, source: io::Error },
     Processing(io::Error),
 }
 
@@ -28,6 +29,13 @@ impl fmt::Display for AppError {
                     path.display()
                 )
             }
+            AppError::ReplaceInput { path, source } => {
+                write!(
+                    f,
+                    "Cannot replace input file `{}` in place: {source}",
+                    path.display()
+                )
+            }
             AppError::Processing(error) => write!(f, "Processing error: {error}"),
         }
     }
@@ -37,9 +45,9 @@ impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             AppError::InvalidArguments(error) => Some(error),
-            AppError::OpenInput { source, .. } | AppError::CreateOutput { source, .. } => {
-                Some(source)
-            }
+            AppError::OpenInput { source, .. }
+            | AppError::CreateOutput { source, .. }
+            | AppError::ReplaceInput { source, .. } => Some(source),
             AppError::Processing(error) => Some(error),
         }
     }

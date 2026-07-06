@@ -171,6 +171,15 @@ pub fn cli() -> Command {
                 .help("Output filename"),
         )
         .arg(
+            Arg::new("in-place")
+                .short('i')
+                .long("in-place")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("output")
+                .help("Edit the input file in place instead of writing to stdout"),
+        )
+        .arg(
             Arg::new("filename")
                 .required(false)
                 .help("Input file; reads standard input when omitted or `-`"),

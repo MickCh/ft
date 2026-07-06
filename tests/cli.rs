@@ -329,6 +329,44 @@ fn output_flag_writes_to_file_instead_of_stdout() {
 }
 
 #[test]
+fn in_place_rewrites_the_input_file() {
+    let input = TempFile::new("in-place", INPUT);
+    let stdout = run_ft_stdout(&["-i", "-f", "foo", "-r", "BAR", input.path_str()]);
+
+    //nothing goes to stdout; the file itself is updated
+    assert_eq!(stdout, "");
+    let rewritten = fs::read_to_string(input.path_str()).expect("input file vanished");
+    assert_eq!(rewritten, "delta BAR\nalpha BAR\ncharlie BAR\nbravo BAR\n");
+}
+
+#[test]
+fn in_place_leaves_no_temporary_file_behind() {
+    //an isolated directory so a concurrent in-place test can't be
+    //mistaken for a leftover temp file
+    let dir = std::env::temp_dir().join(format!("ft-test-{}-in-place-clean", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("data.txt");
+    fs::write(&input, INPUT).unwrap();
+
+    run_ft_stdout(&["-i", "-d", "-R", "1", input.to_str().unwrap()]);
+
+    let entries: Vec<_> = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name())
+        .collect();
+    let _ = fs::remove_dir_all(&dir);
+    //only the rewritten input remains, no `.ft-*.tmp` sibling
+    assert_eq!(entries, [std::ffi::OsString::from("data.txt")]);
+}
+
+#[test]
+fn in_place_requires_a_file_not_stdin() {
+    let output = run_ft_with_stdin(&["-i", "-f", "a", "-r", "b"], INPUT);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn regex_replace_works() {
     let input = TempFile::new("regex-replace", "a1 bb22\nccc333 d\n");
     let stdout = run_ft_stdout(&["-e", "-f", r"\d+", "-r", "N", input.path_str()]);
