@@ -7,6 +7,7 @@ pub enum ConfigError {
     MissingReplaceForFind,
     FindReplaceCountMismatch { finds: usize, replaces: usize },
     ReplaceWithDelete,
+    DeleteWithReorder,
     DeleteWithoutRange,
     IgnoreCaseWithoutPattern,
     InPlaceWithoutFile,
@@ -33,6 +34,12 @@ impl fmt::Display for ConfigError {
             }
             ConfigError::ReplaceWithDelete => {
                 write!(f, "Replace cannot be used with delete option")
+            }
+            ConfigError::DeleteWithReorder => {
+                write!(
+                    f,
+                    "Delete removes the selected rows, so they cannot also be reordered (--sort, --tac or --shuffle)"
+                )
             }
             ConfigError::DeleteWithoutRange => {
                 write!(

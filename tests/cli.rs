@@ -436,6 +436,18 @@ fn tac_conflicts_with_sort() {
 }
 
 #[test]
+fn delete_conflicts_with_reorder() {
+    let input = TempFile::new("delete-reorder", INPUT);
+    //deleting whole rows leaves nothing to sort
+    let output = run_ft(&["-d", "-s", "-R", "2-3", input.path_str()]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("reorder"),
+        "stderr should explain the delete/reorder conflict"
+    );
+}
+
+#[test]
 fn unique_drops_duplicate_rows() {
     let input = TempFile::new("unique", "one\ntwo\none\nthree\n");
     let stdout = run_ft_stdout(&["-u", input.path_str()]);

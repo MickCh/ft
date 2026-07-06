@@ -184,6 +184,12 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::DeleteWithoutRange);
         }
 
+        //deleting whole rows and reordering them is contradictory; with a
+        //column range `--delete` removes columns, so reordering is fine
+        if config.delete && config.cols.is_none() && (config.sort || config.tac || config.shuffle) {
+            return Err(ConfigError::DeleteWithReorder);
+        }
+
         if config.ignore_case && config.finds.is_empty() && config.grep.is_none() {
             return Err(ConfigError::IgnoreCaseWithoutPattern);
         }
@@ -457,6 +463,23 @@ mod tests {
     fn rejects_delete_without_any_range() {
         let error = config_from(&["ft", "-d", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::DeleteWithoutRange));
+    }
+
+    #[test]
+    fn rejects_delete_combined_with_reorder() {
+        for reorder in ["-s", "--tac", "--shuffle"] {
+            let error = config_from(&["ft", "-d", reorder, "-R", "2", "input.txt"]).unwrap_err();
+            assert!(
+                matches!(error, ConfigError::DeleteWithReorder),
+                "expected DeleteWithReorder for {reorder}, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_delete_with_reorder_when_deleting_columns() {
+        //with --cols, --delete removes columns, so sorting the rows is fine
+        assert!(config_from(&["ft", "-d", "-s", "-C", "1", "-R", "2", "input.txt"]).is_ok());
     }
 
     #[test]
