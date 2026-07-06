@@ -55,6 +55,15 @@ pub fn cli() -> Command {
                 .help("Delete specified region (rows)"),
         )
         .arg(
+            Arg::new("unique")
+                .short('u')
+                .long("unique")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("delete")
+                .help("Drop duplicate rows, comparing the column range (first wins)"),
+        )
+        .arg(
             Arg::new("grep")
                 .short('g')
                 .long("grep")

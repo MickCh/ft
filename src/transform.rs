@@ -263,6 +263,7 @@ mod tests {
             trim: false,
             grep: None,
             invert: false,
+            unique: false,
             filename: None,
             find: None,
             replace_string: None,

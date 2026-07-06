@@ -216,6 +216,20 @@ fn regex_replace_supports_captures() {
 }
 
 #[test]
+fn unique_drops_duplicate_rows() {
+    let input = TempFile::new("unique", "one\ntwo\none\nthree\n");
+    let stdout = run_ft_stdout(&["-u", input.path_str()]);
+    assert_eq!(stdout, "one\ntwo\nthree\n");
+}
+
+#[test]
+fn unique_with_sort_and_column_key() {
+    let input = TempFile::new("unique-sort", "b 2\na 1\nb 9\n");
+    let stdout = run_ft_stdout(&["-s", "-u", "-C", "1-1", input.path_str()]);
+    assert_eq!(stdout, "a 1\nb 2\n");
+}
+
+#[test]
 fn grep_keeps_matching_rows() {
     let input = TempFile::new("grep", INPUT);
     let stdout = run_ft_stdout(&["-g", "^(a|b)", input.path_str()]);

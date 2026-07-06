@@ -8,6 +8,7 @@ use crate::text;
 use crate::transform::{self, LineTransform};
 
 use bstr::io::BufReadExt;
+use std::collections::HashSet;
 use std::io;
 use std::io::prelude::*;
 use std::ops::RangeInclusive;
@@ -17,6 +18,16 @@ use std::str::from_utf8;
 struct Line {
     content: String,
     terminator: String,
+}
+
+/// Mutable state threaded through one `run` call.
+#[derive(Default)]
+struct RunState {
+    //lines held back for sorting
+    sort_buffer: Vec<Line>,
+    buffer_flushed: bool,
+    //unique keys already written (`--unique`)
+    seen_keys: HashSet<String>,
 }
 
 /// How to order the buffered lines: by which columns, compared
@@ -70,6 +81,8 @@ pub struct FileProcessor {
     sort: Option<SortSpec>,
     //content filter applied to lines within the row range
     predicate: Option<Box<dyn LinePredicate>>,
+    //key columns for `--unique`; `None` means duplicates are kept
+    unique_key_cols: Option<RangeInclusive<usize>>,
     transforms: Vec<Box<dyn LineTransform>>,
 }
 
@@ -87,6 +100,9 @@ impl FileProcessor {
                 reverse: config.reverse_sort,
             }),
             predicate: predicate::build_predicate(config),
+            unique_key_cols: config
+                .unique
+                .then(|| config.cols_or_full()),
             transforms: transform::build_pipeline(config),
         }
     }
@@ -94,24 +110,17 @@ impl FileProcessor {
     /// Stream `reader` line by line into `writer`, applying the configured
     /// row selection, per-line transforms and optional sorting.
     pub fn run<R: BufRead, W: Write>(&self, mut reader: R, writer: &mut W) -> io::Result<()> {
-        let mut sort_buffer: Vec<Line> = Vec::new();
+        let mut state = RunState::default();
         let mut line_number = 0usize;
-        let mut buffer_flushed = false;
 
         reader.for_byte_line_with_terminator(|raw_line| {
             line_number += 1;
-            self.process_line(
-                raw_line,
-                line_number,
-                &mut sort_buffer,
-                &mut buffer_flushed,
-                writer,
-            )
-            .map(|_| true)
+            self.process_line(raw_line, line_number, &mut state, writer)
+                .map(|_| true)
         })?;
 
-        if !buffer_flushed {
-            self.flush_sorted(&mut sort_buffer, writer)?;
+        if !state.buffer_flushed {
+            self.flush_sorted(&mut state, writer)?;
         }
         writer.flush()
     }
@@ -120,8 +129,7 @@ impl FileProcessor {
         &self,
         raw_line: &[u8],
         line_number: usize,
-        sort_buffer: &mut Vec<Line>,
-        buffer_flushed: &mut bool,
+        state: &mut RunState,
         writer: &mut W,
     ) -> io::Result<()> {
         if !self.rows.contains(&line_number) {
@@ -162,20 +170,32 @@ impl FileProcessor {
         let content = self.apply_transforms(content);
 
         if self.sort.is_some() {
-            sort_buffer.push(Line {
+            state.sort_buffer.push(Line {
                 content,
                 terminator: terminator.to_owned(),
             });
             if line_number >= *self.rows.end() {
-                self.flush_sorted(sort_buffer, writer)?;
-                *buffer_flushed = true;
+                self.flush_sorted(state, writer)?;
+                state.buffer_flushed = true;
             }
         } else {
+            if !self.passes_unique(&content, &mut state.seen_keys) {
+                return Ok(());
+            }
             writer.write_all(content.as_bytes())?;
             writer.write_all(terminator.as_bytes())?;
         }
 
         Ok(())
+    }
+
+    /// Whether the line survives `--unique`: its key columns have not
+    /// been written yet. Without `--unique` every line passes.
+    fn passes_unique(&self, content: &str, seen_keys: &mut HashSet<String>) -> bool {
+        match &self.unique_key_cols {
+            None => true,
+            Some(cols) => seen_keys.insert(text::substring(content, cols)),
+        }
     }
 
     fn apply_transforms(&self, content: &str) -> String {
@@ -184,25 +204,38 @@ impl FileProcessor {
             .fold(content.to_owned(), |line, transform| transform.apply(&line))
     }
 
-    fn flush_sorted<W: Write>(&self, buffer: &mut Vec<Line>, writer: &mut W) -> io::Result<()> {
+    fn flush_sorted<W: Write>(&self, state: &mut RunState, writer: &mut W) -> io::Result<()> {
         let Some(spec) = &self.sort else {
             return Ok(());
         };
+        let RunState {
+            sort_buffer,
+            seen_keys,
+            ..
+        } = state;
 
         //`Reverse` keeps the sort stable in descending order too
         use std::cmp::Reverse;
         let text_key = |line: &Line| text::substring(&line.content, &spec.cols);
         match (spec.numeric, spec.reverse) {
-            (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
-            (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
-            (true, false) => buffer.sort_by_cached_key(|line| NumericKey::parse(&text_key(line))),
+            (false, false) => sort_buffer.sort_by_cached_key(|line| text_key(line)),
+            (false, true) => sort_buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
+            (true, false) => {
+                sort_buffer.sort_by_cached_key(|line| NumericKey::parse(&text_key(line)))
+            }
             (true, true) => {
-                buffer.sort_by_cached_key(|line| Reverse(NumericKey::parse(&text_key(line))))
+                sort_buffer.sort_by_cached_key(|line| Reverse(NumericKey::parse(&text_key(line))))
             }
         }
 
-        let last_index = buffer.len().saturating_sub(1);
-        for (index, line) in buffer.iter().enumerate() {
+        //`--unique` keeps the first line per key in sorted order
+        let lines: Vec<&Line> = sort_buffer
+            .iter()
+            .filter(|line| self.passes_unique(&line.content, seen_keys))
+            .collect();
+
+        let last_index = lines.len().saturating_sub(1);
+        for (index, line) in lines.iter().enumerate() {
             writer.write_all(line.content.as_bytes())?;
             if !line.terminator.is_empty() {
                 writer.write_all(line.terminator.as_bytes())?;
@@ -211,7 +244,7 @@ impl FileProcessor {
                 writer.write_all(NEW_LINE.as_bytes())?;
             }
         }
-        buffer.clear();
+        sort_buffer.clear();
         Ok(())
     }
 }
@@ -236,6 +269,7 @@ mod tests {
             trim: false,
             grep: None,
             invert: false,
+            unique: false,
             filename: None,
             find: None,
             replace_string: None,
@@ -421,6 +455,36 @@ mod tests {
 
         let result = run(config, "bx\nc\nax\n");
         assert_eq!(result, "ax\nbx\n");
+    }
+
+    #[test]
+    fn unique_drops_duplicate_lines_keeping_first() {
+        let mut config = config();
+        config.unique = true;
+
+        let result = run(config, "b\na\nb\nc\na\n");
+        assert_eq!(result, "b\na\nc\n");
+    }
+
+    #[test]
+    fn unique_compares_only_key_columns() {
+        let mut config = config();
+        config.unique = true;
+        config.cols = Some(1..=1);
+
+        //"a1" and "a2" share the key "a", the first one wins
+        let result = run(config, "a1\na2\nb1\n");
+        assert_eq!(result, "a1\nb1\n");
+    }
+
+    #[test]
+    fn unique_after_sort_keeps_first_in_sorted_order() {
+        let mut config = config();
+        config.sort = true;
+        config.unique = true;
+
+        let result = run(config, "b\na\nb\na\n");
+        assert_eq!(result, "a\nb\n");
     }
 
     #[test]

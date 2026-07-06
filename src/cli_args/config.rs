@@ -29,6 +29,7 @@ pub struct Config {
     pub trim: bool,
     pub grep: Option<Regex>,
     pub invert: bool,
+    pub unique: bool,
     //`None` means the input comes from stdin
     pub filename: Option<PathBuf>,
     pub find: Option<FindPattern>,
@@ -61,6 +62,7 @@ impl Config {
             || self.lower
             || self.trim
             || self.grep.is_some()
+            || self.unique
     }
 }
 
@@ -109,6 +111,7 @@ impl TryFrom<ArgMatches> for Config {
             trim: matches.get_flag("trim"),
             grep,
             invert: matches.get_flag("invert"),
+            unique: matches.get_flag("unique"),
             filename: matches
                 .get_one::<String>("filename")
                 .filter(|name| name.as_str() != "-")
