@@ -4,6 +4,7 @@ use std::fmt::Formatter;
 #[derive(Debug)]
 pub enum ConfigError {
     MissingFindForReplace,
+    MissingReplaceForFind,
     FindReplaceCountMismatch { finds: usize, replaces: usize },
     ReplaceWithDelete,
     DeleteWithoutRange,
@@ -17,6 +18,12 @@ impl fmt::Display for ConfigError {
         match self {
             ConfigError::MissingFindForReplace => {
                 write!(f, "Find string not specified for replace operation")
+            }
+            ConfigError::MissingReplaceForFind => {
+                write!(
+                    f,
+                    "--find needs a matching --replace (use --grep to filter rows by content)"
+                )
             }
             ConfigError::FindReplaceCountMismatch { finds, replaces } => {
                 write!(

@@ -108,6 +108,17 @@ fn unbalanced_find_replace_pairs_are_rejected() {
 }
 
 #[test]
+fn find_without_replace_is_rejected() {
+    //a lone --find would otherwise do nothing at all
+    let output = run_ft(&["-f", "foo", "input.txt"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--replace"),
+        "stderr should point at the missing --replace"
+    );
+}
+
+#[test]
 fn replace_applies_only_to_selected_rows() {
     let input = TempFile::new("replace-rows", INPUT);
     let stdout = run_ft_stdout(&["-R", "2-3", "-f", "foo", "-r", "BAR", input.path_str()]);

@@ -162,19 +162,21 @@ impl TryFrom<ArgMatches> for Config {
             in_place: matches.get_flag("in-place"),
         };
 
-        if !config.replace_strings.is_empty() {
-            if config.finds.is_empty() {
-                return Err(ConfigError::MissingFindForReplace);
+        //--find and --replace pair up positionally, so their counts must
+        //match; a lone --find (or --replace) has no partner and is rejected
+        //rather than silently ignored
+        match (config.finds.len(), config.replace_strings.len()) {
+            (0, 0) => {}
+            (0, _) => return Err(ConfigError::MissingFindForReplace),
+            (_, 0) => return Err(ConfigError::MissingReplaceForFind),
+            (finds, replaces) if finds != replaces => {
+                return Err(ConfigError::FindReplaceCountMismatch { finds, replaces });
             }
-            if config.finds.len() != config.replace_strings.len() {
-                return Err(ConfigError::FindReplaceCountMismatch {
-                    finds: config.finds.len(),
-                    replaces: config.replace_strings.len(),
-                });
-            }
-            if config.delete {
-                return Err(ConfigError::ReplaceWithDelete);
-            }
+            _ => {}
+        }
+
+        if !config.finds.is_empty() && config.delete {
+            return Err(ConfigError::ReplaceWithDelete);
         }
 
         if config.delete && config.rows.is_none() && config.cols.is_none() && config.grep.is_none()
@@ -351,14 +353,32 @@ mod tests {
     }
 
     #[test]
+    fn rejects_find_without_replace() {
+        //a lone --find does nothing on its own; --grep is for filtering
+        let error = config_from(&["ft", "-f", "a", "input.txt"]).unwrap_err();
+        assert!(matches!(error, ConfigError::MissingReplaceForFind));
+    }
+
+    #[test]
     fn ignore_case_flag_is_read() {
-        let config = config_from(&["ft", "--ignore-case", "-f", "a", "input.txt"]).unwrap();
+        let config =
+            config_from(&["ft", "--ignore-case", "-f", "a", "-r", "b", "input.txt"]).unwrap();
         assert!(config.ignore_case);
     }
 
     #[test]
     fn ignore_case_makes_regex_case_insensitive() {
-        let config = config_from(&["ft", "-e", "--ignore-case", "-f", "abc", "input.txt"]).unwrap();
+        let config = config_from(&[
+            "ft",
+            "-e",
+            "--ignore-case",
+            "-f",
+            "abc",
+            "-r",
+            "x",
+            "input.txt",
+        ])
+        .unwrap();
         let [FindPattern::Regex(pattern)] = config.finds.as_slice() else {
             panic!("expected a regex find pattern");
         };
