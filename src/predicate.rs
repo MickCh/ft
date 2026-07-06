@@ -3,11 +3,10 @@
 //! a predicate does not change a line — it selects lines, complementing
 //! the positional row range with a content filter.
 
-use std::ops::RangeInclusive;
-
 use regex::Regex;
 
 use crate::cli_args::Config;
+use crate::columns::ColumnSpan;
 use crate::text;
 
 /// A content-based test applied to each line within the row range.
@@ -18,19 +17,19 @@ pub trait LinePredicate {
     fn matches(&self, line: &str) -> bool;
 }
 
-/// Matches lines whose column range contains a regex match (`--grep`),
+/// Matches lines whose column span contains a regex match (`--grep`),
 /// optionally inverted (`--invert`).
 pub struct GrepPredicate {
     pattern: Regex,
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
     invert: bool,
 }
 
 impl GrepPredicate {
-    pub fn new(pattern: Regex, cols: RangeInclusive<usize>, invert: bool) -> GrepPredicate {
+    pub fn new(pattern: Regex, span: impl Into<ColumnSpan>, invert: bool) -> GrepPredicate {
         GrepPredicate {
             pattern,
-            cols,
+            span: span.into(),
             invert,
         }
     }
@@ -38,7 +37,7 @@ impl GrepPredicate {
 
 impl LinePredicate for GrepPredicate {
     fn matches(&self, line: &str) -> bool {
-        let within = text::select_columns(line, &self.cols);
+        let within = text::select_columns(line, &self.span.char_range(line));
         self.pattern.is_match(&within) != self.invert
     }
 }
@@ -48,7 +47,7 @@ pub fn build_predicate(config: &Config) -> Option<Box<dyn LinePredicate>> {
     config.grep.as_ref().map(|pattern| {
         Box::new(GrepPredicate::new(
             pattern.clone(),
-            config.cols_or_full(),
+            config.col_span(),
             config.invert,
         )) as Box<dyn LinePredicate>
     })
@@ -82,5 +81,17 @@ mod tests {
         assert!(!predicate.matches("bar foo"));
         //a line shorter than the range start has nothing to match
         assert!(!predicate.matches(""));
+    }
+
+    #[test]
+    fn grep_is_scoped_to_the_field_range() {
+        let span = ColumnSpan::Fields {
+            delimiter: ",".to_owned(),
+            fields: 2..=2,
+        };
+        let predicate = GrepPredicate::new(Regex::new("foo").unwrap(), span, false);
+
+        assert!(predicate.matches("bar,foo"));
+        assert!(!predicate.matches("foo,bar"));
     }
 }

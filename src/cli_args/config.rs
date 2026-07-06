@@ -5,6 +5,7 @@ use clap::ArgMatches;
 use regex::{Regex, RegexBuilder};
 
 use super::ConfigError;
+use crate::columns::ColumnSpan;
 use crate::ranges::RangeSpec;
 
 /// What `--find` matches: a literal substring, or a regular expression
@@ -20,6 +21,8 @@ pub enum FindPattern {
 pub struct Config {
     pub rows: Option<RangeSpec>,
     pub cols: Option<RangeInclusive<usize>>,
+    //`Some` switches `cols` from counting chars to delimited fields
+    pub field_delimiter: Option<String>,
     pub sort: bool,
     pub numeric_sort: bool,
     pub reverse_sort: bool,
@@ -53,6 +56,18 @@ impl Config {
         self.cols
             .clone()
             .unwrap_or(1..=usize::MAX)
+    }
+
+    /// How the column range addresses lines: char positions, or fields
+    /// separated by a delimiter when `--fields` was given.
+    pub fn col_span(&self) -> ColumnSpan {
+        match &self.field_delimiter {
+            Some(delimiter) => ColumnSpan::Fields {
+                delimiter: delimiter.clone(),
+                fields: self.cols_or_full(),
+            },
+            None => ColumnSpan::Chars(self.cols_or_full()),
+        }
     }
 
     /// Whether some operation claims the column range as its scope or
@@ -103,6 +118,9 @@ impl TryFrom<ArgMatches> for Config {
                 .cloned(),
             cols: matches
                 .get_one::<RangeInclusive<usize>>("columns")
+                .cloned(),
+            field_delimiter: matches
+                .get_one::<String>("fields")
                 .cloned(),
             sort: matches.get_flag("sort"),
             numeric_sort: matches.get_flag("numeric"),
@@ -219,6 +237,35 @@ mod tests {
 
         assert_eq!(config.rows_or_full(), RangeSpec::full());
         assert_eq!(config.cols_or_full(), 1..=usize::MAX);
+    }
+
+    #[test]
+    fn fields_delimiter_switches_the_span_to_field_mode() {
+        let config = config_from(&["ft", "-F", ",", "-C", "2-3", "input.txt"]).unwrap();
+
+        assert_eq!(config.field_delimiter.as_deref(), Some(","));
+        assert!(matches!(config.col_span(), ColumnSpan::Fields { .. }));
+
+        let config = config_from(&["ft", "-C", "2-3", "input.txt"]).unwrap();
+        assert!(matches!(config.col_span(), ColumnSpan::Chars(_)));
+    }
+
+    #[test]
+    fn fields_requires_columns() {
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "-F", ",", "input.txt"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn fields_rejects_an_empty_delimiter() {
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "-F", "", "-C", "2", "input.txt"])
+                .is_err()
+        );
     }
 
     #[test]

@@ -231,6 +231,33 @@ fn cols_selection_combines_with_row_selection() {
 }
 
 #[test]
+fn fields_mode_selects_delimited_fields() {
+    let input = TempFile::new("fields-select", "one,two,three\nuno,dos,tres\n");
+    let stdout = run_ft_stdout(&["-F", ",", "-C", "2", input.path_str()]);
+    assert_eq!(stdout, "two\ndos\n");
+}
+
+#[test]
+fn fields_mode_delete_removes_field_and_delimiter() {
+    let input = TempFile::new("fields-delete", "one,two,three\nuno,dos,tres\n");
+    let stdout = run_ft_stdout(&["-d", "-F", ",", "-C", "2", input.path_str()]);
+    assert_eq!(stdout, "one,three\nuno,tres\n");
+}
+
+#[test]
+fn fields_mode_sorts_by_field_key() {
+    let input = TempFile::new("fields-sort", "x;30\ny;4\nz;19\n");
+    let stdout = run_ft_stdout(&["-s", "-n", "-F", ";", "-C", "2", input.path_str()]);
+    assert_eq!(stdout, "y;4\nz;19\nx;30\n");
+}
+
+#[test]
+fn fields_flag_requires_columns() {
+    let output = run_ft(&["-F", ",", "input.txt"]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn delete_removes_rows_in_range() {
     let input = TempFile::new("delete-rows", INPUT);
     let stdout = run_ft_stdout(&["-d", "-R", "2-3", input.path_str()]);

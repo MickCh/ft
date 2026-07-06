@@ -5,11 +5,10 @@
 //! the configuration once, so adding a new operation means adding a new
 //! transform here instead of branching inside the processing loop.
 
-use std::ops::RangeInclusive;
-
 use regex::{NoExpand, Regex, RegexBuilder};
 
 use crate::cli_args::{Config, FindPattern};
+use crate::columns::ColumnSpan;
 use crate::text;
 
 /// A single per-line operation in the processing pipeline.
@@ -18,129 +17,136 @@ pub trait LineTransform {
     fn apply(&self, line: &str) -> String;
 }
 
-/// Keeps only the characters within a column range (like `cut`).
+/// Keeps only the characters within a column span (like `cut`).
 pub struct SelectColumns {
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
 }
 
 impl SelectColumns {
-    pub fn new(cols: RangeInclusive<usize>) -> SelectColumns {
-        SelectColumns { cols }
+    pub fn new(span: impl Into<ColumnSpan>) -> SelectColumns {
+        SelectColumns { span: span.into() }
     }
 }
 
 impl LineTransform for SelectColumns {
     fn apply(&self, line: &str) -> String {
-        text::select_columns(line, &self.cols)
+        text::select_columns(line, &self.span.char_range(line))
     }
 }
 
-/// Removes the characters within a column range.
+/// Removes the characters within a column span. In field mode one
+/// adjacent delimiter is removed too, like `cut`.
 pub struct DeleteColumns {
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
 }
 
 impl DeleteColumns {
-    pub fn new(cols: RangeInclusive<usize>) -> DeleteColumns {
-        DeleteColumns { cols }
+    pub fn new(span: impl Into<ColumnSpan>) -> DeleteColumns {
+        DeleteColumns { span: span.into() }
     }
 }
 
 impl LineTransform for DeleteColumns {
     fn apply(&self, line: &str) -> String {
-        text::remove_columns(line, &self.cols)
+        text::remove_columns(line, &self.span.char_range_for_delete(line))
     }
 }
 
-/// Uppercases the characters within a column range.
+/// Uppercases the characters within a column span.
 pub struct UppercaseColumns {
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
 }
 
 impl UppercaseColumns {
-    pub fn new(cols: RangeInclusive<usize>) -> UppercaseColumns {
-        UppercaseColumns { cols }
+    pub fn new(span: impl Into<ColumnSpan>) -> UppercaseColumns {
+        UppercaseColumns { span: span.into() }
     }
 }
 
 impl LineTransform for UppercaseColumns {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.cols, |within| within.to_uppercase())
+        text::map_columns(line, &self.span.char_range(line), |within| {
+            within.to_uppercase()
+        })
     }
 }
 
-/// Lowercases the characters within a column range.
+/// Lowercases the characters within a column span.
 pub struct LowercaseColumns {
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
 }
 
 impl LowercaseColumns {
-    pub fn new(cols: RangeInclusive<usize>) -> LowercaseColumns {
-        LowercaseColumns { cols }
+    pub fn new(span: impl Into<ColumnSpan>) -> LowercaseColumns {
+        LowercaseColumns { span: span.into() }
     }
 }
 
 impl LineTransform for LowercaseColumns {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.cols, |within| within.to_lowercase())
+        text::map_columns(line, &self.span.char_range(line), |within| {
+            within.to_lowercase()
+        })
     }
 }
 
-/// Trims whitespace at both ends of a column range (with the full
-/// range, this trims the whole line).
+/// Trims whitespace at both ends of a column span (with the full
+/// span, this trims the whole line).
 pub struct TrimColumns {
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
 }
 
 impl TrimColumns {
-    pub fn new(cols: RangeInclusive<usize>) -> TrimColumns {
-        TrimColumns { cols }
+    pub fn new(span: impl Into<ColumnSpan>) -> TrimColumns {
+        TrimColumns { span: span.into() }
     }
 }
 
 impl LineTransform for TrimColumns {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.cols, |within| within.trim().to_owned())
+        text::map_columns(line, &self.span.char_range(line), |within| {
+            within.trim().to_owned()
+        })
     }
 }
 
-/// Replaces `find` with `replace` within a column range.
+/// Replaces `find` with `replace` within a column span.
 pub struct ReplaceInColumns {
     find: String,
     replace: String,
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
 }
 
 impl ReplaceInColumns {
-    pub fn new(find: String, replace: String, cols: RangeInclusive<usize>) -> ReplaceInColumns {
+    pub fn new(find: String, replace: String, span: impl Into<ColumnSpan>) -> ReplaceInColumns {
         ReplaceInColumns {
             find,
             replace,
-            cols,
+            span: span.into(),
         }
     }
 }
 
 impl LineTransform for ReplaceInColumns {
     fn apply(&self, line: &str) -> String {
-        text::replace_in_columns(line, &self.find, &self.replace, &self.cols)
+        text::replace_in_columns(line, &self.find, &self.replace, &self.span.char_range(line))
     }
 }
 
 /// Replaces case-insensitive occurrences of a literal within a column
-/// range. The literal is matched through an escaped regex so Unicode
+/// span. The literal is matched through an escaped regex so Unicode
 /// case folding applies; the replacement is inserted verbatim.
 pub struct ReplaceInColumnsIgnoreCase {
     pattern: Regex,
     replace: String,
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
 }
 
 impl ReplaceInColumnsIgnoreCase {
     pub fn new(
         find: &str,
         replace: String,
-        cols: RangeInclusive<usize>,
+        span: impl Into<ColumnSpan>,
     ) -> ReplaceInColumnsIgnoreCase {
         let pattern = RegexBuilder::new(&regex::escape(find))
             .case_insensitive(true)
@@ -149,14 +155,14 @@ impl ReplaceInColumnsIgnoreCase {
         ReplaceInColumnsIgnoreCase {
             pattern,
             replace,
-            cols,
+            span: span.into(),
         }
     }
 }
 
 impl LineTransform for ReplaceInColumnsIgnoreCase {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.cols, |within| {
+        text::map_columns(line, &self.span.char_range(line), |within| {
             self.pattern
                 .replace_all(within, NoExpand(&self.replace))
                 .into_owned()
@@ -165,30 +171,30 @@ impl LineTransform for ReplaceInColumnsIgnoreCase {
 }
 
 /// Replaces every regex match with the replacement (which may use
-/// capture group references like `$1`) within a column range.
+/// capture group references like `$1`) within a column span.
 pub struct RegexReplaceInColumns {
     pattern: Regex,
     replacement: String,
-    cols: RangeInclusive<usize>,
+    span: ColumnSpan,
 }
 
 impl RegexReplaceInColumns {
     pub fn new(
         pattern: Regex,
         replacement: String,
-        cols: RangeInclusive<usize>,
+        span: impl Into<ColumnSpan>,
     ) -> RegexReplaceInColumns {
         RegexReplaceInColumns {
             pattern,
             replacement,
-            cols,
+            span: span.into(),
         }
     }
 }
 
 impl LineTransform for RegexReplaceInColumns {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.cols, |within| {
+        text::map_columns(line, &self.span.char_range(line), |within| {
             self.pattern
                 .replace_all(within, self.replacement.as_str())
                 .into_owned()
@@ -200,46 +206,42 @@ impl LineTransform for RegexReplaceInColumns {
 pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
     let mut pipeline: Vec<Box<dyn LineTransform>> = Vec::new();
 
-    if config.delete
-        && let Some(cols) = &config.cols
-    {
-        pipeline.push(Box::new(DeleteColumns::new(cols.clone())));
+    if config.delete && config.cols.is_some() {
+        pipeline.push(Box::new(DeleteColumns::new(config.col_span())));
     }
 
     //with no operation claiming the column range, `--cols` alone
     //selects the range, mirroring how `--rows` alone selects lines
-    if !config.has_column_operation()
-        && let Some(cols) = &config.cols
-    {
-        pipeline.push(Box::new(SelectColumns::new(cols.clone())));
+    if !config.has_column_operation() && config.cols.is_some() {
+        pipeline.push(Box::new(SelectColumns::new(config.col_span())));
     }
 
     if let (Some(find), Some(replace)) = (&config.find, &config.replace_string) {
         match find {
             FindPattern::Literal(text) if config.ignore_case => pipeline.push(Box::new(
-                ReplaceInColumnsIgnoreCase::new(text, replace.clone(), config.cols_or_full()),
+                ReplaceInColumnsIgnoreCase::new(text, replace.clone(), config.col_span()),
             )),
             FindPattern::Literal(text) => pipeline.push(Box::new(ReplaceInColumns::new(
                 text.clone(),
                 replace.clone(),
-                config.cols_or_full(),
+                config.col_span(),
             ))),
             FindPattern::Regex(pattern) => pipeline.push(Box::new(RegexReplaceInColumns::new(
                 pattern.clone(),
                 replace.clone(),
-                config.cols_or_full(),
+                config.col_span(),
             ))),
         }
     }
 
     if config.upper {
-        pipeline.push(Box::new(UppercaseColumns::new(config.cols_or_full())));
+        pipeline.push(Box::new(UppercaseColumns::new(config.col_span())));
     }
     if config.lower {
-        pipeline.push(Box::new(LowercaseColumns::new(config.cols_or_full())));
+        pipeline.push(Box::new(LowercaseColumns::new(config.col_span())));
     }
     if config.trim {
-        pipeline.push(Box::new(TrimColumns::new(config.cols_or_full())));
+        pipeline.push(Box::new(TrimColumns::new(config.col_span())));
     }
 
     pipeline
@@ -253,6 +255,7 @@ mod tests {
         Config {
             rows: None,
             cols: None,
+            field_delimiter: None,
             sort: false,
             numeric_sort: false,
             reverse_sort: false,
@@ -390,6 +393,42 @@ mod tests {
         assert_eq!(transform.apply("Test01234567891231234567"), "012345");
         //a line shorter than the range start selects nothing
         assert_eq!(transform.apply("abc"), "");
+    }
+
+    fn field_span(delimiter: &str, fields: std::ops::RangeInclusive<usize>) -> ColumnSpan {
+        ColumnSpan::Fields {
+            delimiter: delimiter.to_owned(),
+            fields,
+        }
+    }
+
+    #[test]
+    fn select_fields_keeps_only_the_field_range() {
+        let transform = SelectColumns::new(field_span(",", 2..=3));
+        assert_eq!(transform.apply("a,bb,ccc,d"), "bb,ccc");
+        //a line with fewer fields than the range start selects nothing
+        assert_eq!(transform.apply("a"), "");
+    }
+
+    #[test]
+    fn delete_fields_removes_an_adjacent_delimiter_too() {
+        let transform = DeleteColumns::new(field_span(",", 2..=2));
+        assert_eq!(transform.apply("a,b,c"), "a,c");
+        //deleting the last field removes the delimiter before it
+        assert_eq!(transform.apply("a,b"), "a");
+    }
+
+    #[test]
+    fn uppercase_fields_transforms_only_the_field_range() {
+        let transform = UppercaseColumns::new(field_span(",", 2..=2));
+        assert_eq!(transform.apply("ab,cd,ef"), "ab,CD,ef");
+    }
+
+    #[test]
+    fn replace_in_fields_is_scoped_to_the_field_range() {
+        let transform =
+            ReplaceInColumns::new("x".to_owned(), "Y".to_owned(), field_span(",", 2..=2));
+        assert_eq!(transform.apply("x,x,x"), "x,Y,x");
     }
 
     #[test]

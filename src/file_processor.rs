@@ -2,6 +2,7 @@
 //! pipeline and optional sorting to any `BufRead` source and `Write` sink.
 
 use crate::cli_args::Config;
+use crate::columns::ColumnSpan;
 use crate::constants::NEW_LINE;
 use crate::predicate::{self, LinePredicate};
 use crate::ranges::{RangeSet, RangeSpec};
@@ -12,7 +13,6 @@ use bstr::io::BufReadExt;
 use std::collections::HashSet;
 use std::io;
 use std::io::prelude::*;
-use std::ops::RangeInclusive;
 use std::str::from_utf8;
 
 /// A buffered line split into content and its original terminator.
@@ -34,7 +34,7 @@ struct RunState {
 /// How to order the buffered lines: by which columns, compared
 /// lexicographically or numerically, ascending or descending.
 struct SortSpec {
-    cols: RangeInclusive<usize>,
+    key_span: ColumnSpan,
     numeric: bool,
     reverse: bool,
 }
@@ -92,7 +92,7 @@ pub struct FileProcessor {
     //content filter applied to lines within the row range
     predicate: Option<Box<dyn LinePredicate>>,
     //key columns for `--unique`; `None` means duplicates are kept
-    unique_key_cols: Option<RangeInclusive<usize>>,
+    unique_key_span: Option<ColumnSpan>,
     transforms: Vec<Box<dyn LineTransform>>,
 }
 
@@ -106,7 +106,7 @@ impl FileProcessor {
             delete_lines_in_rows: config.delete && config.cols.is_none(),
             reorder: if config.sort {
                 Some(Reorder::Sort(SortSpec {
-                    cols: config.cols_or_full(),
+                    key_span: config.col_span(),
                     numeric: config.numeric_sort,
                     reverse: config.reverse_sort,
                 }))
@@ -118,9 +118,7 @@ impl FileProcessor {
                 None
             },
             predicate: predicate::build_predicate(config),
-            unique_key_cols: config
-                .unique
-                .then(|| config.cols_or_full()),
+            unique_key_span: config.unique.then(|| config.col_span()),
             transforms: transform::build_pipeline(config),
         }
     }
@@ -227,9 +225,9 @@ impl FileProcessor {
     /// Whether the line survives `--unique`: its key columns have not
     /// been written yet. Without `--unique` every line passes.
     fn passes_unique(&self, content: &str, seen_keys: &mut HashSet<String>) -> bool {
-        match &self.unique_key_cols {
+        match &self.unique_key_span {
             None => true,
-            Some(cols) => seen_keys.insert(text::substring(content, cols)),
+            Some(span) => seen_keys.insert(text::substring(content, &span.char_range(content))),
         }
     }
 
@@ -281,7 +279,8 @@ impl FileProcessor {
     fn sort_lines(buffer: &mut [Line], spec: &SortSpec) {
         //`Reverse` keeps the sort stable in descending order too
         use std::cmp::Reverse;
-        let text_key = |line: &Line| text::substring(&line.content, &spec.cols);
+        let text_key =
+            |line: &Line| text::substring(&line.content, &spec.key_span.char_range(&line.content));
         match (spec.numeric, spec.reverse) {
             (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
             (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
@@ -303,6 +302,7 @@ mod tests {
         Config {
             rows: None,
             cols: None,
+            field_delimiter: None,
             sort: false,
             numeric_sort: false,
             reverse_sort: false,
@@ -604,6 +604,49 @@ mod tests {
 
         let result = run(config, "b\na\nb\na\n");
         assert_eq!(result, "a\nb\n");
+    }
+
+    #[test]
+    fn field_mode_selects_delimited_fields() {
+        let mut config = config();
+        config.cols = Some(2..=2);
+        config.field_delimiter = Some(",".to_owned());
+
+        let result = run(config, "a,bb,c\nx,yy,z\n");
+        assert_eq!(result, "bb\nyy\n");
+    }
+
+    #[test]
+    fn field_mode_delete_removes_field_and_delimiter() {
+        let mut config = config();
+        config.delete = true;
+        config.cols = Some(2..=2);
+        config.field_delimiter = Some(",".to_owned());
+
+        let result = run(config, "a,b,c\nx,y\n");
+        assert_eq!(result, "a,c\nx\n");
+    }
+
+    #[test]
+    fn field_mode_sorts_by_field_key() {
+        let mut config = config();
+        config.sort = true;
+        config.cols = Some(2..=2);
+        config.field_delimiter = Some(",".to_owned());
+
+        let result = run(config, "x,c\ny,a\nz,b\n");
+        assert_eq!(result, "y,a\nz,b\nx,c\n");
+    }
+
+    #[test]
+    fn field_mode_unique_keys_on_field() {
+        let mut config = config();
+        config.unique = true;
+        config.cols = Some(1..=1);
+        config.field_delimiter = Some(",".to_owned());
+
+        let result = run(config, "a,1\na,2\nb,1\n");
+        assert_eq!(result, "a,1\nb,1\n");
     }
 
     #[test]

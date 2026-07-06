@@ -26,6 +26,15 @@ pub fn cli() -> Command {
                 .help("Columns to process: e.g. 3, 2-5, 10- or -5"),
         )
         .arg(
+            Arg::new("fields")
+                .short('F')
+                .long("fields")
+                .required(false)
+                .requires("columns")
+                .value_parser(parse_delimiter)
+                .help("Treat the column range as fields separated by this delimiter (requires --cols)"),
+        )
+        .arg(
             Arg::new("sort")
                 .short('s')
                 .long("sort")
@@ -218,6 +227,13 @@ fn parse_range_part(part: &str) -> Result<(RangeBound, RangeBound), String> {
     }
 
     Ok((from, to))
+}
+
+fn parse_delimiter(input: &str) -> Result<String, String> {
+    if input.is_empty() {
+        return Err("The field delimiter cannot be empty".to_owned());
+    }
+    Ok(input.to_owned())
 }
 
 fn parse_bound(value: &str) -> Result<RangeBound, String> {
