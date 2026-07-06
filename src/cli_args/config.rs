@@ -24,6 +24,9 @@ pub struct Config {
     pub reverse_sort: bool,
     pub delete: bool,
     pub ignore_case: bool,
+    pub upper: bool,
+    pub lower: bool,
+    pub trim: bool,
     //`None` means the input comes from stdin
     pub filename: Option<PathBuf>,
     pub find: Option<FindPattern>,
@@ -44,6 +47,12 @@ impl Config {
         self.cols
             .clone()
             .unwrap_or(1..=usize::MAX)
+    }
+
+    /// Whether some operation claims the column range as its scope or
+    /// key (as opposed to a bare `--cols`, which selects the columns).
+    pub fn has_column_operation(&self) -> bool {
+        self.delete || self.sort || self.find.is_some() || self.upper || self.lower || self.trim
     }
 }
 
@@ -78,6 +87,9 @@ impl TryFrom<ArgMatches> for Config {
             reverse_sort: matches.get_flag("reverse"),
             delete: matches.get_flag("delete"),
             ignore_case,
+            upper: matches.get_flag("upper"),
+            lower: matches.get_flag("lower"),
+            trim: matches.get_flag("trim"),
             filename: matches
                 .get_one::<String>("filename")
                 .filter(|name| name.as_str() != "-")

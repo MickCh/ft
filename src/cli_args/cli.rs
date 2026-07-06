@@ -55,6 +55,30 @@ pub fn cli() -> Command {
                 .help("Delete specified region (rows)"),
         )
         .arg(
+            Arg::new("upper")
+                .long("upper")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(["lower", "delete"])
+                .help("Convert the column range to uppercase"),
+        )
+        .arg(
+            Arg::new("lower")
+                .long("lower")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("delete")
+                .help("Convert the column range to lowercase"),
+        )
+        .arg(
+            Arg::new("trim")
+                .long("trim")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("delete")
+                .help("Trim whitespace at both ends of the column range"),
+        )
+        .arg(
             Arg::new("find")
                 .short('f')
                 .long("find")

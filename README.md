@@ -24,6 +24,9 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `-r, --replace <text>` | Replacement text (requires `--find`) |
 | `-e, --regex` | Treat the find pattern as a regular expression (requires `--find`) |
 | `--ignore-case` | Match the find pattern case-insensitively (requires `--find`) |
+| `--upper` | Convert the column range to uppercase |
+| `--lower` | Convert the column range to lowercase |
+| `--trim` | Trim whitespace at both ends of the column range |
 | `-o, --output <file>` | Write to a file instead of stdout |
 
 ### Semantics
@@ -33,6 +36,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.
+- `--upper`, `--lower` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
 - Original line endings (LF or CRLF) are preserved.
 - `--replace` cannot be combined with `--delete`, and `--delete` requires a row or column range.
@@ -61,6 +65,10 @@ ft -e -f '(\w+)@(\w+)' -r '$2.$1' input.txt
 
 # Case-insensitive replace: rewrites foo, FOO, Foo, ...
 ft --ignore-case -f foo -r bar input.txt
+
+# Uppercase columns 1-3, trim whitespace around every line
+ft --upper -C 1-3 input.txt
+ft --trim input.txt
 
 # Sort the whole file by columns 5-12, write the result to out.txt
 ft -s -C 5-12 -o out.txt input.txt

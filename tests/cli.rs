@@ -216,6 +216,34 @@ fn regex_replace_supports_captures() {
 }
 
 #[test]
+fn upper_transforms_column_range() {
+    let input = TempFile::new("upper", INPUT);
+    let stdout = run_ft_stdout(&["--upper", "-C", "1-3", input.path_str()]);
+    assert_eq!(stdout, "DELta foo\nALPha foo\nCHArlie foo\nBRAvo foo\n");
+}
+
+#[test]
+fn lower_transforms_whole_line_without_columns() {
+    let input = TempFile::new("lower", "AbC dEf\n");
+    let stdout = run_ft_stdout(&["--lower", input.path_str()]);
+    assert_eq!(stdout, "abc def\n");
+}
+
+#[test]
+fn trim_removes_surrounding_whitespace() {
+    let input = TempFile::new("trim", "  a  \n\tb\t\n");
+    let stdout = run_ft_stdout(&["--trim", input.path_str()]);
+    assert_eq!(stdout, "a\nb\n");
+}
+
+#[test]
+fn upper_conflicts_with_lower() {
+    let input = TempFile::new("upper-lower", INPUT);
+    let output = run_ft(&["--upper", "--lower", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn ignore_case_replaces_literal_in_any_case() {
     let input = TempFile::new("ignore-case", "Foo bar FOO\n");
     let stdout = run_ft_stdout(&["--ignore-case", "-f", "foo", "-r", "X", input.path_str()]);

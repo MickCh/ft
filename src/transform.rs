@@ -52,6 +52,58 @@ impl LineTransform for DeleteColumns {
     }
 }
 
+/// Uppercases the characters within a column range.
+pub struct UppercaseColumns {
+    cols: RangeInclusive<usize>,
+}
+
+impl UppercaseColumns {
+    pub fn new(cols: RangeInclusive<usize>) -> UppercaseColumns {
+        UppercaseColumns { cols }
+    }
+}
+
+impl LineTransform for UppercaseColumns {
+    fn apply(&self, line: &str) -> String {
+        text::map_columns(line, &self.cols, |within| within.to_uppercase())
+    }
+}
+
+/// Lowercases the characters within a column range.
+pub struct LowercaseColumns {
+    cols: RangeInclusive<usize>,
+}
+
+impl LowercaseColumns {
+    pub fn new(cols: RangeInclusive<usize>) -> LowercaseColumns {
+        LowercaseColumns { cols }
+    }
+}
+
+impl LineTransform for LowercaseColumns {
+    fn apply(&self, line: &str) -> String {
+        text::map_columns(line, &self.cols, |within| within.to_lowercase())
+    }
+}
+
+/// Trims whitespace at both ends of a column range (with the full
+/// range, this trims the whole line).
+pub struct TrimColumns {
+    cols: RangeInclusive<usize>,
+}
+
+impl TrimColumns {
+    pub fn new(cols: RangeInclusive<usize>) -> TrimColumns {
+        TrimColumns { cols }
+    }
+}
+
+impl LineTransform for TrimColumns {
+    fn apply(&self, line: &str) -> String {
+        text::map_columns(line, &self.cols, |within| within.trim().to_owned())
+    }
+}
+
 /// Replaces `find` with `replace` within a column range.
 pub struct ReplaceInColumns {
     find: String,
@@ -154,12 +206,9 @@ pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
         pipeline.push(Box::new(DeleteColumns::new(cols.clone())));
     }
 
-    //with no operation claiming the column range (delete removes it,
-    //sort keys on it, find/replace is scoped by it), `--cols` alone
+    //with no operation claiming the column range, `--cols` alone
     //selects the range, mirroring how `--rows` alone selects lines
-    if !config.delete
-        && !config.sort
-        && config.find.is_none()
+    if !config.has_column_operation()
         && let Some(cols) = &config.cols
     {
         pipeline.push(Box::new(SelectColumns::new(cols.clone())));
@@ -183,6 +232,16 @@ pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
         }
     }
 
+    if config.upper {
+        pipeline.push(Box::new(UppercaseColumns::new(config.cols_or_full())));
+    }
+    if config.lower {
+        pipeline.push(Box::new(LowercaseColumns::new(config.cols_or_full())));
+    }
+    if config.trim {
+        pipeline.push(Box::new(TrimColumns::new(config.cols_or_full())));
+    }
+
     pipeline
 }
 
@@ -199,6 +258,9 @@ mod tests {
             reverse_sort: false,
             delete: false,
             ignore_case: false,
+            upper: false,
+            lower: false,
+            trim: false,
             filename: None,
             find: None,
             replace_string: None,
@@ -222,6 +284,49 @@ mod tests {
             transform.apply("Test01234567891231234567"),
             "Test0ABCD4567891231234567"
         );
+    }
+
+    #[test]
+    fn uppercase_columns_respects_range_and_unicode() {
+        let transform = UppercaseColumns::new(1..=4);
+        assert_eq!(transform.apply("ąbcdefgh"), "ĄBCDefgh");
+    }
+
+    #[test]
+    fn lowercase_columns_respects_range_and_unicode() {
+        let transform = LowercaseColumns::new(1..=4);
+        assert_eq!(transform.apply("ĄBCDEFGH"), "ąbcdEFGH");
+    }
+
+    #[test]
+    fn trim_columns_trims_whole_line_with_full_range() {
+        let transform = TrimColumns::new(1..=usize::MAX);
+        assert_eq!(transform.apply("  padded  "), "padded");
+    }
+
+    #[test]
+    fn trim_columns_trims_only_inside_range() {
+        //columns 4-9 are " mid  ", trimmed to "mid"
+        let transform = TrimColumns::new(4..=9);
+        assert_eq!(transform.apply("ab  mid   cd"), "ab mid cd");
+    }
+
+    #[test]
+    fn build_pipeline_orders_replace_before_case_transforms() {
+        let mut config = config();
+        config.upper = true;
+        config.find = Some(FindPattern::Literal("foo".to_owned()));
+        config.replace_string = Some("bar".to_owned());
+
+        let pipeline = build_pipeline(&config);
+        assert_eq!(pipeline.len(), 2);
+        //replace runs first, so the replacement is uppercased too
+        let result = pipeline
+            .iter()
+            .fold("x foo y".to_owned(), |line, transform| {
+                transform.apply(&line)
+            });
+        assert_eq!(result, "X BAR Y");
     }
 
     #[test]
