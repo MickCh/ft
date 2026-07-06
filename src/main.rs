@@ -48,9 +48,15 @@ fn run_streaming(config: &Config) -> Result<(), AppError> {
 
 /// Edit `path` in place: write the result to a temporary file in the
 /// same directory, then atomically rename it over the original, so a
-/// failure part-way through never leaves the input truncated.
+/// failure part-way through never leaves the input truncated. The
+/// temporary file inherits the original's permissions before the swap.
 fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
     let reader = open_input(config)?;
+    //capture the original permissions up front so the replacement keeps
+    //them instead of the temporary file's umask-derived defaults
+    let permissions = std::fs::metadata(path)
+        .map_err(|source| replace_error(path, source))?
+        .permissions();
     let temp_path = temporary_sibling(path);
 
     let temp_file = File::create(&temp_path).map_err(|source| AppError::CreateOutput {
@@ -61,12 +67,18 @@ fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
     let mut writer = BufWriter::new(temp_file);
     let processed = process(config, reader, &mut writer);
 
-    //flush before renaming so the temp file holds the whole output
-    let result = processed.and_then(|()| {
-        writer
-            .flush()
-            .map_err(AppError::Processing)
-    });
+    //finish writing and match the original permissions before renaming,
+    //so the temp file holds the whole output and the right mode
+    let result = processed
+        .and_then(|()| {
+            writer
+                .flush()
+                .map_err(AppError::Processing)
+        })
+        .and_then(|()| {
+            std::fs::set_permissions(&temp_path, permissions)
+                .map_err(|source| replace_error(path, source))
+        });
     if let Err(error) = result {
         let _ = std::fs::remove_file(&temp_path);
         return Err(error);
@@ -74,11 +86,15 @@ fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
 
     std::fs::rename(&temp_path, path).map_err(|source| {
         let _ = std::fs::remove_file(&temp_path);
-        AppError::ReplaceInput {
-            path: path.to_path_buf(),
-            source,
-        }
+        replace_error(path, source)
     })
+}
+
+fn replace_error(path: &Path, source: std::io::Error) -> AppError {
+    AppError::ReplaceInput {
+        path: path.to_path_buf(),
+        source,
+    }
 }
 
 fn open_input(config: &Config) -> Result<Box<dyn BufRead>, AppError> {

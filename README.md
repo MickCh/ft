@@ -53,7 +53,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - `--unique` keeps the first row per key (the column range, or the whole line without one) and drops later duplicates; combined with `--sort`, "first" means first in sorted order, like `sort -u`.
 - `--sort`, `--tac` and `--shuffle` are mutually exclusive reordering operations; each buffers the selected rows before writing them out.
 - Original line endings (LF or CRLF) are preserved.
-- `--in-place` rewrites the input file itself: the result is written to a temporary file in the same directory and then atomically renamed over the original, so an interrupted run never truncates the input. It needs a real input file (not stdin) and cannot be combined with `--output`.
+- `--in-place` rewrites the input file itself: the result is written to a temporary file in the same directory and then atomically renamed over the original, so an interrupted run never truncates the input. The original file's permissions are preserved. It needs a real input file (not stdin) and cannot be combined with `--output`.
 - `--replace` cannot be combined with `--delete`, and `--delete` requires a row or column range.
 
 ### Examples

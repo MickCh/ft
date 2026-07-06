@@ -339,6 +339,24 @@ fn in_place_rewrites_the_input_file() {
     assert_eq!(rewritten, "delta BAR\nalpha BAR\ncharlie BAR\nbravo BAR\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn in_place_preserves_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let input = TempFile::new("in-place-perms", INPUT);
+    //a non-default mode the umask would not produce on its own
+    fs::set_permissions(input.path_str(), fs::Permissions::from_mode(0o640)).unwrap();
+
+    run_ft_stdout(&["-i", "-f", "foo", "-r", "BAR", input.path_str()]);
+
+    let mode = fs::metadata(input.path_str())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o640);
+}
+
 #[test]
 fn in_place_leaves_no_temporary_file_behind() {
     //an isolated directory so a concurrent in-place test can't be
