@@ -49,26 +49,55 @@ impl From<RangeInclusive<usize>> for ColumnSpan {
 }
 
 /// Map a 1-based field range onto the char range those fields occupy.
+///
+/// Walks the fields once, tracking only the start of the first selected
+/// field, the end of the last, and the total field count — enough to
+/// resolve the span without materializing every field's position.
 fn resolve_fields(
     line: &str,
     delimiter: &str,
     fields: &RangeInclusive<usize>,
     swallow_delimiter: bool,
 ) -> RangeInclusive<usize> {
-    let positions = field_positions(line, delimiter);
+    let delimiter_len = delimiter.chars().count();
     let first = (*fields.start()).max(1);
-    if first > positions.len() {
+    let wanted_last = *fields.end();
+
+    //1-based char position where the current field starts
+    let mut field_start = 1usize;
+    let mut span_start = None;
+    let mut span_end = 0usize;
+    let mut count = 0usize;
+
+    for (index, field) in line.split(delimiter).enumerate() {
+        let field_index = index + 1;
+        let len = field.chars().count();
+        //an empty field has its end one before its start
+        let field_end = field_start + len - 1;
+
+        if field_index == first {
+            span_start = Some(field_start);
+        }
+        if (first..=wanted_last).contains(&field_index) {
+            span_end = field_end;
+        }
+
+        field_start += len + delimiter_len;
+        count = field_index;
+    }
+
+    let Some(mut start) = span_start else {
+        //the first wanted field lies past the last one: resolve to a
+        //range just beyond the line, which reads/removes nothing
         let beyond = line.chars().count() + 1;
         return beyond..=beyond;
-    }
-    let last = (*fields.end()).min(positions.len());
-
-    let (mut start, _) = positions[first - 1];
-    let (_, mut end) = positions[last - 1];
+    };
+    let mut end = span_end;
 
     if swallow_delimiter {
-        let delimiter_len = delimiter.chars().count();
-        if last < positions.len() {
+        //take one bordering delimiter with the fields, like `cut`:
+        //the trailing one when a field follows, else the leading one
+        if wanted_last < count {
             end += delimiter_len;
         } else if first > 1 {
             start -= delimiter_len;
@@ -76,21 +105,6 @@ fn resolve_fields(
     }
 
     start..=end
-}
-
-/// 1-based `(start, end)` char positions of every delimited field;
-/// an empty field has `end = start - 1`.
-fn field_positions(line: &str, delimiter: &str) -> Vec<(usize, usize)> {
-    let delimiter_len = delimiter.chars().count();
-    let mut start = 1usize;
-    line.split(delimiter)
-        .map(|field| {
-            let len = field.chars().count();
-            let position = (start, start + len - 1);
-            start += len + delimiter_len;
-            position
-        })
-        .collect()
 }
 
 #[cfg(test)]
