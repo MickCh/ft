@@ -216,6 +216,27 @@ fn regex_replace_supports_captures() {
 }
 
 #[test]
+fn grep_keeps_matching_rows() {
+    let input = TempFile::new("grep", INPUT);
+    let stdout = run_ft_stdout(&["-g", "^(a|b)", input.path_str()]);
+    assert_eq!(stdout, "alpha foo\nbravo foo\n");
+}
+
+#[test]
+fn grep_invert_keeps_non_matching_rows() {
+    let input = TempFile::new("grep-invert", INPUT);
+    let stdout = run_ft_stdout(&["-g", "^(a|b)", "--invert", input.path_str()]);
+    assert_eq!(stdout, "delta foo\ncharlie foo\n");
+}
+
+#[test]
+fn grep_with_delete_removes_matching_rows() {
+    let input = TempFile::new("grep-delete", INPUT);
+    let stdout = run_ft_stdout(&["-d", "-g", "charlie", input.path_str()]);
+    assert_eq!(stdout, "delta foo\nalpha foo\nbravo foo\n");
+}
+
+#[test]
 fn upper_transforms_column_range() {
     let input = TempFile::new("upper", INPUT);
     let stdout = run_ft_stdout(&["--upper", "-C", "1-3", input.path_str()]);

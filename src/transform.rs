@@ -261,6 +261,8 @@ mod tests {
             upper: false,
             lower: false,
             trim: false,
+            grep: None,
+            invert: false,
             filename: None,
             find: None,
             replace_string: None,

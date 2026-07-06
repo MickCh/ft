@@ -6,6 +6,7 @@ pub enum ConfigError {
     MissingFindForReplace,
     ReplaceWithDelete,
     DeleteWithoutRange,
+    IgnoreCaseWithoutPattern,
     InvalidRegex(String),
 }
 
@@ -21,8 +22,11 @@ impl fmt::Display for ConfigError {
             ConfigError::DeleteWithoutRange => {
                 write!(
                     f,
-                    "Delete requires a row range (--rows) or a column range (--cols)"
+                    "Delete requires a row range (--rows), a column range (--cols) or a filter (--grep)"
                 )
+            }
+            ConfigError::IgnoreCaseWithoutPattern => {
+                write!(f, "Ignore-case requires a pattern (--find or --grep)")
             }
             ConfigError::InvalidRegex(error) => write!(f, "Invalid regular expression: {error}"),
         }

@@ -55,6 +55,21 @@ pub fn cli() -> Command {
                 .help("Delete specified region (rows)"),
         )
         .arg(
+            Arg::new("grep")
+                .short('g')
+                .long("grep")
+                .required(false)
+                .help("Keep only rows matching this regex (with --delete: delete them)"),
+        )
+        .arg(
+            Arg::new("invert")
+                .long("invert")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("grep")
+                .help("Invert the --grep match, like grep -v (requires --grep)"),
+        )
+        .arg(
             Arg::new("upper")
                 .long("upper")
                 .required(false)
@@ -106,8 +121,7 @@ pub fn cli() -> Command {
                 .long("ignore-case")
                 .required(false)
                 .action(ArgAction::SetTrue)
-                .requires("find")
-                .help("Match the find pattern case-insensitively (requires --find)"),
+                .help("Match the find/grep pattern case-insensitively"),
         )
         .arg(
             Arg::new("output")

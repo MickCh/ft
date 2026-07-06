@@ -3,6 +3,7 @@
 
 use crate::cli_args::Config;
 use crate::constants::NEW_LINE;
+use crate::predicate::{self, LinePredicate};
 use crate::text;
 use crate::transform::{self, LineTransform};
 
@@ -67,6 +68,8 @@ pub struct FileProcessor {
     //sorting requires buffering the whole row range before writing;
     //`None` means lines stream straight to the writer
     sort: Option<SortSpec>,
+    //content filter applied to lines within the row range
+    predicate: Option<Box<dyn LinePredicate>>,
     transforms: Vec<Box<dyn LineTransform>>,
 }
 
@@ -77,12 +80,13 @@ impl FileProcessor {
             //delete mode keeps lines outside the row range,
             //selection mode (no delete) drops them
             keep_lines_outside_rows: config.delete,
-            delete_lines_in_rows: config.delete && config.rows.is_some() && config.cols.is_none(),
+            delete_lines_in_rows: config.delete && config.cols.is_none(),
             sort: config.sort.then(|| SortSpec {
                 cols: config.cols_or_full(),
                 numeric: config.numeric_sort,
                 reverse: config.reverse_sort,
             }),
+            predicate: predicate::build_predicate(config),
             transforms: transform::build_pipeline(config),
         }
     }
@@ -127,7 +131,8 @@ impl FileProcessor {
             return Ok(());
         }
 
-        if self.delete_lines_in_rows {
+        //without a content filter, deleting whole rows needs no UTF-8 look
+        if self.delete_lines_in_rows && self.predicate.is_none() {
             return Ok(());
         }
 
@@ -139,6 +144,21 @@ impl FileProcessor {
         })?;
 
         let (content, terminator) = text::split_line_terminator(utf8_line);
+
+        if let Some(predicate) = &self.predicate
+            && !predicate.matches(content)
+        {
+            //a non-matching line is treated like one outside the row range
+            if self.keep_lines_outside_rows {
+                writer.write_all(raw_line)?;
+            }
+            return Ok(());
+        }
+
+        if self.delete_lines_in_rows {
+            return Ok(());
+        }
+
         let content = self.apply_transforms(content);
 
         if self.sort.is_some() {
@@ -214,6 +234,8 @@ mod tests {
             upper: false,
             lower: false,
             trim: false,
+            grep: None,
+            invert: false,
             filename: None,
             find: None,
             replace_string: None,
@@ -359,6 +381,46 @@ mod tests {
 
         let result = run(config, "one one\ntwo two\n");
         assert_eq!(result, "one\ntwo two\n");
+    }
+
+    #[test]
+    fn grep_keeps_only_matching_lines() {
+        let mut config = config();
+        config.grep = Some(regex::Regex::new("ERROR").unwrap());
+
+        let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
+        assert_eq!(result, "a ERROR\nc ERROR\n");
+    }
+
+    #[test]
+    fn grep_with_delete_removes_matching_lines() {
+        let mut config = config();
+        config.delete = true;
+        config.grep = Some(regex::Regex::new("ERROR").unwrap());
+
+        let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
+        assert_eq!(result, "b INFO\n");
+    }
+
+    #[test]
+    fn grep_filters_within_row_range_only() {
+        let mut config = config();
+        config.rows = Some(1..=2);
+        config.grep = Some(regex::Regex::new("keep").unwrap());
+
+        //row 3 matches but lies outside the selected rows
+        let result = run(config, "keep a\ndrop b\nkeep c\n");
+        assert_eq!(result, "keep a\n");
+    }
+
+    #[test]
+    fn grep_combines_with_sort() {
+        let mut config = config();
+        config.sort = true;
+        config.grep = Some(regex::Regex::new("x").unwrap());
+
+        let result = run(config, "bx\nc\nax\n");
+        assert_eq!(result, "ax\nbx\n");
     }
 
     #[test]

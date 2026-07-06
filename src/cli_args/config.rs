@@ -27,6 +27,8 @@ pub struct Config {
     pub upper: bool,
     pub lower: bool,
     pub trim: bool,
+    pub grep: Option<Regex>,
+    pub invert: bool,
     //`None` means the input comes from stdin
     pub filename: Option<PathBuf>,
     pub find: Option<FindPattern>,
@@ -52,7 +54,13 @@ impl Config {
     /// Whether some operation claims the column range as its scope or
     /// key (as opposed to a bare `--cols`, which selects the columns).
     pub fn has_column_operation(&self) -> bool {
-        self.delete || self.sort || self.find.is_some() || self.upper || self.lower || self.trim
+        self.delete
+            || self.sort
+            || self.find.is_some()
+            || self.upper
+            || self.lower
+            || self.trim
+            || self.grep.is_some()
     }
 }
 
@@ -64,6 +72,15 @@ impl TryFrom<ArgMatches> for Config {
     /// 1-based bounds) is enforced earlier, by the clap value parsers.
     fn try_from(matches: ArgMatches) -> Result<Config, ConfigError> {
         let ignore_case = matches.get_flag("ignore-case");
+        let grep = matches
+            .get_one::<String>("grep")
+            .map(|pattern| {
+                RegexBuilder::new(pattern)
+                    .case_insensitive(ignore_case)
+                    .build()
+                    .map_err(|e| ConfigError::InvalidRegex(e.to_string()))
+            })
+            .transpose()?;
         let find = match matches.get_one::<String>("find") {
             None => None,
             Some(pattern) if matches.get_flag("regex") => Some(FindPattern::Regex(
@@ -90,6 +107,8 @@ impl TryFrom<ArgMatches> for Config {
             upper: matches.get_flag("upper"),
             lower: matches.get_flag("lower"),
             trim: matches.get_flag("trim"),
+            grep,
+            invert: matches.get_flag("invert"),
             filename: matches
                 .get_one::<String>("filename")
                 .filter(|name| name.as_str() != "-")
@@ -111,8 +130,13 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::ReplaceWithDelete);
         }
 
-        if config.delete && config.rows.is_none() && config.cols.is_none() {
+        if config.delete && config.rows.is_none() && config.cols.is_none() && config.grep.is_none()
+        {
             return Err(ConfigError::DeleteWithoutRange);
+        }
+
+        if config.ignore_case && config.find.is_none() && config.grep.is_none() {
+            return Err(ConfigError::IgnoreCaseWithoutPattern);
         }
 
         Ok(config)
@@ -228,12 +252,43 @@ mod tests {
     }
 
     #[test]
-    fn ignore_case_requires_find() {
+    fn ignore_case_requires_find_or_grep() {
+        let error = config_from(&["ft", "--ignore-case", "input.txt"]).unwrap_err();
+        assert!(matches!(error, ConfigError::IgnoreCaseWithoutPattern));
+
+        assert!(config_from(&["ft", "--ignore-case", "-g", "a", "input.txt"]).is_ok());
+    }
+
+    #[test]
+    fn grep_compiles_as_regex() {
+        let config = config_from(&["ft", "-g", "a+b", "input.txt"]).unwrap();
+        assert!(config.grep.unwrap().is_match("aaab"));
+    }
+
+    #[test]
+    fn grep_honors_ignore_case() {
+        let config = config_from(&["ft", "--ignore-case", "-g", "abc", "input.txt"]).unwrap();
+        assert!(config.grep.unwrap().is_match("ABC"));
+    }
+
+    #[test]
+    fn rejects_invalid_grep_regex() {
+        let error = config_from(&["ft", "-g", "[unclosed", "input.txt"]).unwrap_err();
+        assert!(matches!(error, ConfigError::InvalidRegex(_)));
+    }
+
+    #[test]
+    fn invert_requires_grep() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "--ignore-case", "input.txt"])
+                .try_get_matches_from(["ft", "--invert", "input.txt"])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn accepts_delete_with_grep_only() {
+        assert!(config_from(&["ft", "-d", "-g", "foo", "input.txt"]).is_ok());
     }
 
     #[test]

@@ -20,6 +20,8 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `-n, --numeric` | Sort numerically instead of lexicographically (requires `--sort`) |
 | `--reverse` | Sort in descending order (requires `--sort`) |
 | `-d, --delete` | Delete the selected rows, or the column range within them |
+| `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them) |
+| `--invert` | Invert the `--grep` match, like `grep -v` (requires `--grep`) |
 | `-f, --find <text>` | Substring to find |
 | `-r, --replace <text>` | Replacement text (requires `--find`) |
 | `-e, --regex` | Treat the find pattern as a regular expression (requires `--find`) |
@@ -36,6 +38,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.
+- `--grep` filters rows by content, complementing the positional row range: only rows inside `--rows` *and* matching the pattern are processed. With `--delete`, matching rows are deleted instead. The match is scoped to the column range.
 - `--upper`, `--lower` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
 - Original line endings (LF or CRLF) are preserved.
@@ -69,6 +72,10 @@ ft --ignore-case -f foo -r bar input.txt
 # Uppercase columns 1-3, trim whitespace around every line
 ft --upper -C 1-3 input.txt
 ft --trim input.txt
+
+# Keep only rows containing ERROR; delete rows that match a pattern
+ft -g ERROR app.log
+ft -d -g '^#' config.txt
 
 # Sort the whole file by columns 5-12, write the result to out.txt
 ft -s -C 5-12 -o out.txt input.txt
