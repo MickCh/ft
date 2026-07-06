@@ -4,7 +4,7 @@
 use crate::cli_args::Config;
 use crate::constants::NEW_LINE;
 use crate::predicate::{self, LinePredicate};
-use crate::ranges::RangeSet;
+use crate::ranges::{RangeSet, RangeSpec};
 use crate::text;
 use crate::transform::{self, LineTransform};
 
@@ -84,7 +84,7 @@ impl Ord for NumericKey {
 }
 
 pub struct FileProcessor {
-    rows: RangeSet,
+    rows: RangeSpec,
     keep_lines_outside_rows: bool,
     delete_lines_in_rows: bool,
     //`None` means lines stream straight to the writer
@@ -129,13 +129,29 @@ impl FileProcessor {
     /// row selection, per-line transforms and optional sorting.
     pub fn run<R: BufRead, W: Write>(&self, mut reader: R, writer: &mut W) -> io::Result<()> {
         let mut state = RunState::default();
-        let mut line_number = 0usize;
 
-        reader.for_byte_line_with_terminator(|raw_line| {
-            line_number += 1;
-            self.process_line(raw_line, line_number, &mut state, writer)
-                .map(|_| true)
-        })?;
+        if self.rows.is_absolute() {
+            //the total line count is irrelevant, so lines can stream through
+            let rows = self.rows.resolve(usize::MAX);
+            let mut line_number = 0usize;
+            reader.for_byte_line_with_terminator(|raw_line| {
+                line_number += 1;
+                self.process_line(raw_line, line_number, &rows, &mut state, writer)
+                    .map(|_| true)
+            })?;
+        } else {
+            //end-relative bounds (`~N`) only resolve once the total
+            //line count is known: the whole input must be buffered
+            let mut lines: Vec<Vec<u8>> = Vec::new();
+            reader.for_byte_line_with_terminator(|raw_line| {
+                lines.push(raw_line.to_vec());
+                Ok(true)
+            })?;
+            let rows = self.rows.resolve(lines.len());
+            for (index, raw_line) in lines.iter().enumerate() {
+                self.process_line(raw_line, index + 1, &rows, &mut state, writer)?;
+            }
+        }
 
         if !state.buffer_flushed {
             self.flush_reordered(&mut state, writer)?;
@@ -147,10 +163,11 @@ impl FileProcessor {
         &self,
         raw_line: &[u8],
         line_number: usize,
+        rows: &RangeSet,
         state: &mut RunState,
         writer: &mut W,
     ) -> io::Result<()> {
-        if !self.rows.contains(line_number) {
+        if !rows.contains(line_number) {
             if self.keep_lines_outside_rows {
                 writer.write_all(raw_line)?;
             }
@@ -192,7 +209,7 @@ impl FileProcessor {
                 content,
                 terminator: terminator.to_owned(),
             });
-            if line_number >= self.rows.end() {
+            if line_number >= rows.end() {
                 self.flush_reordered(state, writer)?;
                 state.buffer_flushed = true;
             }
@@ -444,6 +461,39 @@ mod tests {
 
         let result = run(config, "one one\ntwo two\n");
         assert_eq!(result, "one\ntwo two\n");
+    }
+
+    #[test]
+    fn end_relative_rows_select_from_the_end() {
+        use crate::ranges::RangeBound::FromEnd;
+        let mut config = config();
+        config.rows = Some(RangeSpec::new(vec![(FromEnd(2), FromEnd(1))]));
+
+        //~2-~1 means the last two lines
+        let result = run(config, "one\ntwo\nthree\nfour\n");
+        assert_eq!(result, "three\nfour\n");
+    }
+
+    #[test]
+    fn end_relative_rows_combine_with_delete() {
+        use crate::ranges::RangeBound::FromEnd;
+        let mut config = config();
+        config.delete = true;
+        config.rows = Some(RangeSpec::new(vec![(FromEnd(1), FromEnd(1))]));
+
+        let result = run(config, "one\ntwo\nthree\n");
+        assert_eq!(result, "one\ntwo\n");
+    }
+
+    #[test]
+    fn end_relative_rows_combine_with_sort() {
+        use crate::ranges::RangeBound::FromEnd;
+        let mut config = config();
+        config.sort = true;
+        config.rows = Some(RangeSpec::new(vec![(FromEnd(3), FromEnd(1))]));
+
+        let result = run(config, "header\nc\na\nb\n");
+        assert_eq!(result, "a\nb\nc\n");
     }
 
     #[test]

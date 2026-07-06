@@ -1,7 +1,7 @@
 use clap::{Arg, ArgAction, Command, crate_name, crate_version};
 use std::ops::RangeInclusive;
 
-use crate::ranges::RangeSet;
+use crate::ranges::{RangeBound, RangeSpec};
 
 pub fn cli() -> Command {
     Command::new(crate_name!())
@@ -14,7 +14,7 @@ pub fn cli() -> Command {
                 .required(false)
                 .allow_hyphen_values(true)
                 .value_parser(parse_row_ranges)
-                .help("Rows to process: e.g. 3, 2-5, 10-, -5, or a list like 1-5,10-20"),
+                .help("Rows to process: e.g. 3, 2-5, 10-, -5, ~10-~1, or a list like 1-5,10-20"),
         )
         .arg(
             Arg::new("columns")
@@ -167,12 +167,12 @@ pub fn cli() -> Command {
 }
 
 /// Parse a row specification: a comma-separated list of range parts.
-fn parse_row_ranges(input: &str) -> Result<RangeSet, String> {
+fn parse_row_ranges(input: &str) -> Result<RangeSpec, String> {
     let parts = input
         .split(',')
         .map(parse_range_part)
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(RangeSet::new(parts))
+    Ok(RangeSpec::new(parts))
 }
 
 /// Parse a column specification: a single range part (columns address
@@ -181,12 +181,16 @@ fn parse_column_range(input: &str) -> Result<RangeInclusive<usize>, String> {
     if input.contains(',') {
         return Err("Columns accept a single range, not a list".to_owned());
     }
-    parse_range_part(input)
+    match parse_range_part(input)? {
+        (RangeBound::FromStart(from), RangeBound::FromStart(to)) => Ok(from..=to),
+        _ => Err("Columns do not support end-relative (~) values".to_owned()),
+    }
 }
 
 /// Parse one range part: `<from>-<to>`, `<from>-` (to the end),
-/// `-<to>` (from 1) or a single number.
-fn parse_range_part(part: &str) -> Result<RangeInclusive<usize>, String> {
+/// `-<to>` (from 1) or a single number. A bound prefixed with `~`
+/// counts from the end of the input (`~1` is the last row).
+fn parse_range_part(part: &str) -> Result<(RangeBound, RangeBound), String> {
     let (from, to) = match *part
         .split('-')
         .collect::<Vec<&str>>()
@@ -196,32 +200,45 @@ fn parse_range_part(part: &str) -> Result<RangeInclusive<usize>, String> {
             let value = parse_bound(single)?;
             (value, value)
         }
-        [from, ""] => (parse_bound(from)?, usize::MAX),
-        ["", to] => (1, parse_bound(to)?),
+        [from, ""] => (parse_bound(from)?, RangeBound::FromStart(usize::MAX)),
+        ["", to] => (RangeBound::FromStart(1), parse_bound(to)?),
         [from, to] => (parse_bound(from)?, parse_bound(to)?),
         _ => return Err(format!("Invalid range `{part}`, expected <from>-<to>")),
     };
 
-    if from > to {
+    //an inverted range is only detectable when both bounds count from
+    //the same side; mixed bounds are checked once the input length is known
+    let inverted = match (from, to) {
+        (RangeBound::FromStart(a), RangeBound::FromStart(b)) => a > b,
+        (RangeBound::FromEnd(a), RangeBound::FromEnd(b)) => a < b,
+        _ => false,
+    };
+    if inverted {
         return Err("Range start cannot be greater than its end".to_owned());
     }
 
-    Ok(from..=to)
+    Ok((from, to))
 }
 
-fn parse_bound(value: &str) -> Result<usize, String> {
-    let bound: usize = value
+fn parse_bound(value: &str) -> Result<RangeBound, String> {
+    let (make_bound, digits): (fn(usize) -> RangeBound, &str) = match value.strip_prefix('~') {
+        Some(rest) => (RangeBound::FromEnd, rest),
+        None => (RangeBound::FromStart, value),
+    };
+    let bound: usize = digits
         .parse()
         .map_err(|_| format!("Range value `{value}` isn't a number"))?;
     if bound < 1 {
         return Err("Ranges are 1-based, values must be at least 1".to_owned());
     }
-    Ok(bound)
+    Ok(make_bound(bound))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ranges::RangeSet;
+    use RangeBound::{FromEnd, FromStart};
 
     #[test]
     fn cli_definition_is_consistent() {
@@ -230,36 +247,73 @@ mod tests {
 
     #[test]
     fn parses_valid_range() {
-        assert_eq!(parse_range_part("2-5").unwrap(), 2..=5);
-        assert_eq!(parse_range_part("7-7").unwrap(), 7..=7);
+        assert_eq!(
+            parse_range_part("2-5").unwrap(),
+            (FromStart(2), FromStart(5))
+        );
+        assert_eq!(
+            parse_range_part("7-7").unwrap(),
+            (FromStart(7), FromStart(7))
+        );
     }
 
     #[test]
     fn parses_single_number_as_one_element_range() {
-        assert_eq!(parse_range_part("15").unwrap(), 15..=15);
+        assert_eq!(
+            parse_range_part("15").unwrap(),
+            (FromStart(15), FromStart(15))
+        );
     }
 
     #[test]
     fn parses_open_ended_ranges() {
-        assert_eq!(parse_range_part("10-").unwrap(), 10..=usize::MAX);
-        assert_eq!(parse_range_part("-5").unwrap(), 1..=5);
+        assert_eq!(
+            parse_range_part("10-").unwrap(),
+            (FromStart(10), FromStart(usize::MAX))
+        );
+        assert_eq!(
+            parse_range_part("-5").unwrap(),
+            (FromStart(1), FromStart(5))
+        );
     }
 
     #[test]
-    fn parses_range_list_into_a_set() {
-        let set = parse_row_ranges("1-2,5-6,4").unwrap();
-        assert_eq!(set, RangeSet::new(vec![1..=2, 4..=6]));
+    fn parses_end_relative_bounds() {
+        assert_eq!(
+            parse_range_part("~10-~1").unwrap(),
+            (FromEnd(10), FromEnd(1))
+        );
+        assert_eq!(parse_range_part("~5").unwrap(), (FromEnd(5), FromEnd(5)));
+        assert_eq!(
+            parse_range_part("2-~2").unwrap(),
+            (FromStart(2), FromEnd(2))
+        );
+    }
+
+    #[test]
+    fn parses_range_list_into_a_spec() {
+        let spec = parse_row_ranges("1-2,5-6,4").unwrap();
+        assert_eq!(spec.resolve(100), RangeSet::new(vec![1..=2, 4..=6]));
     }
 
     #[test]
     fn rejects_inverted_range() {
         assert!(parse_range_part("5-2").is_err());
+        //~1 is the last line, so ~1-~5 runs backwards too
+        assert!(parse_range_part("~1-~5").is_err());
+    }
+
+    #[test]
+    fn accepts_mixed_bounds_that_may_invert() {
+        //whether 5-~5 is inverted depends on the input length
+        assert!(parse_range_part("5-~5").is_ok());
     }
 
     #[test]
     fn rejects_zero_values() {
         assert!(parse_range_part("0-5").is_err());
         assert!(parse_range_part("0").is_err());
+        assert!(parse_range_part("~0").is_err());
     }
 
     #[test]
@@ -268,6 +322,7 @@ mod tests {
         assert!(parse_range_part("1-b").is_err());
         assert!(parse_range_part("-").is_err());
         assert!(parse_range_part("").is_err());
+        assert!(parse_range_part("~").is_err());
     }
 
     #[test]
@@ -279,5 +334,11 @@ mod tests {
     fn column_range_rejects_lists() {
         assert!(parse_column_range("1-2,4-5").is_err());
         assert_eq!(parse_column_range("3-").unwrap(), 3..=usize::MAX);
+    }
+
+    #[test]
+    fn column_range_rejects_end_relative_bounds() {
+        assert!(parse_column_range("~5").is_err());
+        assert!(parse_column_range("1-~2").is_err());
     }
 }

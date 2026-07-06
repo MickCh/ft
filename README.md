@@ -14,7 +14,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 
 | Option | Description |
 |---|---|
-| `-R, --rows <ranges>` | Rows to process: `3`, `2-5`, `10-`, `-5` or a list `1-5,10-20` (default: all rows) |
+| `-R, --rows <ranges>` | Rows to process: `3`, `2-5`, `10-`, `-5`, `~10-~1` or a list `1-5,10-20` (default: all rows) |
 | `-C, --cols <range>` | Column range to process: `3`, `2-5`, `10-` or `-5` (default: all columns) |
 | `-s, --sort` | Sort the selected rows, using the column range as the sort key |
 | `-n, --numeric` | Sort numerically instead of lexicographically (requires `--sort`) |
@@ -38,6 +38,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 
 - Row and column ranges are **1-based and inclusive**; columns are counted in characters, not bytes, so multi-byte UTF-8 text (including emoji) is handled correctly.
 - A range can be a single number (`3`), open-ended (`10-` to the end, `-5` from the start) or closed (`2-5`). Rows additionally accept a comma-separated list of ranges (`1-5,10-20`); overlapping parts are merged.
+- A row bound prefixed with `~` counts from the **end** of the input: `~1` is the last row, `~10-~1` the last ten, `2-~2` everything but the first and last row. Because the total line count must be known first, end-relative ranges buffer the whole input instead of streaming; columns do not accept `~`.
 - Without `--delete`, the row range **selects** lines: only rows inside the range are output (and transformed). Without a row range, the whole file is processed.
 - A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
@@ -60,6 +61,10 @@ ft -R 10-20 input.txt
 ft -R -5 input.txt
 ft -R 1,3,10-20 input.txt
 ft -R 100- input.txt
+
+# Print the last 10 rows (like tail); drop the last row
+ft -R '~10-~1' input.txt
+ft -d -R '~1' input.txt
 
 # Delete rows 2-5, keep everything else
 ft -d -R 2-5 input.txt

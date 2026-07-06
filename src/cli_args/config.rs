@@ -5,7 +5,7 @@ use clap::ArgMatches;
 use regex::{Regex, RegexBuilder};
 
 use super::ConfigError;
-use crate::ranges::RangeSet;
+use crate::ranges::RangeSpec;
 
 /// What `--find` matches: a literal substring, or a regular expression
 /// when `--regex` is given. The regex is compiled (and therefore
@@ -18,7 +18,7 @@ pub enum FindPattern {
 
 #[derive(Debug)]
 pub struct Config {
-    pub rows: Option<RangeSet>,
+    pub rows: Option<RangeSpec>,
     pub cols: Option<RangeInclusive<usize>>,
     pub sort: bool,
     pub numeric_sort: bool,
@@ -42,10 +42,10 @@ pub struct Config {
 
 impl Config {
     /// Rows to process; no range provided means every row.
-    pub fn rows_or_full(&self) -> RangeSet {
+    pub fn rows_or_full(&self) -> RangeSpec {
         self.rows
             .clone()
-            .unwrap_or_else(RangeSet::full)
+            .unwrap_or_else(RangeSpec::full)
     }
 
     /// Columns to process; no range provided means every column.
@@ -99,7 +99,7 @@ impl TryFrom<ArgMatches> for Config {
 
         let config = Config {
             rows: matches
-                .get_one::<RangeSet>("rows")
+                .get_one::<RangeSpec>("rows")
                 .cloned(),
             cols: matches
                 .get_one::<RangeInclusive<usize>>("columns")
@@ -196,7 +196,7 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(config.rows, Some(RangeSet::from(2..=4)));
+        assert_eq!(config.rows, Some(RangeSpec::from(2..=4)));
         assert_eq!(config.cols, Some(1..=10));
         assert!(config.sort);
         assert!(matches!(config.find, Some(FindPattern::Literal(ref f)) if f == "a"));
@@ -217,7 +217,7 @@ mod tests {
     fn missing_ranges_fall_back_to_full_range() {
         let config = config_from(&["ft", "input.txt"]).unwrap();
 
-        assert_eq!(config.rows_or_full(), RangeSet::full());
+        assert_eq!(config.rows_or_full(), RangeSpec::full());
         assert_eq!(config.cols_or_full(), 1..=usize::MAX);
     }
 

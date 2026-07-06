@@ -164,6 +164,43 @@ fn rows_accept_open_ended_ranges() {
 }
 
 #[test]
+fn rows_accept_end_relative_ranges() {
+    let input = TempFile::new("rows-end-relative", INPUT);
+    assert_eq!(
+        run_ft_stdout(&["-R", "~2-~1", input.path_str()]),
+        "charlie foo\nbravo foo\n"
+    );
+    assert_eq!(
+        run_ft_stdout(&["-R", "2-~2", input.path_str()]),
+        "alpha foo\ncharlie foo\n"
+    );
+}
+
+#[test]
+fn end_relative_rows_work_on_stdin() {
+    let output = run_ft_with_stdin(&["-R", "~1"], INPUT);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "bravo foo\n");
+}
+
+#[test]
+fn delete_removes_end_relative_rows() {
+    let input = TempFile::new("delete-rows-end-relative", INPUT);
+    let stdout = run_ft_stdout(&["-d", "-R", "~1", input.path_str()]);
+    assert_eq!(stdout, "delta foo\nalpha foo\ncharlie foo\n");
+}
+
+#[test]
+fn columns_reject_end_relative_ranges() {
+    let output = run_ft(&["-C", "~2-~1", "input.txt"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("end-relative"),
+        "stderr should mention end-relative values"
+    );
+}
+
+#[test]
 fn delete_removes_a_list_of_row_ranges() {
     let input = TempFile::new("delete-rows-list", INPUT);
     let stdout = run_ft_stdout(&["-d", "-R", "1,4", input.path_str()]);
