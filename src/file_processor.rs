@@ -23,8 +23,8 @@ struct Line {
 /// Mutable state threaded through one `run` call.
 #[derive(Default)]
 struct RunState {
-    //lines held back for sorting
-    sort_buffer: Vec<Line>,
+    //lines held back for reordering
+    reorder_buffer: Vec<Line>,
     buffer_flushed: bool,
     //unique keys already written (`--unique`)
     seen_keys: HashSet<String>,
@@ -36,6 +36,16 @@ struct SortSpec {
     cols: RangeInclusive<usize>,
     numeric: bool,
     reverse: bool,
+}
+
+/// A sequence-breaking operation: unlike per-line transforms, it needs
+/// the whole row range buffered before anything can be written.
+enum Reorder {
+    Sort(SortSpec),
+    //reverse the order of the buffered lines, like `tac`
+    Tac,
+    //write the buffered lines in random order
+    Shuffle,
 }
 
 /// An `Ord` wrapper around the parsed numeric sort key.
@@ -76,9 +86,8 @@ pub struct FileProcessor {
     rows: RangeInclusive<usize>,
     keep_lines_outside_rows: bool,
     delete_lines_in_rows: bool,
-    //sorting requires buffering the whole row range before writing;
     //`None` means lines stream straight to the writer
-    sort: Option<SortSpec>,
+    reorder: Option<Reorder>,
     //content filter applied to lines within the row range
     predicate: Option<Box<dyn LinePredicate>>,
     //key columns for `--unique`; `None` means duplicates are kept
@@ -94,11 +103,19 @@ impl FileProcessor {
             //selection mode (no delete) drops them
             keep_lines_outside_rows: config.delete,
             delete_lines_in_rows: config.delete && config.cols.is_none(),
-            sort: config.sort.then(|| SortSpec {
-                cols: config.cols_or_full(),
-                numeric: config.numeric_sort,
-                reverse: config.reverse_sort,
-            }),
+            reorder: if config.sort {
+                Some(Reorder::Sort(SortSpec {
+                    cols: config.cols_or_full(),
+                    numeric: config.numeric_sort,
+                    reverse: config.reverse_sort,
+                }))
+            } else if config.tac {
+                Some(Reorder::Tac)
+            } else if config.shuffle {
+                Some(Reorder::Shuffle)
+            } else {
+                None
+            },
             predicate: predicate::build_predicate(config),
             unique_key_cols: config
                 .unique
@@ -120,7 +137,7 @@ impl FileProcessor {
         })?;
 
         if !state.buffer_flushed {
-            self.flush_sorted(&mut state, writer)?;
+            self.flush_reordered(&mut state, writer)?;
         }
         writer.flush()
     }
@@ -169,13 +186,13 @@ impl FileProcessor {
 
         let content = self.apply_transforms(content);
 
-        if self.sort.is_some() {
-            state.sort_buffer.push(Line {
+        if self.reorder.is_some() {
+            state.reorder_buffer.push(Line {
                 content,
                 terminator: terminator.to_owned(),
             });
             if line_number >= *self.rows.end() {
-                self.flush_sorted(state, writer)?;
+                self.flush_reordered(state, writer)?;
                 state.buffer_flushed = true;
             }
         } else {
@@ -204,32 +221,27 @@ impl FileProcessor {
             .fold(content.to_owned(), |line, transform| transform.apply(&line))
     }
 
-    fn flush_sorted<W: Write>(&self, state: &mut RunState, writer: &mut W) -> io::Result<()> {
-        let Some(spec) = &self.sort else {
+    fn flush_reordered<W: Write>(&self, state: &mut RunState, writer: &mut W) -> io::Result<()> {
+        let Some(reorder) = &self.reorder else {
             return Ok(());
         };
         let RunState {
-            sort_buffer,
+            reorder_buffer,
             seen_keys,
             ..
         } = state;
 
-        //`Reverse` keeps the sort stable in descending order too
-        use std::cmp::Reverse;
-        let text_key = |line: &Line| text::substring(&line.content, &spec.cols);
-        match (spec.numeric, spec.reverse) {
-            (false, false) => sort_buffer.sort_by_cached_key(|line| text_key(line)),
-            (false, true) => sort_buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
-            (true, false) => {
-                sort_buffer.sort_by_cached_key(|line| NumericKey::parse(&text_key(line)))
-            }
-            (true, true) => {
-                sort_buffer.sort_by_cached_key(|line| Reverse(NumericKey::parse(&text_key(line))))
+        match reorder {
+            Reorder::Sort(spec) => Self::sort_lines(reorder_buffer, spec),
+            Reorder::Tac => reorder_buffer.reverse(),
+            Reorder::Shuffle => {
+                use rand::seq::SliceRandom;
+                reorder_buffer.shuffle(&mut rand::rng());
             }
         }
 
-        //`--unique` keeps the first line per key in sorted order
-        let lines: Vec<&Line> = sort_buffer
+        //`--unique` keeps the first line per key in reordered order
+        let lines: Vec<&Line> = reorder_buffer
             .iter()
             .filter(|line| self.passes_unique(&line.content, seen_keys))
             .collect();
@@ -244,8 +256,22 @@ impl FileProcessor {
                 writer.write_all(NEW_LINE.as_bytes())?;
             }
         }
-        sort_buffer.clear();
+        state.reorder_buffer.clear();
         Ok(())
+    }
+
+    fn sort_lines(buffer: &mut [Line], spec: &SortSpec) {
+        //`Reverse` keeps the sort stable in descending order too
+        use std::cmp::Reverse;
+        let text_key = |line: &Line| text::substring(&line.content, &spec.cols);
+        match (spec.numeric, spec.reverse) {
+            (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
+            (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
+            (true, false) => buffer.sort_by_cached_key(|line| NumericKey::parse(&text_key(line))),
+            (true, true) => {
+                buffer.sort_by_cached_key(|line| Reverse(NumericKey::parse(&text_key(line))))
+            }
+        }
     }
 }
 
@@ -262,6 +288,8 @@ mod tests {
             sort: false,
             numeric_sort: false,
             reverse_sort: false,
+            tac: false,
+            shuffle: false,
             delete: false,
             ignore_case: false,
             upper: false,
@@ -455,6 +483,46 @@ mod tests {
 
         let result = run(config, "bx\nc\nax\n");
         assert_eq!(result, "ax\nbx\n");
+    }
+
+    #[test]
+    fn tac_reverses_line_order() {
+        let mut config = config();
+        config.tac = true;
+
+        let result = run(config, "one\ntwo\nthree\n");
+        assert_eq!(result, "three\ntwo\none\n");
+    }
+
+    #[test]
+    fn tac_reverses_only_selected_rows() {
+        let mut config = config();
+        config.tac = true;
+        config.rows = Some(2..=3);
+
+        let result = run(config, "header\nb\na\ntail\n");
+        //selection mode keeps only rows 2-3, reversed
+        assert_eq!(result, "a\nb\n");
+    }
+
+    #[test]
+    fn tac_adds_terminator_when_unterminated_line_moves_up() {
+        let mut config = config();
+        config.tac = true;
+
+        let result = run(config, "b\na");
+        assert_eq!(result, format!("a{}b\n", NEW_LINE));
+    }
+
+    #[test]
+    fn shuffle_preserves_the_set_of_lines() {
+        let mut config = config();
+        config.shuffle = true;
+
+        let result = run(config, "one\ntwo\nthree\nfour\n");
+        let mut lines: Vec<&str> = result.lines().collect();
+        lines.sort_unstable();
+        assert_eq!(lines, ["four", "one", "three", "two"]);
     }
 
     #[test]

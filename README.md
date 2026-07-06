@@ -19,6 +19,8 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `-s, --sort` | Sort the selected rows, using the column range as the sort key |
 | `-n, --numeric` | Sort numerically instead of lexicographically (requires `--sort`) |
 | `--reverse` | Sort in descending order (requires `--sort`) |
+| `--tac` | Reverse the order of the selected rows (like `tac`) |
+| `--shuffle` | Shuffle the selected rows into a random order |
 | `-d, --delete` | Delete the selected rows, or the column range within them |
 | `-u, --unique` | Drop duplicate rows, comparing the column range (first wins) |
 | `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them) |
@@ -43,6 +45,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - `--upper`, `--lower` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
 - `--unique` keeps the first row per key (the column range, or the whole line without one) and drops later duplicates; combined with `--sort`, "first" means first in sorted order, like `sort -u`.
+- `--sort`, `--tac` and `--shuffle` are mutually exclusive reordering operations; each buffers the selected rows before writing them out.
 - Original line endings (LF or CRLF) are preserved.
 - `--replace` cannot be combined with `--delete`, and `--delete` requires a row or column range.
 
@@ -81,6 +84,10 @@ ft -d -g '^#' config.txt
 
 # Sort and deduplicate by the key in columns 1-8 (like sort -u)
 ft -s -u -C 1-8 input.txt
+
+# Reverse the file; shuffle rows 2-100
+ft --tac input.txt
+ft --shuffle -R 2-100 input.txt
 
 # Sort the whole file by columns 5-12, write the result to out.txt
 ft -s -C 5-12 -o out.txt input.txt

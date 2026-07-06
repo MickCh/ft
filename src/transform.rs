@@ -256,6 +256,8 @@ mod tests {
             sort: false,
             numeric_sort: false,
             reverse_sort: false,
+            tac: false,
+            shuffle: false,
             delete: false,
             ignore_case: false,
             upper: false,

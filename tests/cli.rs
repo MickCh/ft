@@ -216,6 +216,32 @@ fn regex_replace_supports_captures() {
 }
 
 #[test]
+fn tac_reverses_row_order() {
+    let input = TempFile::new("tac", INPUT);
+    let stdout = run_ft_stdout(&["--tac", input.path_str()]);
+    assert_eq!(stdout, "bravo foo\ncharlie foo\nalpha foo\ndelta foo\n");
+}
+
+#[test]
+fn shuffle_keeps_all_rows() {
+    let input = TempFile::new("shuffle", INPUT);
+    let stdout = run_ft_stdout(&["--shuffle", input.path_str()]);
+    let mut lines: Vec<&str> = stdout.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(
+        lines,
+        ["alpha foo", "bravo foo", "charlie foo", "delta foo"]
+    );
+}
+
+#[test]
+fn tac_conflicts_with_sort() {
+    let input = TempFile::new("tac-sort", INPUT);
+    let output = run_ft(&["--tac", "-s", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn unique_drops_duplicate_rows() {
     let input = TempFile::new("unique", "one\ntwo\none\nthree\n");
     let stdout = run_ft_stdout(&["-u", input.path_str()]);

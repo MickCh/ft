@@ -47,6 +47,22 @@ pub fn cli() -> Command {
                 .help("Sort in descending order (requires --sort)"),
         )
         .arg(
+            Arg::new("tac")
+                .long("tac")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(["sort", "shuffle"])
+                .help("Reverse the order of the selected rows (like tac)"),
+        )
+        .arg(
+            Arg::new("shuffle")
+                .long("shuffle")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("sort")
+                .help("Shuffle the selected rows into a random order"),
+        )
+        .arg(
             Arg::new("delete")
                 .short('d')
                 .long("delete")
