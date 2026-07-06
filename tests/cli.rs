@@ -216,6 +216,28 @@ fn regex_replace_supports_captures() {
 }
 
 #[test]
+fn ignore_case_replaces_literal_in_any_case() {
+    let input = TempFile::new("ignore-case", "Foo bar FOO\n");
+    let stdout = run_ft_stdout(&["--ignore-case", "-f", "foo", "-r", "X", input.path_str()]);
+    assert_eq!(stdout, "X bar X\n");
+}
+
+#[test]
+fn ignore_case_applies_to_regex_patterns() {
+    let input = TempFile::new("ignore-case-regex", "abc DEF\n");
+    let stdout = run_ft_stdout(&[
+        "-e",
+        "--ignore-case",
+        "-f",
+        "[a-z]+",
+        "-r",
+        "X",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "X X\n");
+}
+
+#[test]
 fn invalid_regex_is_rejected() {
     let input = TempFile::new("regex-invalid", INPUT);
     let output = run_ft(&["-e", "-f", "[unclosed", "-r", "N", input.path_str()]);

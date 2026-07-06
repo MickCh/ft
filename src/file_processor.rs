@@ -210,6 +210,7 @@ mod tests {
             numeric_sort: false,
             reverse_sort: false,
             delete: false,
+            ignore_case: false,
             filename: None,
             find: None,
             replace_string: None,

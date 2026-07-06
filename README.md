@@ -23,6 +23,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `-f, --find <text>` | Substring to find |
 | `-r, --replace <text>` | Replacement text (requires `--find`) |
 | `-e, --regex` | Treat the find pattern as a regular expression (requires `--find`) |
+| `--ignore-case` | Match the find pattern case-insensitively (requires `--find`) |
 | `-o, --output <file>` | Write to a file instead of stdout |
 
 ### Semantics
@@ -57,6 +58,9 @@ ft -C 10-20 -f foo -r bar input.txt
 # Regex replace: collapse every number to "N"; $1-style capture references work too
 ft -e -f '[0-9]+' -r N input.txt
 ft -e -f '(\w+)@(\w+)' -r '$2.$1' input.txt
+
+# Case-insensitive replace: rewrites foo, FOO, Foo, ...
+ft --ignore-case -f foo -r bar input.txt
 
 # Sort the whole file by columns 5-12, write the result to out.txt
 ft -s -C 5-12 -o out.txt input.txt

@@ -78,6 +78,14 @@ pub fn cli() -> Command {
                 .help("Treat the find pattern as a regular expression"),
         )
         .arg(
+            Arg::new("ignore-case")
+                .long("ignore-case")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("find")
+                .help("Match the find pattern case-insensitively (requires --find)"),
+        )
+        .arg(
             Arg::new("output")
                 .short('o')
                 .long("output")

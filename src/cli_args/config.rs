@@ -2,7 +2,7 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use clap::ArgMatches;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 
 use super::ConfigError;
 
@@ -23,6 +23,7 @@ pub struct Config {
     pub numeric_sort: bool,
     pub reverse_sort: bool,
     pub delete: bool,
+    pub ignore_case: bool,
     //`None` means the input comes from stdin
     pub filename: Option<PathBuf>,
     pub find: Option<FindPattern>,
@@ -53,10 +54,14 @@ impl TryFrom<ArgMatches> for Config {
     /// span multiple arguments. Single-argument validity (range format,
     /// 1-based bounds) is enforced earlier, by the clap value parsers.
     fn try_from(matches: ArgMatches) -> Result<Config, ConfigError> {
+        let ignore_case = matches.get_flag("ignore-case");
         let find = match matches.get_one::<String>("find") {
             None => None,
             Some(pattern) if matches.get_flag("regex") => Some(FindPattern::Regex(
-                Regex::new(pattern).map_err(|e| ConfigError::InvalidRegex(e.to_string()))?,
+                RegexBuilder::new(pattern)
+                    .case_insensitive(ignore_case)
+                    .build()
+                    .map_err(|e| ConfigError::InvalidRegex(e.to_string()))?,
             )),
             Some(pattern) => Some(FindPattern::Literal(pattern.clone())),
         };
@@ -72,6 +77,7 @@ impl TryFrom<ArgMatches> for Config {
             numeric_sort: matches.get_flag("numeric"),
             reverse_sort: matches.get_flag("reverse"),
             delete: matches.get_flag("delete"),
+            ignore_case,
             filename: matches
                 .get_one::<String>("filename")
                 .filter(|name| name.as_str() != "-")
@@ -192,6 +198,30 @@ mod tests {
     fn regex_flag_compiles_find_as_regex() {
         let config = config_from(&["ft", "-e", "-f", r"\d+", "-r", "N", "input.txt"]).unwrap();
         assert!(matches!(config.find, Some(FindPattern::Regex(_))));
+    }
+
+    #[test]
+    fn ignore_case_flag_is_read() {
+        let config = config_from(&["ft", "--ignore-case", "-f", "a", "input.txt"]).unwrap();
+        assert!(config.ignore_case);
+    }
+
+    #[test]
+    fn ignore_case_makes_regex_case_insensitive() {
+        let config = config_from(&["ft", "-e", "--ignore-case", "-f", "abc", "input.txt"]).unwrap();
+        let Some(FindPattern::Regex(pattern)) = config.find else {
+            panic!("expected a regex find pattern");
+        };
+        assert!(pattern.is_match("ABC"));
+    }
+
+    #[test]
+    fn ignore_case_requires_find() {
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "--ignore-case", "input.txt"])
+                .is_err()
+        );
     }
 
     #[test]

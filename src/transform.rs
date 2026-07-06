@@ -7,7 +7,7 @@
 
 use std::ops::RangeInclusive;
 
-use regex::Regex;
+use regex::{NoExpand, Regex, RegexBuilder};
 
 use crate::cli_args::{Config, FindPattern};
 use crate::text;
@@ -75,6 +75,43 @@ impl LineTransform for ReplaceInColumns {
     }
 }
 
+/// Replaces case-insensitive occurrences of a literal within a column
+/// range. The literal is matched through an escaped regex so Unicode
+/// case folding applies; the replacement is inserted verbatim.
+pub struct ReplaceInColumnsIgnoreCase {
+    pattern: Regex,
+    replace: String,
+    cols: RangeInclusive<usize>,
+}
+
+impl ReplaceInColumnsIgnoreCase {
+    pub fn new(
+        find: &str,
+        replace: String,
+        cols: RangeInclusive<usize>,
+    ) -> ReplaceInColumnsIgnoreCase {
+        let pattern = RegexBuilder::new(&regex::escape(find))
+            .case_insensitive(true)
+            .build()
+            .expect("an escaped literal is always a valid regex");
+        ReplaceInColumnsIgnoreCase {
+            pattern,
+            replace,
+            cols,
+        }
+    }
+}
+
+impl LineTransform for ReplaceInColumnsIgnoreCase {
+    fn apply(&self, line: &str) -> String {
+        text::map_columns(line, &self.cols, |within| {
+            self.pattern
+                .replace_all(within, NoExpand(&self.replace))
+                .into_owned()
+        })
+    }
+}
+
 /// Replaces every regex match with the replacement (which may use
 /// capture group references like `$1`) within a column range.
 pub struct RegexReplaceInColumns {
@@ -130,6 +167,9 @@ pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
 
     if let (Some(find), Some(replace)) = (&config.find, &config.replace_string) {
         match find {
+            FindPattern::Literal(text) if config.ignore_case => pipeline.push(Box::new(
+                ReplaceInColumnsIgnoreCase::new(text, replace.clone(), config.cols_or_full()),
+            )),
             FindPattern::Literal(text) => pipeline.push(Box::new(ReplaceInColumns::new(
                 text.clone(),
                 replace.clone(),
@@ -158,6 +198,7 @@ mod tests {
             numeric_sort: false,
             reverse_sort: false,
             delete: false,
+            ignore_case: false,
             filename: None,
             find: None,
             replace_string: None,
@@ -181,6 +222,32 @@ mod tests {
             transform.apply("Test01234567891231234567"),
             "Test0ABCD4567891231234567"
         );
+    }
+
+    #[test]
+    fn ignore_case_replace_matches_any_case() {
+        let transform = ReplaceInColumnsIgnoreCase::new("foo", "BAR".to_owned(), 1..=usize::MAX);
+        assert_eq!(transform.apply("foo FOO Foo fOO"), "BAR BAR BAR BAR");
+    }
+
+    #[test]
+    fn ignore_case_replace_folds_unicode_case() {
+        let transform = ReplaceInColumnsIgnoreCase::new("łódź", "X".to_owned(), 1..=usize::MAX);
+        assert_eq!(transform.apply("ŁÓDŹ łódź Łódź"), "X X X");
+    }
+
+    #[test]
+    fn ignore_case_replace_does_not_expand_dollar_references() {
+        //the literal find "a$1b" must not be treated as a regex, and the
+        //replacement "$0" must be inserted verbatim
+        let transform = ReplaceInColumnsIgnoreCase::new("a$1b", "$0".to_owned(), 1..=usize::MAX);
+        assert_eq!(transform.apply("xA$1Bx"), "x$0x");
+    }
+
+    #[test]
+    fn ignore_case_replace_respects_column_range() {
+        let transform = ReplaceInColumnsIgnoreCase::new("ab", "X".to_owned(), 1..=4);
+        assert_eq!(transform.apply("ABababAB"), "XXabAB");
     }
 
     #[test]
