@@ -17,6 +17,9 @@ pub enum FindPattern {
     Regex(Regex),
 }
 
+//the derived Default (no ranges, no operations, stdin to stdout) is a
+//test-only base configuration; real configs always come from TryFrom
+#[cfg_attr(test, derive(Default))]
 #[derive(Debug)]
 pub struct Config {
     pub rows: Option<RangeSpec>,

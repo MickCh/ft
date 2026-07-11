@@ -59,7 +59,10 @@ fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
         .permissions();
     let temp_path = temporary_sibling(path);
 
-    let temp_file = File::create(&temp_path).map_err(|source| AppError::CreateOutput {
+    //create_new refuses to open a pre-existing file or symlink, so a
+    //temp path planted at this predictable name cannot redirect the
+    //write to another file
+    let temp_file = File::create_new(&temp_path).map_err(|source| AppError::CreateOutput {
         path: temp_path.clone(),
         source,
     })?;

@@ -111,13 +111,6 @@ impl RangeSet {
             .iter()
             .any(|part| part.contains(&value))
     }
-
-    /// The largest value in the set (`usize::MAX` for open-ended sets).
-    pub fn end(&self) -> usize {
-        self.parts
-            .last()
-            .map_or(usize::MAX, |part| *part.end())
-    }
 }
 
 impl From<RangeInclusive<usize>> for RangeSet {
@@ -148,12 +141,6 @@ mod tests {
         //5-8 overlaps 7-10, and 11 is adjacent to 10
         let set = RangeSet::new(vec![7..=10, 1..=2, 5..=8, 11..=11]);
         assert_eq!(set, RangeSet::new(vec![1..=2, 5..=11]));
-    }
-
-    #[test]
-    fn end_is_the_largest_value() {
-        assert_eq!(RangeSet::new(vec![1..=2, 5..=6]).end(), 6);
-        assert_eq!(RangeSet::full().end(), usize::MAX);
     }
 
     #[test]

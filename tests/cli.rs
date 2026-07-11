@@ -176,6 +176,24 @@ fn sort_applies_only_to_selected_rows() {
 }
 
 #[test]
+fn sort_key_beyond_short_lines_is_empty() {
+    //no line reaches column 5, so all keys compare equal and the
+    //stable sort keeps the input order (like `sort -k` on missing fields)
+    let input = TempFile::new("sort-short-lines", "zz\nabc\nxy\n");
+    let stdout = run_ft_stdout(&["-s", "-C", "5-6", input.path_str()]);
+    assert_eq!(stdout, "zz\nabc\nxy\n");
+}
+
+#[test]
+fn reorder_keeps_noncontiguous_row_segments_in_place() {
+    //deleting a column keeps rows outside the range, so each selected
+    //segment reverses in place instead of drifting past the kept rows
+    let input = TempFile::new("tac-segments", "Xa\nXb\nXc\nXd\nXe\nXf\nXg\n");
+    let stdout = run_ft_stdout(&["-d", "-C", "1", "--tac", "-R", "2-3,6-7", input.path_str()]);
+    assert_eq!(stdout, "Xa\nc\nb\nXd\nXe\ng\nf\n");
+}
+
+#[test]
 fn rows_range_selects_lines() {
     let input = TempFile::new("select-rows", INPUT);
     let stdout = run_ft_stdout(&["-R", "1-2", input.path_str()]);
@@ -459,6 +477,14 @@ fn unique_with_sort_and_column_key() {
     let input = TempFile::new("unique-sort", "b 2\na 1\nb 9\n");
     let stdout = run_ft_stdout(&["-s", "-u", "-C", "1-1", input.path_str()]);
     assert_eq!(stdout, "a 1\nb 2\n");
+}
+
+#[test]
+fn unique_dedupes_empty_fields() {
+    //"b," and "c," share the empty field 2 as their key
+    let input = TempFile::new("unique-empty-field", "a,1\nb,\nc,\nd,1\n");
+    let stdout = run_ft_stdout(&["-u", "-F", ",", "-C", "2", input.path_str()]);
+    assert_eq!(stdout, "a,1\nb,\n");
 }
 
 #[test]

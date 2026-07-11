@@ -38,7 +38,7 @@ impl GrepPredicate {
 impl LinePredicate for GrepPredicate {
     fn matches(&self, line: &str) -> bool {
         let within = text::select_columns(line, &self.span.char_range(line));
-        self.pattern.is_match(&within) != self.invert
+        self.pattern.is_match(within) != self.invert
     }
 }
 

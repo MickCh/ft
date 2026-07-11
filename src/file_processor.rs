@@ -10,6 +10,7 @@ use crate::text;
 use crate::transform::{self, LineTransform};
 
 use bstr::io::BufReadExt;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io;
 use std::io::prelude::*;
@@ -18,7 +19,7 @@ use std::str::from_utf8;
 /// A buffered line split into content and its original terminator.
 struct Line {
     content: String,
-    terminator: String,
+    terminator: &'static str,
 }
 
 /// Mutable state threaded through one `run` call.
@@ -26,7 +27,6 @@ struct Line {
 struct RunState {
     //lines held back for reordering
     reorder_buffer: Vec<Line>,
-    buffer_flushed: bool,
     //unique keys already written (`--unique`)
     seen_keys: HashSet<String>,
 }
@@ -49,16 +49,18 @@ enum Reorder {
     Shuffle,
 }
 
-/// An `Ord` wrapper around the parsed numeric sort key.
-/// Lines that do not parse as a number sort before all numbers.
-struct NumericKey(f64);
+/// An `Ord` wrapper around the parsed numeric sort key. Lines that do
+/// not parse as a number (`None`, including `NaN`) sort before all
+/// numbers — a sentinel value would collide with an actual `-inf` key.
+struct NumericKey(Option<f64>);
 
 impl NumericKey {
     fn parse(text: &str) -> NumericKey {
         NumericKey(
             text.trim()
                 .parse()
-                .unwrap_or(f64::NEG_INFINITY),
+                .ok()
+                .filter(|value: &f64| !value.is_nan()),
         )
     }
 }
@@ -79,7 +81,13 @@ impl PartialOrd for NumericKey {
 
 impl Ord for NumericKey {
     fn cmp(&self, other: &NumericKey) -> std::cmp::Ordering {
-        self.0.total_cmp(&other.0)
+        use std::cmp::Ordering;
+        match (&self.0, &other.0) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => Ordering::Greater,
+            (Some(this), Some(that)) => this.total_cmp(that),
+        }
     }
 }
 
@@ -151,9 +159,7 @@ impl FileProcessor {
             }
         }
 
-        if !state.buffer_flushed {
-            self.flush_reordered(&mut state, writer)?;
-        }
+        self.flush_reordered(&mut state, writer)?;
         writer.flush()
     }
 
@@ -167,7 +173,7 @@ impl FileProcessor {
     ) -> io::Result<()> {
         if !rows.contains(line_number) {
             if self.keep_lines_outside_rows {
-                writer.write_all(raw_line)?;
+                self.write_kept_line(raw_line, state, writer)?;
             }
             return Ok(());
         }
@@ -191,7 +197,7 @@ impl FileProcessor {
         {
             //a non-matching line is treated like one outside the row range
             if self.keep_lines_outside_rows {
-                writer.write_all(raw_line)?;
+                self.write_kept_line(raw_line, state, writer)?;
             }
             return Ok(());
         }
@@ -204,13 +210,9 @@ impl FileProcessor {
 
         if self.reorder.is_some() {
             state.reorder_buffer.push(Line {
-                content,
-                terminator: terminator.to_owned(),
+                content: content.into_owned(),
+                terminator,
             });
-            if line_number >= rows.end() {
-                self.flush_reordered(state, writer)?;
-                state.buffer_flushed = true;
-            }
         } else {
             if !self.passes_unique(&content, &mut state.seen_keys) {
                 return Ok(());
@@ -222,25 +224,49 @@ impl FileProcessor {
         Ok(())
     }
 
+    /// Write a line that passes through unchanged (outside the row
+    /// range, or spared by the predicate in delete mode). Reordered
+    /// lines buffered so far belong to earlier rows, so they are
+    /// flushed first — each contiguous run of selected rows reorders
+    /// in place instead of drifting past the kept lines.
+    fn write_kept_line<W: Write>(
+        &self,
+        raw_line: &[u8],
+        state: &mut RunState,
+        writer: &mut W,
+    ) -> io::Result<()> {
+        self.flush_reordered(state, writer)?;
+        writer.write_all(raw_line)
+    }
+
     /// Whether the line survives `--unique`: its key columns have not
     /// been written yet. Without `--unique` every line passes.
+    /// A key span beyond the line yields an empty key, like `cut`.
     fn passes_unique(&self, content: &str, seen_keys: &mut HashSet<String>) -> bool {
         match &self.unique_key_span {
             None => true,
-            Some(span) => seen_keys.insert(text::substring(content, &span.char_range(content))),
+            Some(span) => seen_keys
+                .insert(text::select_columns(content, &span.char_range(content)).to_owned()),
         }
     }
 
-    fn apply_transforms(&self, content: &str) -> String {
+    /// Run the line through the transform pipeline; with no transforms
+    /// configured the content passes through without an allocation.
+    fn apply_transforms<'a>(&self, content: &'a str) -> Cow<'a, str> {
         self.transforms
             .iter()
-            .fold(content.to_owned(), |line, transform| transform.apply(&line))
+            .fold(Cow::Borrowed(content), |line, transform| {
+                Cow::Owned(transform.apply(&line))
+            })
     }
 
     fn flush_reordered<W: Write>(&self, state: &mut RunState, writer: &mut W) -> io::Result<()> {
         let Some(reorder) = &self.reorder else {
             return Ok(());
         };
+        if state.reorder_buffer.is_empty() {
+            return Ok(());
+        }
         let RunState {
             reorder_buffer,
             seen_keys,
@@ -279,8 +305,10 @@ impl FileProcessor {
     fn sort_lines(buffer: &mut [Line], spec: &SortSpec) {
         //`Reverse` keeps the sort stable in descending order too
         use std::cmp::Reverse;
-        let text_key =
-            |line: &Line| text::substring(&line.content, &spec.key_span.char_range(&line.content));
+        //a key span beyond the line yields an empty key, like `cut`
+        let text_key = |line: &Line| {
+            text::select_columns(&line.content, &spec.key_span.char_range(&line.content)).to_owned()
+        };
         match (spec.numeric, spec.reverse) {
             (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
             (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
@@ -293,36 +321,13 @@ impl FileProcessor {
 }
 
 #[cfg(test)]
+//tests tweak single flags on a default config; mutating it reads
+//better here than struct-update syntax
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::cli_args::FindPattern;
     use std::io::Cursor;
-
-    fn config() -> Config {
-        Config {
-            rows: None,
-            cols: None,
-            field_delimiter: None,
-            sort: false,
-            numeric_sort: false,
-            reverse_sort: false,
-            tac: false,
-            shuffle: false,
-            delete: false,
-            ignore_case: false,
-            upper: false,
-            lower: false,
-            trim: false,
-            grep: None,
-            invert: false,
-            unique: false,
-            filename: None,
-            finds: Vec::new(),
-            replace_strings: Vec::new(),
-            output_filename: None,
-            in_place: false,
-        }
-    }
 
     fn run(config: Config, input: &str) -> String {
         let processor = FileProcessor::new(&config);
@@ -336,12 +341,12 @@ mod tests {
     #[test]
     fn passes_input_through_by_default() {
         let input = "line1\nline2\nline3\n";
-        assert_eq!(run(config(), input), input);
+        assert_eq!(run(Config::default(), input), input);
     }
 
     #[test]
     fn streams_replace_without_buffering() {
-        let mut config = config();
+        let mut config = Config::default();
         config.finds = vec![FindPattern::Literal("foo".to_owned())];
         config.replace_strings = vec!["BAR".to_owned()];
 
@@ -351,7 +356,7 @@ mod tests {
 
     #[test]
     fn applies_multiple_find_replace_pairs_per_line() {
-        let mut config = config();
+        let mut config = Config::default();
         config.finds = vec![
             FindPattern::Literal("cat".to_owned()),
             FindPattern::Literal("dog".to_owned()),
@@ -365,7 +370,7 @@ mod tests {
 
     #[test]
     fn sorts_whole_input() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
 
         let result = run(config, "delta\nalpha\ncharlie\nbravo\n");
@@ -374,7 +379,7 @@ mod tests {
 
     #[test]
     fn sorts_only_selected_rows() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.rows = Some((2..=4).into());
 
@@ -385,7 +390,7 @@ mod tests {
 
     #[test]
     fn numeric_sort_orders_by_value_not_lexicographically() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.numeric_sort = true;
 
@@ -396,7 +401,7 @@ mod tests {
 
     #[test]
     fn numeric_sort_puts_non_numeric_lines_first() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.numeric_sort = true;
 
@@ -405,8 +410,32 @@ mod tests {
     }
 
     #[test]
+    fn numeric_sort_treats_negative_infinity_as_a_number() {
+        let mut config = Config::default();
+        config.sort = true;
+        config.numeric_sort = true;
+
+        //-inf parses as a number, so it sorts after non-numeric lines;
+        //NaN does not order meaningfully and counts as non-numeric
+        let result = run(config, "7\n-inf\nNaN\nabc\n");
+        assert_eq!(result, "NaN\nabc\n-inf\n7\n");
+    }
+
+    #[test]
+    fn sort_key_beyond_short_lines_is_empty() {
+        let mut config = Config::default();
+        config.sort = true;
+        config.cols = Some(5..=6);
+
+        //no line reaches column 5: all keys are empty, so the stable
+        //sort keeps the input order instead of comparing whole lines
+        let result = run(config, "zz\nabc\nxy\n");
+        assert_eq!(result, "zz\nabc\nxy\n");
+    }
+
+    #[test]
     fn reverse_sort_orders_descending() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.reverse_sort = true;
 
@@ -416,7 +445,7 @@ mod tests {
 
     #[test]
     fn numeric_reverse_sort_with_column_key() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.numeric_sort = true;
         config.reverse_sort = true;
@@ -428,7 +457,7 @@ mod tests {
 
     #[test]
     fn sort_preserves_crlf_terminators() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
 
         let result = run(config, "b\r\na\r\n");
@@ -437,7 +466,7 @@ mod tests {
 
     #[test]
     fn sort_adds_terminator_when_unterminated_line_moves_up() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
 
         //"a" has no trailing newline and sorts before "b"
@@ -447,7 +476,7 @@ mod tests {
 
     #[test]
     fn replace_respects_column_boundaries_per_line() {
-        let mut config = config();
+        let mut config = Config::default();
         config.cols = Some(7..=9);
         config.finds = vec![FindPattern::Literal("foo".to_owned())];
         config.replace_strings = vec!["BAR".to_owned()];
@@ -459,7 +488,7 @@ mod tests {
 
     #[test]
     fn delete_keeps_lines_outside_row_range() {
-        let mut config = config();
+        let mut config = Config::default();
         config.delete = true;
         config.rows = Some((2..=3).into());
 
@@ -469,7 +498,7 @@ mod tests {
 
     #[test]
     fn delete_columns_applies_only_to_selected_rows() {
-        let mut config = config();
+        let mut config = Config::default();
         config.delete = true;
         config.rows = Some((1..=1).into());
         config.cols = Some(1..=4);
@@ -481,7 +510,7 @@ mod tests {
     #[test]
     fn end_relative_rows_select_from_the_end() {
         use crate::ranges::RangeBound::FromEnd;
-        let mut config = config();
+        let mut config = Config::default();
         config.rows = Some(RangeSpec::new(vec![(FromEnd(2), FromEnd(1))]));
 
         //~2-~1 means the last two lines
@@ -492,7 +521,7 @@ mod tests {
     #[test]
     fn end_relative_rows_combine_with_delete() {
         use crate::ranges::RangeBound::FromEnd;
-        let mut config = config();
+        let mut config = Config::default();
         config.delete = true;
         config.rows = Some(RangeSpec::new(vec![(FromEnd(1), FromEnd(1))]));
 
@@ -503,7 +532,7 @@ mod tests {
     #[test]
     fn end_relative_rows_combine_with_sort() {
         use crate::ranges::RangeBound::FromEnd;
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.rows = Some(RangeSpec::new(vec![(FromEnd(3), FromEnd(1))]));
 
@@ -513,7 +542,7 @@ mod tests {
 
     #[test]
     fn grep_keeps_only_matching_lines() {
-        let mut config = config();
+        let mut config = Config::default();
         config.grep = Some(regex::Regex::new("ERROR").unwrap());
 
         let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
@@ -522,7 +551,7 @@ mod tests {
 
     #[test]
     fn grep_with_delete_removes_matching_lines() {
-        let mut config = config();
+        let mut config = Config::default();
         config.delete = true;
         config.grep = Some(regex::Regex::new("ERROR").unwrap());
 
@@ -532,7 +561,7 @@ mod tests {
 
     #[test]
     fn grep_filters_within_row_range_only() {
-        let mut config = config();
+        let mut config = Config::default();
         config.rows = Some((1..=2).into());
         config.grep = Some(regex::Regex::new("keep").unwrap());
 
@@ -543,7 +572,7 @@ mod tests {
 
     #[test]
     fn grep_combines_with_sort() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.grep = Some(regex::Regex::new("x").unwrap());
 
@@ -553,7 +582,7 @@ mod tests {
 
     #[test]
     fn tac_reverses_line_order() {
-        let mut config = config();
+        let mut config = Config::default();
         config.tac = true;
 
         let result = run(config, "one\ntwo\nthree\n");
@@ -562,7 +591,7 @@ mod tests {
 
     #[test]
     fn tac_reverses_only_selected_rows() {
-        let mut config = config();
+        let mut config = Config::default();
         config.tac = true;
         config.rows = Some((2..=3).into());
 
@@ -573,7 +602,7 @@ mod tests {
 
     #[test]
     fn tac_adds_terminator_when_unterminated_line_moves_up() {
-        let mut config = config();
+        let mut config = Config::default();
         config.tac = true;
 
         let result = run(config, "b\na");
@@ -581,8 +610,27 @@ mod tests {
     }
 
     #[test]
+    fn reorder_keeps_noncontiguous_segments_in_place() {
+        use crate::ranges::RangeBound::FromStart;
+        //deleting a column keeps the lines outside the row range, so
+        //each selected segment must reorder in place instead of
+        //drifting past the kept lines in between
+        let mut config = Config::default();
+        config.delete = true;
+        config.cols = Some(1..=1);
+        config.tac = true;
+        config.rows = Some(RangeSpec::new(vec![
+            (FromStart(2), FromStart(3)),
+            (FromStart(6), FromStart(7)),
+        ]));
+
+        let result = run(config, "Xa\nXb\nXc\nXd\nXe\nXf\nXg\n");
+        assert_eq!(result, "Xa\nc\nb\nXd\nXe\ng\nf\n");
+    }
+
+    #[test]
     fn shuffle_preserves_the_set_of_lines() {
-        let mut config = config();
+        let mut config = Config::default();
         config.shuffle = true;
 
         let result = run(config, "one\ntwo\nthree\nfour\n");
@@ -593,7 +641,7 @@ mod tests {
 
     #[test]
     fn unique_drops_duplicate_lines_keeping_first() {
-        let mut config = config();
+        let mut config = Config::default();
         config.unique = true;
 
         let result = run(config, "b\na\nb\nc\na\n");
@@ -602,7 +650,7 @@ mod tests {
 
     #[test]
     fn unique_compares_only_key_columns() {
-        let mut config = config();
+        let mut config = Config::default();
         config.unique = true;
         config.cols = Some(1..=1);
 
@@ -612,8 +660,20 @@ mod tests {
     }
 
     #[test]
+    fn unique_dedupes_empty_fields() {
+        let mut config = Config::default();
+        config.unique = true;
+        config.cols = Some(2..=2);
+        config.field_delimiter = Some(",".to_owned());
+
+        //"b," and "c," share the empty field 2 as their key
+        let result = run(config, "a,1\nb,\nc,\nd,1\n");
+        assert_eq!(result, "a,1\nb,\n");
+    }
+
+    #[test]
     fn unique_after_sort_keeps_first_in_sorted_order() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.unique = true;
 
@@ -623,7 +683,7 @@ mod tests {
 
     #[test]
     fn field_mode_selects_delimited_fields() {
-        let mut config = config();
+        let mut config = Config::default();
         config.cols = Some(2..=2);
         config.field_delimiter = Some(",".to_owned());
 
@@ -633,7 +693,7 @@ mod tests {
 
     #[test]
     fn field_mode_delete_removes_field_and_delimiter() {
-        let mut config = config();
+        let mut config = Config::default();
         config.delete = true;
         config.cols = Some(2..=2);
         config.field_delimiter = Some(",".to_owned());
@@ -644,7 +704,7 @@ mod tests {
 
     #[test]
     fn field_mode_sorts_by_field_key() {
-        let mut config = config();
+        let mut config = Config::default();
         config.sort = true;
         config.cols = Some(2..=2);
         config.field_delimiter = Some(",".to_owned());
@@ -655,7 +715,7 @@ mod tests {
 
     #[test]
     fn field_mode_unique_keys_on_field() {
-        let mut config = config();
+        let mut config = Config::default();
         config.unique = true;
         config.cols = Some(1..=1);
         config.field_delimiter = Some(",".to_owned());
@@ -666,7 +726,7 @@ mod tests {
 
     #[test]
     fn invalid_utf8_reports_line_number() {
-        let processor = FileProcessor::new(&config());
+        let processor = FileProcessor::new(&Config::default());
         let mut output = Vec::new();
         let input: &[u8] = b"ok\n\xFF\xFE\n";
 

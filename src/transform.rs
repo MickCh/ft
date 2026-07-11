@@ -30,7 +30,7 @@ impl SelectColumns {
 
 impl LineTransform for SelectColumns {
     fn apply(&self, line: &str) -> String {
-        text::select_columns(line, &self.span.char_range(line))
+        text::select_columns(line, &self.span.char_range(line)).to_owned()
     }
 }
 
@@ -52,61 +52,44 @@ impl LineTransform for DeleteColumns {
     }
 }
 
-/// Uppercases the characters within a column span.
-pub struct UppercaseColumns {
+/// Applies a text mapping to the characters within a column span,
+/// leaving the rest of the line untouched. One constructor per
+/// mapping keeps `build_pipeline` readable.
+pub struct MapColumns {
     span: ColumnSpan,
+    map: fn(&str) -> String,
 }
 
-impl UppercaseColumns {
-    pub fn new(span: impl Into<ColumnSpan>) -> UppercaseColumns {
-        UppercaseColumns { span: span.into() }
+impl MapColumns {
+    /// Uppercases the characters within the span.
+    pub fn uppercase(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns {
+            span: span.into(),
+            map: str::to_uppercase,
+        }
+    }
+
+    /// Lowercases the characters within the span.
+    pub fn lowercase(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns {
+            span: span.into(),
+            map: str::to_lowercase,
+        }
+    }
+
+    /// Trims whitespace at both ends of the span (with the full span,
+    /// this trims the whole line).
+    pub fn trim(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns {
+            span: span.into(),
+            map: |within| within.trim().to_owned(),
+        }
     }
 }
 
-impl LineTransform for UppercaseColumns {
+impl LineTransform for MapColumns {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.span.char_range(line), |within| {
-            within.to_uppercase()
-        })
-    }
-}
-
-/// Lowercases the characters within a column span.
-pub struct LowercaseColumns {
-    span: ColumnSpan,
-}
-
-impl LowercaseColumns {
-    pub fn new(span: impl Into<ColumnSpan>) -> LowercaseColumns {
-        LowercaseColumns { span: span.into() }
-    }
-}
-
-impl LineTransform for LowercaseColumns {
-    fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.span.char_range(line), |within| {
-            within.to_lowercase()
-        })
-    }
-}
-
-/// Trims whitespace at both ends of a column span (with the full
-/// span, this trims the whole line).
-pub struct TrimColumns {
-    span: ColumnSpan,
-}
-
-impl TrimColumns {
-    pub fn new(span: impl Into<ColumnSpan>) -> TrimColumns {
-        TrimColumns { span: span.into() }
-    }
-}
-
-impl LineTransform for TrimColumns {
-    fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.span.char_range(line), |within| {
-            within.trim().to_owned()
-        })
+        text::map_columns(line, &self.span.char_range(line), self.map)
     }
 }
 
@@ -241,47 +224,24 @@ pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
     }
 
     if config.upper {
-        pipeline.push(Box::new(UppercaseColumns::new(config.col_span())));
+        pipeline.push(Box::new(MapColumns::uppercase(config.col_span())));
     }
     if config.lower {
-        pipeline.push(Box::new(LowercaseColumns::new(config.col_span())));
+        pipeline.push(Box::new(MapColumns::lowercase(config.col_span())));
     }
     if config.trim {
-        pipeline.push(Box::new(TrimColumns::new(config.col_span())));
+        pipeline.push(Box::new(MapColumns::trim(config.col_span())));
     }
 
     pipeline
 }
 
 #[cfg(test)]
+//tests tweak single flags on a default config; mutating it reads
+//better here than struct-update syntax
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
-
-    fn config() -> Config {
-        Config {
-            rows: None,
-            cols: None,
-            field_delimiter: None,
-            sort: false,
-            numeric_sort: false,
-            reverse_sort: false,
-            tac: false,
-            shuffle: false,
-            delete: false,
-            ignore_case: false,
-            upper: false,
-            lower: false,
-            trim: false,
-            grep: None,
-            invert: false,
-            unique: false,
-            filename: None,
-            finds: Vec::new(),
-            replace_strings: Vec::new(),
-            output_filename: None,
-            in_place: false,
-        }
-    }
 
     #[test]
     fn delete_columns_removes_range() {
@@ -303,32 +263,32 @@ mod tests {
 
     #[test]
     fn uppercase_columns_respects_range_and_unicode() {
-        let transform = UppercaseColumns::new(1..=4);
+        let transform = MapColumns::uppercase(1..=4);
         assert_eq!(transform.apply("ąbcdefgh"), "ĄBCDefgh");
     }
 
     #[test]
     fn lowercase_columns_respects_range_and_unicode() {
-        let transform = LowercaseColumns::new(1..=4);
+        let transform = MapColumns::lowercase(1..=4);
         assert_eq!(transform.apply("ĄBCDEFGH"), "ąbcdEFGH");
     }
 
     #[test]
     fn trim_columns_trims_whole_line_with_full_range() {
-        let transform = TrimColumns::new(1..=usize::MAX);
+        let transform = MapColumns::trim(1..=usize::MAX);
         assert_eq!(transform.apply("  padded  "), "padded");
     }
 
     #[test]
     fn trim_columns_trims_only_inside_range() {
         //columns 4-9 are " mid  ", trimmed to "mid"
-        let transform = TrimColumns::new(4..=9);
+        let transform = MapColumns::trim(4..=9);
         assert_eq!(transform.apply("ab  mid   cd"), "ab mid cd");
     }
 
     #[test]
     fn build_pipeline_orders_replace_before_case_transforms() {
-        let mut config = config();
+        let mut config = Config::default();
         config.upper = true;
         config.finds = vec![FindPattern::Literal("foo".to_owned())];
         config.replace_strings = vec!["bar".to_owned()];
@@ -427,7 +387,7 @@ mod tests {
 
     #[test]
     fn uppercase_fields_transforms_only_the_field_range() {
-        let transform = UppercaseColumns::new(field_span(",", 2..=2));
+        let transform = MapColumns::uppercase(field_span(",", 2..=2));
         assert_eq!(transform.apply("ab,cd,ef"), "ab,CD,ef");
     }
 
@@ -440,12 +400,12 @@ mod tests {
 
     #[test]
     fn build_pipeline_is_empty_by_default() {
-        assert!(build_pipeline(&config()).is_empty());
+        assert!(build_pipeline(&Config::default()).is_empty());
     }
 
     #[test]
     fn build_pipeline_selects_columns_when_no_other_operation() {
-        let mut config = config();
+        let mut config = Config::default();
         config.cols = Some(5..=10);
         assert_eq!(build_pipeline(&config).len(), 1);
     }
@@ -453,13 +413,13 @@ mod tests {
     #[test]
     fn build_pipeline_does_not_select_columns_when_they_key_another_operation() {
         //sort uses the column range as its key
-        let mut sort_config = config();
+        let mut sort_config = Config::default();
         sort_config.cols = Some(5..=10);
         sort_config.sort = true;
         assert!(build_pipeline(&sort_config).is_empty());
 
         //find/replace is scoped by the column range
-        let mut replace_config = config();
+        let mut replace_config = Config::default();
         replace_config.cols = Some(5..=10);
         replace_config.finds = vec![FindPattern::Literal("a".to_owned())];
         replace_config.replace_strings = vec!["b".to_owned()];
@@ -470,7 +430,7 @@ mod tests {
 
     #[test]
     fn build_pipeline_adds_delete_columns() {
-        let mut config = config();
+        let mut config = Config::default();
         config.delete = true;
         config.cols = Some(5..=10);
         assert_eq!(build_pipeline(&config).len(), 1);
@@ -478,14 +438,14 @@ mod tests {
 
     #[test]
     fn build_pipeline_ignores_delete_without_columns() {
-        let mut config = config();
+        let mut config = Config::default();
         config.delete = true;
         assert!(build_pipeline(&config).is_empty());
     }
 
     #[test]
     fn build_pipeline_adds_replace_only_when_find_and_replace_present() {
-        let mut config = config();
+        let mut config = Config::default();
         config.finds = vec![FindPattern::Literal("foo".to_owned())];
         assert!(build_pipeline(&config).is_empty());
 
@@ -495,7 +455,7 @@ mod tests {
 
     #[test]
     fn build_pipeline_adds_one_transform_per_find_replace_pair() {
-        let mut config = config();
+        let mut config = Config::default();
         config.finds = vec![
             FindPattern::Literal("a".to_owned()),
             FindPattern::Literal("b".to_owned()),
