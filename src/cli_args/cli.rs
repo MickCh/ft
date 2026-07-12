@@ -1,4 +1,4 @@
-use clap::{Arg, ArgAction, Command, crate_name, crate_version};
+use clap::{Arg, ArgAction, ArgGroup, Command, crate_name, crate_version};
 use std::ops::RangeInclusive;
 
 use crate::ranges::{RangeBound, RangeSpec};
@@ -30,9 +30,34 @@ pub fn cli() -> Command {
                 .short('F')
                 .long("fields")
                 .required(false)
-                .requires("columns")
+                .requires("column-ranges")
                 .value_parser(parse_delimiter)
-                .help("Treat the column range as fields separated by this delimiter (requires --cols)"),
+                .help("Treat the column ranges as fields separated by this delimiter (requires a column range)"),
+        )
+        //--fields needs some column range to interpret, but any of the
+        //three will do, so they form one group it can require
+        .group(
+            ArgGroup::new("column-ranges")
+                .args(["columns", "sort-key", "unique-key"])
+                .multiple(true),
+        )
+        .arg(
+            Arg::new("sort-key")
+                .long("sort-key")
+                .required(false)
+                .allow_hyphen_values(true)
+                .requires("sort")
+                .value_parser(parse_column_range)
+                .help("Columns keying --sort, instead of --cols (requires --sort)"),
+        )
+        .arg(
+            Arg::new("unique-key")
+                .long("unique-key")
+                .required(false)
+                .allow_hyphen_values(true)
+                .requires("unique")
+                .value_parser(parse_column_range)
+                .help("Columns keying --unique, instead of --cols (requires --unique)"),
         )
         .arg(
             Arg::new("sort")

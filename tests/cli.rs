@@ -148,6 +148,52 @@ fn sort_uses_column_range_as_key() {
 }
 
 #[test]
+fn sort_key_leaves_cols_to_another_operation() {
+    //sort by field 1, while --cols scopes the replacement to field 2
+    let input = TempFile::new("sort-key", "b,x\na,x\n");
+    let stdout = run_ft_stdout(&[
+        "-s",
+        "--sort-key",
+        "1",
+        "-F",
+        ",",
+        "-C",
+        "2",
+        "-f",
+        "x",
+        "-r",
+        "X",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "a,X\nb,X\n");
+}
+
+#[test]
+fn unique_key_is_independent_of_cols() {
+    //dedupe on field 1, uppercase field 2
+    let input = TempFile::new("unique-key", "a,x\na,y\nb,z\n");
+    let stdout = run_ft_stdout(&[
+        "-u",
+        "--unique-key",
+        "1",
+        "-F",
+        ",",
+        "-C",
+        "2",
+        "--upper",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "a,X\nb,Z\n");
+}
+
+#[test]
+fn sort_key_requires_sort() {
+    let input = TempFile::new("sort-key-alone", "a\n");
+    let output = run_ft(&["--sort-key", "1", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn numeric_sort_works() {
     let input = TempFile::new("sort-numeric", "10\n9\n2\n");
     let stdout = run_ft_stdout(&["-s", "-n", input.path_str()]);

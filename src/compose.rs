@@ -19,7 +19,9 @@ pub fn build_processor(config: &Config) -> FileProcessor {
         row_mode: row_mode(config),
         reorder: build_reorder(config),
         predicate: build_predicate(config),
-        unique_key_span: config.unique.then(|| config.col_span()),
+        unique_key_span: config
+            .unique
+            .then(|| config.unique_key_span()),
         transforms: build_pipeline(config),
     }
 }
@@ -41,7 +43,7 @@ fn row_mode(config: &Config) -> RowMode {
 fn build_reorder(config: &Config) -> Option<Reorder> {
     config.reorder.map(|mode| match mode {
         ReorderMode::Sort { numeric, reverse } => Reorder::Sort(SortSpec {
-            key_span: config.col_span(),
+            key_span: config.sort_key_span(),
             numeric,
             reverse,
         }),
@@ -484,6 +486,58 @@ mod tests {
 
         let result = run(config, "b\na\nb\na\n");
         assert_eq!(result, "a\nb\n");
+    }
+
+    #[test]
+    fn sort_key_frees_cols_for_another_operation() {
+        //the motivating case: sort by field 1, replace inside field 2
+        let mut config = Config::default();
+        config.reorder = sorted(false, false);
+        config.field_delimiter = Some(",".to_owned());
+        config.cols = Some(2..=2);
+        config.sort_key = Some(1..=1);
+        config.replacements = vec![literal("x", "X")];
+
+        let result = run(config, "b,x\na,x\n");
+        //"x" is replaced only in field 2, and the rows sort by field 1
+        assert_eq!(result, "a,X\nb,X\n");
+    }
+
+    #[test]
+    fn sort_key_applies_to_the_transformed_line() {
+        //a bare --cols still cuts, because --sort-key claims no columns;
+        //the sort key then addresses the cut result
+        let mut config = Config::default();
+        config.reorder = sorted(false, false);
+        config.cols = Some(3..=5);
+        config.sort_key = Some(1..=1);
+
+        let result = run(config, "xxb..\nxxa..\n");
+        assert_eq!(result, "a..\nb..\n");
+    }
+
+    #[test]
+    fn unique_key_is_independent_of_cols() {
+        let mut config = Config::default();
+        config.unique = true;
+        config.field_delimiter = Some(",".to_owned());
+        config.cols = Some(2..=2);
+        config.unique_key = Some(1..=1);
+        config.upper = true;
+
+        //rows dedupe on field 1, while --upper still works on field 2
+        let result = run(config, "a,x\na,y\nb,z\n");
+        assert_eq!(result, "a,X\nb,Z\n");
+    }
+
+    #[test]
+    fn unique_falls_back_to_cols_without_its_own_key() {
+        let mut config = Config::default();
+        config.unique = true;
+        config.cols = Some(1..=1);
+
+        let result = run(config, "a1\na2\nb1\n");
+        assert_eq!(result, "a1\nb1\n");
     }
 
     #[test]

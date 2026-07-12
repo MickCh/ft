@@ -16,14 +16,16 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 |---|---|
 | `-R, --rows <ranges>` | Rows to process: `3`, `2-5`, `10-`, `-5`, `~10-~1` or a list `1-5,10-20` (default: all rows) |
 | `-C, --cols <range>` | Column range to process: `3`, `2-5`, `10-` or `-5` (default: all columns) |
-| `-F, --fields <delim>` | Treat the column range as fields separated by `<delim>` (requires `--cols`) |
+| `-F, --fields <delim>` | Treat the column ranges as fields separated by `<delim>` (requires a column range) |
 | `-s, --sort` | Sort the selected rows, using the column range as the sort key |
+| `--sort-key <range>` | Columns keying `--sort`, instead of `--cols` (requires `--sort`) |
 | `-n, --numeric` | Sort numerically instead of lexicographically (requires `--sort`) |
 | `--reverse` | Sort in descending order (requires `--sort`) |
 | `--tac` | Reverse the order of the selected rows (like `tac`) |
 | `--shuffle` | Shuffle the selected rows into a random order |
 | `-d, --delete` | Delete the selected rows, or the column range within them |
 | `-u, --unique` | Drop duplicate rows, comparing the column range (first wins) |
+| `--unique-key <range>` | Columns keying `--unique`, instead of `--cols` (requires `--unique`) |
 | `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them) |
 | `--invert` | Invert the `--grep` match, like `grep -v` (requires `--grep`) |
 | `-f, --find <text>` | Substring to find (repeatable, paired with `--replace`) |
@@ -43,6 +45,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - A row bound prefixed with `~` counts from the **end** of the input: `~1` is the last row, `~10-~1` the last ten, `2-~2` everything but the first and last row. Because the total line count must be known first, end-relative ranges buffer the whole input instead of streaming; columns do not accept `~`.
 - Without `--delete`, the row range **selects** lines: only rows inside the range are output (and transformed). Without a row range, the whole file is processed.
 - A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
+- `--sort-key` and `--unique-key` give those operations a column range of their own, so `--cols` is free for another one: `-C 5 -f a -r b --sort --sort-key 3` replaces inside column 5 but sorts by column 3. An operation with its own key no longer claims `--cols`, so a `--cols` left over with no other operation goes back to **selecting** columns (and the key then addresses that selected result, since keys are read from the transformed line).
 - With `--fields`, the column range counts **delimited fields** instead of characters: `-F , -C 2` addresses the second comma-separated field, per line. All column-based operations (select, delete, sort key, find/replace scope, `--grep`, `--unique`, case/trim) work on fields the same way; deleting fields also removes one adjacent delimiter, like `cut`. The delimiter may be more than one character.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.

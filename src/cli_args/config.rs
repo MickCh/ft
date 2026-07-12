@@ -43,7 +43,12 @@ pub enum ReorderMode {
 pub struct Config {
     pub rows: Option<RangeSpec>,
     pub cols: Option<RangeInclusive<usize>>,
-    //`Some` switches `cols` from counting chars to delimited fields
+    //per-operation column ranges: `None` falls back to `cols`, so an
+    //operation only needs its own range when it must differ from it
+    pub sort_key: Option<RangeInclusive<usize>>,
+    pub unique_key: Option<RangeInclusive<usize>>,
+    //`Some` switches the column ranges from counting chars to
+    //delimited fields
     pub field_delimiter: Option<String>,
     pub reorder: Option<ReorderMode>,
     pub delete: bool,
@@ -80,26 +85,53 @@ impl Config {
     /// How the column range addresses lines: char positions, or fields
     /// separated by a delimiter when `--fields` was given.
     pub fn col_span(&self) -> ColumnSpan {
+        self.span_of(None)
+    }
+
+    /// Column span keying `--sort`: `--sort-key` when given, `--cols`
+    /// otherwise.
+    pub fn sort_key_span(&self) -> ColumnSpan {
+        self.span_of(self.sort_key.clone())
+    }
+
+    /// Column span keying `--unique`: `--unique-key` when given,
+    /// `--cols` otherwise.
+    pub fn unique_key_span(&self) -> ColumnSpan {
+        self.span_of(self.unique_key.clone())
+    }
+
+    /// Turn a column range into a span, falling back to `--cols` (and
+    /// then to the full range) when the operation has no range of its
+    /// own. `--fields` applies to every column range alike.
+    fn span_of(&self, range: Option<RangeInclusive<usize>>) -> ColumnSpan {
+        let range = range.unwrap_or_else(|| self.cols_or_full());
         match &self.field_delimiter {
             Some(delimiter) => ColumnSpan::Fields {
                 delimiter: delimiter.clone(),
-                fields: self.cols_or_full(),
+                fields: range,
             },
-            None => ColumnSpan::Chars(self.cols_or_full()),
+            None => ColumnSpan::Chars(range),
         }
     }
 
-    /// Whether some operation claims the column range as its scope or
-    /// key (as opposed to a bare `--cols`, which selects the columns).
+    /// Whether some operation claims `--cols` as its scope or key (as
+    /// opposed to a bare `--cols`, which selects the columns). An
+    /// operation given its own key range no longer claims `--cols`, so
+    /// `--cols 2-3 --sort --sort-key 1` still cuts columns 2-3.
     pub fn has_column_operation(&self) -> bool {
         self.delete
-            || matches!(self.reorder, Some(ReorderMode::Sort { .. }))
+            || self.sort_keys_on_cols()
             || !self.replacements.is_empty()
             || self.upper
             || self.lower
             || self.trim
             || self.grep.is_some()
-            || self.unique
+            || (self.unique && self.unique_key.is_none())
+    }
+
+    /// Whether `--sort` takes its key from `--cols` (no `--sort-key`).
+    fn sort_keys_on_cols(&self) -> bool {
+        matches!(self.reorder, Some(ReorderMode::Sort { .. })) && self.sort_key.is_none()
     }
 }
 
@@ -183,6 +215,12 @@ impl TryFrom<ArgMatches> for Config {
                 .cloned(),
             cols: matches
                 .get_one::<RangeInclusive<usize>>("columns")
+                .cloned(),
+            sort_key: matches
+                .get_one::<RangeInclusive<usize>>("sort-key")
+                .cloned(),
+            unique_key: matches
+                .get_one::<RangeInclusive<usize>>("unique-key")
                 .cloned(),
             field_delimiter: matches
                 .get_one::<String>("fields")
@@ -320,6 +358,76 @@ mod tests {
 
         let config = config_from(&["ft", "-C", "2-3", "input.txt"]).unwrap();
         assert!(matches!(config.col_span(), ColumnSpan::Chars(_)));
+    }
+
+    #[test]
+    fn key_ranges_override_cols_per_operation() {
+        let config = config_from(&[
+            "ft",
+            "-C",
+            "5-6",
+            "-s",
+            "--sort-key",
+            "1-2",
+            "-u",
+            "--unique-key",
+            "3-4",
+            "input.txt",
+        ])
+        .unwrap();
+
+        assert_eq!(config.sort_key, Some(1..=2));
+        assert_eq!(config.unique_key, Some(3..=4));
+        assert!(matches!(config.sort_key_span(), ColumnSpan::Chars(r) if r == (1..=2)));
+        assert!(matches!(config.unique_key_span(), ColumnSpan::Chars(r) if r == (3..=4)));
+        assert!(matches!(config.col_span(), ColumnSpan::Chars(r) if r == (5..=6)));
+    }
+
+    #[test]
+    fn key_ranges_fall_back_to_cols() {
+        let config = config_from(&["ft", "-C", "2-3", "-s", "-u", "input.txt"]).unwrap();
+
+        assert!(config.sort_key.is_none());
+        assert!(config.unique_key.is_none());
+        assert!(matches!(config.sort_key_span(), ColumnSpan::Chars(r) if r == (2..=3)));
+        assert!(matches!(config.unique_key_span(), ColumnSpan::Chars(r) if r == (2..=3)));
+    }
+
+    #[test]
+    fn an_operation_with_its_own_key_leaves_cols_to_select() {
+        //--sort keys on --cols, so --cols is not a bare selection
+        let config = config_from(&["ft", "-C", "2-3", "-s", "input.txt"]).unwrap();
+        assert!(config.has_column_operation());
+
+        //with its own key, --sort no longer claims --cols: it selects
+        let config =
+            config_from(&["ft", "-C", "2-3", "-s", "--sort-key", "1", "input.txt"]).unwrap();
+        assert!(!config.has_column_operation());
+
+        //the same holds for --unique
+        let config =
+            config_from(&["ft", "-C", "2-3", "-u", "--unique-key", "1", "input.txt"]).unwrap();
+        assert!(!config.has_column_operation());
+    }
+
+    #[test]
+    fn key_ranges_use_field_mode_too() {
+        let config = config_from(&["ft", "-F", ",", "-s", "--sort-key", "2", "input.txt"]).unwrap();
+        assert!(matches!(config.sort_key_span(), ColumnSpan::Fields { .. }));
+    }
+
+    #[test]
+    fn key_ranges_require_their_operation() {
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "--sort-key", "1", "input.txt"])
+                .is_err()
+        );
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "--unique-key", "1", "input.txt"])
+                .is_err()
+        );
     }
 
     #[test]
