@@ -626,6 +626,37 @@ mod tests {
     }
 
     #[test]
+    fn quoted_fields_survive_a_delimiter_inside_them() {
+        let mut config = Config::default();
+        config.field_delimiter = Some(",".to_owned());
+        config.quoted = true;
+        config.cols = Some((2..=2).into());
+
+        //field 2 is the quoted one, comma and all
+        let result = run(config, "a,\"b,c\",d\n");
+        assert_eq!(result, "\"b,c\"\n");
+    }
+
+    #[test]
+    fn quoted_fields_permute_and_rejoin_as_csv() {
+        let mut config = Config::default();
+        config.field_delimiter = Some(",".to_owned());
+        config.quoted = true;
+        config.cols = Some(ColumnList::new(vec![3..=3, 1..=1]));
+
+        //a field keeps its quotes, so the projection stays valid CSV
+        let result = run(config, "a,\"b,c\",d\n");
+        assert_eq!(result, "d,a\n");
+
+        let mut config = Config::default();
+        config.field_delimiter = Some(",".to_owned());
+        config.quoted = true;
+        config.cols = Some(ColumnList::new(vec![2..=2, 1..=1]));
+        let result = run(config, "a,\"b,c\",d\n");
+        assert_eq!(result, "\"b,c\",a\n");
+    }
+
+    #[test]
     fn column_list_selects_the_parts_in_the_written_order() {
         let mut config = Config::default();
         config.cols = Some(ColumnList::new(vec![3..=3, 1..=1, 2..=2]));

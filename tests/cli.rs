@@ -178,6 +178,33 @@ fn trim_and_drop_empty_remove_whitespace_only_lines() {
 }
 
 #[test]
+fn quoted_csv_does_not_split_inside_quotes() {
+    let input = TempFile::new("csv-quoted", "a,\"b,c\",d\nx,\"y,z\",w\n");
+
+    //without --quoted the comma inside the quotes splits the field
+    let stdout = run_ft_stdout(&["-F", ",", "-C", "2", input.path_str()]);
+    assert_eq!(stdout, "\"b\n\"y\n");
+
+    //with it, field 2 is the quoted one, comma and all
+    let stdout = run_ft_stdout(&["-F", ",", "--quoted", "-C", "2", input.path_str()]);
+    assert_eq!(stdout, "\"b,c\"\n\"y,z\"\n");
+}
+
+#[test]
+fn quoted_csv_projection_stays_valid_csv() {
+    let input = TempFile::new("csv-project", "a,\"b,c\",d\n");
+    let stdout = run_ft_stdout(&["-F", ",", "--quoted", "-C", "2,1", input.path_str()]);
+    assert_eq!(stdout, "\"b,c\",a\n");
+}
+
+#[test]
+fn quoted_requires_fields() {
+    let input = TempFile::new("csv-quoted-alone", "a\n");
+    let output = run_ft(&["--quoted", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn column_list_permutes_fields() {
     //an awk-style projection: -F , -C 3,1,2 reorders the fields
     let input = TempFile::new("cols-permute", "a,b,c\nx,y,z\n");

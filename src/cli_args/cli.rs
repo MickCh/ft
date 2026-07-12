@@ -43,6 +43,14 @@ pub fn cli() -> Command {
                 .multiple(true),
         )
         .arg(
+            Arg::new("quoted")
+                .long("quoted")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("fields")
+                .help("Respect \"quoted\" fields: a delimiter inside quotes does not split (requires --fields)"),
+        )
+        .arg(
             Arg::new("output-delimiter")
                 .long("output-delimiter")
                 .required(false)

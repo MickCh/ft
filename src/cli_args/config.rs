@@ -4,7 +4,7 @@ use clap::ArgMatches;
 use regex::{Regex, RegexBuilder};
 
 use super::ConfigError;
-use crate::columns::{ColumnList, ColumnSpan};
+use crate::columns::{ColumnList, ColumnSpan, FieldSpan};
 use crate::ranges::RangeSpec;
 
 /// What `--find` matches: a literal substring, or a regular expression
@@ -58,6 +58,8 @@ pub struct Config {
     pub upper: bool,
     pub lower: bool,
     pub trim: bool,
+    //--fields splits on the delimiter even inside quotes unless set
+    pub quoted: bool,
     //`Some` wraps every line into chunks of that many chars
     pub wrap: Option<usize>,
     pub drop_empty: bool,
@@ -111,11 +113,12 @@ impl Config {
     fn span_of(&self, columns: Option<ColumnList>) -> ColumnSpan {
         let columns = columns.unwrap_or_else(|| self.cols_or_full());
         match &self.field_delimiter {
-            Some(delimiter) => ColumnSpan::Fields {
+            Some(delimiter) => ColumnSpan::Fields(FieldSpan {
                 delimiter: delimiter.clone(),
                 output_delimiter: self.output_delimiter.clone(),
+                quoted: self.quoted,
                 fields: columns,
-            },
+            }),
             None => ColumnSpan::Chars(columns),
         }
     }
@@ -240,6 +243,7 @@ impl TryFrom<ArgMatches> for Config {
             upper: matches.get_flag("upper"),
             lower: matches.get_flag("lower"),
             trim: matches.get_flag("trim"),
+            quoted: matches.get_flag("quoted"),
             wrap: matches
                 .get_one::<usize>("wrap")
                 .copied(),
@@ -302,7 +306,7 @@ mod tests {
     fn written(span: &ColumnSpan) -> Vec<RangeInclusive<usize>> {
         match span {
             ColumnSpan::Chars(list) => list.written().to_vec(),
-            ColumnSpan::Fields { fields, .. } => fields.written().to_vec(),
+            ColumnSpan::Fields(spec) => spec.fields.written().to_vec(),
         }
     }
 

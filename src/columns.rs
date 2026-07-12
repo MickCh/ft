@@ -55,28 +55,45 @@ impl From<RangeInclusive<usize>> for ColumnList {
     }
 }
 
+/// Field mode: which delimited fields to address, and how they are
+/// delimited on the way in and on the way out.
+#[derive(Debug, Clone)]
+pub struct FieldSpan {
+    pub delimiter: String,
+    /// What joins the selected fields on output; `None` reuses the
+    /// input delimiter (`--output-delimiter`).
+    pub output_delimiter: Option<String>,
+    /// Whether a delimiter inside a `"quoted"` field splits it
+    /// (`--quoted`, i.e. CSV rather than a plain split).
+    pub quoted: bool,
+    pub fields: ColumnList,
+}
+
+impl FieldSpan {
+    /// Field mode with the input delimiter reused on output and no
+    /// quoting, which is what a plain `--fields` asks for.
+    pub fn new(delimiter: impl Into<String>, fields: ColumnList) -> FieldSpan {
+        FieldSpan {
+            delimiter: delimiter.into(),
+            output_delimiter: None,
+            quoted: false,
+            fields,
+        }
+    }
+}
+
 /// How a column list addresses a line: by character positions, or by
-/// fields separated by a delimiter.
+/// delimited fields.
 #[derive(Debug, Clone)]
 pub enum ColumnSpan {
     Chars(ColumnList),
-    Fields {
-        delimiter: String,
-        /// What joins the selected fields on output; `None` reuses the
-        /// input delimiter (`--output-delimiter`).
-        output_delimiter: Option<String>,
-        fields: ColumnList,
-    },
+    Fields(FieldSpan),
 }
 
 impl ColumnSpan {
     /// Field mode with the input delimiter reused on output.
     pub fn fields(delimiter: impl Into<String>, fields: ColumnList) -> ColumnSpan {
-        ColumnSpan::Fields {
-            delimiter: delimiter.into(),
-            output_delimiter: None,
-            fields,
-        }
+        ColumnSpan::Fields(FieldSpan::new(delimiter, fields))
     }
 
     /// The char ranges to read, in the order written, so a permuted list
@@ -86,9 +103,9 @@ impl ColumnSpan {
     pub fn read_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
         match self {
             ColumnSpan::Chars(list) => Cow::Borrowed(list.written()),
-            ColumnSpan::Fields {
-                delimiter, fields, ..
-            } => Cow::Owned(resolve_all(line, delimiter, fields.written(), false)),
+            ColumnSpan::Fields(spec) => {
+                Cow::Owned(resolve_fields(line, spec, spec.fields.written(), false))
+            }
         }
     }
 
@@ -97,9 +114,9 @@ impl ColumnSpan {
     pub fn write_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
         match self {
             ColumnSpan::Chars(list) => Cow::Borrowed(list.normalized()),
-            ColumnSpan::Fields {
-                delimiter, fields, ..
-            } => Cow::Owned(resolve_all(line, delimiter, fields.normalized(), false)),
+            ColumnSpan::Fields(spec) => {
+                Cow::Owned(resolve_fields(line, spec, spec.fields.normalized(), false))
+            }
         }
     }
 
@@ -110,9 +127,9 @@ impl ColumnSpan {
     pub fn delete_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
         match self {
             ColumnSpan::Chars(list) => Cow::Borrowed(list.normalized()),
-            ColumnSpan::Fields {
-                delimiter, fields, ..
-            } => Cow::Owned(resolve_all(line, delimiter, fields.normalized(), true)),
+            ColumnSpan::Fields(spec) => {
+                Cow::Owned(resolve_fields(line, spec, spec.fields.normalized(), true))
+            }
         }
     }
 
@@ -122,13 +139,10 @@ impl ColumnSpan {
     pub fn joiner(&self) -> &str {
         match self {
             ColumnSpan::Chars(_) => "",
-            ColumnSpan::Fields {
-                delimiter,
-                output_delimiter,
-                ..
-            } => output_delimiter
+            ColumnSpan::Fields(spec) => spec
+                .output_delimiter
                 .as_deref()
-                .unwrap_or(delimiter),
+                .unwrap_or(&spec.delimiter),
         }
     }
 }
@@ -146,67 +160,46 @@ impl From<ColumnList> for ColumnSpan {
 }
 
 /// Resolve every field part to the char range it occupies, dropping the
-/// parts that address no field at all.
-fn resolve_all(
+/// parts that address no field at all. The line is split into fields
+/// once, however many parts ask about it.
+fn resolve_fields(
     line: &str,
-    delimiter: &str,
+    spec: &FieldSpan,
     parts: &[RangeInclusive<usize>],
     swallow_delimiter: bool,
 ) -> Vec<RangeInclusive<usize>> {
+    let positions = field_positions(line, &spec.delimiter, spec.quoted);
+    let delimiter_len = spec.delimiter.chars().count();
+
     parts
         .iter()
-        .filter_map(|part| resolve_fields(line, delimiter, part, swallow_delimiter))
+        .filter_map(|part| resolve_part(&positions, part, delimiter_len, swallow_delimiter))
         .collect()
 }
 
 /// Map a 1-based field range onto the char range those fields occupy.
 /// `None` means the range starts past the last field, so it covers no
 /// characters at all.
-///
-/// Walks the fields once, tracking only the start of the first selected
-/// field, the end of the last, and the total field count — enough to
-/// resolve the span without materializing every field's position.
-fn resolve_fields(
-    line: &str,
-    delimiter: &str,
+fn resolve_part(
+    positions: &[RangeInclusive<usize>],
     fields: &RangeInclusive<usize>,
+    delimiter_len: usize,
     swallow_delimiter: bool,
 ) -> Option<RangeInclusive<usize>> {
-    let delimiter_len = delimiter.chars().count();
     let first = (*fields.start()).max(1);
-    let wanted_last = *fields.end();
-
-    //1-based char position where the current field starts
-    let mut field_start = 1usize;
-    let mut span_start = None;
-    let mut span_end = 0usize;
-    let mut count = 0usize;
-
-    for (index, field) in line.split(delimiter).enumerate() {
-        let field_index = index + 1;
-        let len = field.chars().count();
-        //an empty field has its end one before its start
-        let field_end = field_start + len - 1;
-
-        if field_index == first {
-            span_start = Some(field_start);
-        }
-        if (first..=wanted_last).contains(&field_index) {
-            span_end = field_end;
-        }
-
-        field_start += len + delimiter_len;
-        count = field_index;
+    let wanted_last = (*fields.end()).min(positions.len());
+    if first > positions.len() {
+        return None;
     }
 
-    //the first wanted field lies past the last one: nothing to address
-    let mut start = span_start?;
-    let mut end = span_end;
+    //fields are 1-based, the positions are indexed from 0
+    let mut start = *positions[first - 1].start();
+    let mut end = *positions[wanted_last - 1].end();
 
     if swallow_delimiter {
         //take one bordering delimiter with the fields, like `cut`:
         //the trailing one when a field follows, else the leading one
-        if wanted_last < count {
+        if wanted_last < positions.len() {
             end += delimiter_len;
         } else if first > 1 {
             start -= delimiter_len;
@@ -214,6 +207,45 @@ fn resolve_fields(
     }
 
     Some(start..=end)
+}
+
+/// The 1-based char range each field of the line occupies. An empty
+/// field ends one char before it starts, an inverted range the text
+/// helpers read as nothing.
+///
+/// In quoted mode a delimiter inside a `"…"` field does not split it,
+/// so `a,"b,c"` is two fields rather than three. A doubled quote is the
+/// RFC 4180 way of escaping one inside a quoted field; toggling on every
+/// quote handles it, since the pair leaves the state where it found it.
+/// A field keeps its quotes: they are part of the text it occupies, so
+/// selected fields re-join into valid CSV.
+fn field_positions(line: &str, delimiter: &str, quoted: bool) -> Vec<RangeInclusive<usize>> {
+    let delimiter_len = delimiter.chars().count();
+    let mut positions = Vec::new();
+
+    //1-based char positions: where the current field starts, and where
+    //the walk currently is
+    let mut start = 1usize;
+    let mut column = 1usize;
+    let mut inside_quotes = false;
+    //chars of a matched delimiter still to walk over
+    let mut skip = 0usize;
+
+    for (offset, character) in line.char_indices() {
+        if skip > 0 {
+            skip -= 1;
+        } else if quoted && character == '"' {
+            inside_quotes = !inside_quotes;
+        } else if !inside_quotes && line[offset..].starts_with(delimiter) {
+            positions.push(start..=column - 1);
+            start = column + delimiter_len;
+            skip = delimiter_len - 1;
+        }
+        column += 1;
+    }
+    positions.push(start..=column - 1);
+
+    positions
 }
 
 #[cfg(test)]
@@ -290,12 +322,75 @@ mod tests {
 
     #[test]
     fn field_span_joins_on_the_output_delimiter_when_given() {
-        let span = ColumnSpan::Fields {
-            delimiter: ",".to_owned(),
+        let span = ColumnSpan::Fields(FieldSpan {
             output_delimiter: Some(";".to_owned()),
-            fields: list(&[1..=2]),
-        };
+            ..FieldSpan::new(",", list(&[1..=2]))
+        });
         assert_eq!(span.joiner(), ";");
+    }
+
+    fn quoted_fields(parts: &[RangeInclusive<usize>]) -> ColumnSpan {
+        ColumnSpan::Fields(FieldSpan {
+            quoted: true,
+            ..FieldSpan::new(",", list(parts))
+        })
+    }
+
+    #[test]
+    fn quoted_span_ignores_a_delimiter_inside_quotes() {
+        //pos: `a,"b,c",d` -> a=1, "b,c"=3-7, d=9
+        //without --quoted this line would look like four fields
+        assert_eq!(
+            quoted_fields(&[2..=2])
+                .read_ranges(r#"a,"b,c",d"#)
+                .as_ref(),
+            [3..=7]
+        );
+        assert_eq!(
+            quoted_fields(&[3..=3])
+                .read_ranges(r#"a,"b,c",d"#)
+                .as_ref(),
+            [9..=9]
+        );
+        //a plain field split sees the comma inside the quotes, so its
+        //field 2 is the torn-off `"b`
+        assert_eq!(
+            fields(",", &[2..=2])
+                .read_ranges(r#"a,"b,c",d"#)
+                .as_ref(),
+            [3..=4]
+        );
+    }
+
+    #[test]
+    fn quoted_span_keeps_the_quotes_with_the_field() {
+        //the quotes are part of the field's text, so selected fields
+        //re-join into valid CSV
+        let span = quoted_fields(&[1..=1]);
+        assert_eq!(span.read_ranges(r#""a,b",c"#).as_ref(), [1..=5]);
+    }
+
+    #[test]
+    fn quoted_span_handles_a_doubled_quote_inside_a_field() {
+        //RFC 4180 escapes a quote by doubling it: `"a""b"` is one field
+        //pos: `"a""b",c` -> field 1 = 1-6, field 2 = 8
+        assert_eq!(
+            quoted_fields(&[2..=2])
+                .read_ranges(r#""a""b",c"#)
+                .as_ref(),
+            [8..=8]
+        );
+    }
+
+    #[test]
+    fn quoted_span_deletes_a_whole_quoted_field() {
+        //deleting field 2 takes its quotes and one delimiter with it
+        assert_eq!(
+            quoted_fields(&[2..=2])
+                .delete_ranges(r#"a,"b,c",d"#)
+                .as_ref(),
+            [3..=8]
+        );
     }
 
     #[test]

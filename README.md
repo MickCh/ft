@@ -17,6 +17,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `-R, --rows <ranges>` | Rows to process: `3`, `2-5`, `10-`, `-5`, `~10-~1` or a list `1-5,10-20` (default: all rows) |
 | `-C, --cols <ranges>` | Columns to process: `3`, `2-5`, `10-`, `-5` or a list `1,3,5-7` (default: all columns) |
 | `-F, --fields <delim>` | Treat the column ranges as fields separated by `<delim>` (requires a column range) |
+| `--quoted` | Respect `"quoted"` fields: a delimiter inside quotes does not split (requires `--fields`) |
 | `--output-delimiter <s>` | Join the selected fields with `<s>` instead of the input delimiter (requires `--fields`) |
 | `-s, --sort` | Sort the selected rows, using the column range as the sort key |
 | `--sort-key <range>` | Columns keying `--sort`, instead of `--cols` (requires `--sort`) |
@@ -51,6 +52,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
 - `--sort-key` and `--unique-key` give those operations a column range of their own, so `--cols` is free for another one: `-C 5 -f a -r b --sort --sort-key 3` replaces inside column 5 but sorts by column 3. An operation with its own key no longer claims `--cols`, so a `--cols` left over with no other operation goes back to **selecting** columns (and the key then addresses that selected result, since keys are read from the transformed line).
 - With `--fields`, the column ranges count **delimited fields** instead of characters: `-F , -C 2` addresses the second comma-separated field, per line. All column-based operations (select, delete, sort key, find/replace scope, `--grep`, `--unique`, case/trim) work on fields the same way; deleting fields also removes one adjacent delimiter, like `cut`, and a field list is merged before that, so `-C 2,3` deletes exactly what `-C 2-3` does. Selected fields are rejoined by the delimiter (or `--output-delimiter`), and a field the line does not have is skipped rather than joining a stray delimiter. The delimiter may be more than one character.
+- `--quoted` makes field mode read CSV rather than a plain split: a delimiter inside a `"…"` field no longer splits it, and a doubled `""` is an escaped quote (RFC 4180). A field keeps its quotes — they are part of the text it occupies — so selecting or reordering fields re-joins them into valid CSV, and deleting one takes its quotes with it.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.
 - `--find` and `--replace` may be repeated to run several substitutions: the *n*-th `--find` pairs with the *n*-th `--replace`, and the pairs apply left to right, so a later pair can rewrite what an earlier one produced. Every `--find` must have its own `--replace` and vice versa (a lone `--find` is rejected — use `--grep` to filter rows by content instead).
@@ -100,6 +102,10 @@ ft -s -n -F , -C 3 data.csv
 # Project fields in a new order (like awk '{print $3,$1,$2}'), retabulating them
 ft -F , -C 3,1,2 data.csv
 ft -F , -C 3,1 --output-delimiter ';' data.csv
+
+# Real CSV: a comma inside "quoted, fields" no longer splits them
+ft -F , --quoted -C 2 data.csv
+ft -F , --quoted -C 3,1 data.csv
 
 # Keep characters 1, 3 and 5-7; drop fields 1 and 3 at once
 ft -C 1,3,5-7 input.txt

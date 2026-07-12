@@ -336,7 +336,7 @@ impl LineTransform for DropEmpty {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::columns::ColumnList;
+    use crate::columns::{ColumnList, FieldSpan};
 
     /// The one line a transform leaves behind, for the transforms that
     /// rewrite a line rather than expand or drop it.
@@ -507,11 +507,10 @@ mod tests {
 
     #[test]
     fn select_fields_joins_on_the_output_delimiter() {
-        let span = ColumnSpan::Fields {
-            delimiter: ",".to_owned(),
+        let span = ColumnSpan::Fields(FieldSpan {
             output_delimiter: Some(" | ".to_owned()),
-            fields: ColumnList::new(vec![2..=2, 1..=1]),
-        };
+            ..FieldSpan::new(",", ColumnList::new(vec![2..=2, 1..=1]))
+        });
         let transform = SelectColumns::new(span);
         assert_eq!(applied(&transform, "a,b"), "b | a");
     }
