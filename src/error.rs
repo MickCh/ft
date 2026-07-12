@@ -11,6 +11,7 @@ pub enum AppError {
     InvalidArguments(ConfigError),
     OpenInput { path: PathBuf, source: io::Error },
     CreateOutput { path: PathBuf, source: io::Error },
+    OutputIsInput { path: PathBuf },
     ReplaceInput { path: PathBuf, source: io::Error },
     Processing(io::Error),
 }
@@ -26,6 +27,13 @@ impl fmt::Display for AppError {
                 write!(
                     f,
                     "Cannot create output file `{}`: {source}",
+                    path.display()
+                )
+            }
+            AppError::OutputIsInput { path } => {
+                write!(
+                    f,
+                    "Output file `{}` is the input file; refusing to truncate it (use --in-place)",
                     path.display()
                 )
             }
@@ -48,6 +56,7 @@ impl std::error::Error for AppError {
             AppError::OpenInput { source, .. }
             | AppError::CreateOutput { source, .. }
             | AppError::ReplaceInput { source, .. } => Some(source),
+            AppError::OutputIsInput { .. } => None,
             AppError::Processing(error) => Some(error),
         }
     }

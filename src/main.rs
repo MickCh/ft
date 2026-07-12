@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -10,6 +10,11 @@ use ft::file_processor::FileProcessor;
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
+        //a consumer closing the pipe early (`ft file | head`) ends the
+        //output stream normally and is not worth reporting
+        Err(AppError::Processing(error)) if error.kind() == ErrorKind::BrokenPipe => {
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("Error: {error}");
             ExitCode::FAILURE
@@ -30,6 +35,16 @@ fn run() -> Result<(), AppError> {
 /// Stream from the configured input (file or stdin) to the configured
 /// output (file or stdout).
 fn run_streaming(config: &Config) -> Result<(), AppError> {
+    //`File::create` truncates, so an output aliasing the input would
+    //destroy the data before the first line is read
+    if let (Some(input), Some(output)) = (&config.filename, &config.output_filename)
+        && same_file(input, output)
+    {
+        return Err(AppError::OutputIsInput {
+            path: output.clone(),
+        });
+    }
+
     let reader = open_input(config)?;
 
     let mut writer: Box<dyn Write> = match &config.output_filename {
@@ -48,10 +63,15 @@ fn run_streaming(config: &Config) -> Result<(), AppError> {
 
 /// Edit `path` in place: write the result to a temporary file in the
 /// same directory, then atomically rename it over the original, so a
-/// failure part-way through never leaves the input truncated. The
-/// temporary file inherits the original's permissions before the swap.
+/// failure part-way through never leaves the input truncated. Symlinks
+/// are resolved first, so the link's target is edited instead of the
+/// link being replaced by a regular file. The temporary file inherits
+/// the original's permissions and is synced to disk before the swap.
 fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
     let reader = open_input(config)?;
+    //resolve symlinks so the rename below swaps out the link's target,
+    //not the link itself (which would turn it into a regular file)
+    let path = &std::fs::canonicalize(path).map_err(|source| replace_error(path, source))?;
     //capture the original permissions up front so the replacement keeps
     //them instead of the temporary file's umask-derived defaults
     let permissions = std::fs::metadata(path)
@@ -81,6 +101,15 @@ fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
         .and_then(|()| {
             std::fs::set_permissions(&temp_path, permissions)
                 .map_err(|source| replace_error(path, source))
+        })
+        .and_then(|()| {
+            //rename is atomic in the namespace but says nothing about
+            //durability: sync so a crash right after the swap cannot
+            //leave an empty or truncated file behind
+            writer
+                .get_ref()
+                .sync_all()
+                .map_err(|source| replace_error(path, source))
         });
     if let Err(error) = result {
         let _ = std::fs::remove_file(&temp_path);
@@ -97,6 +126,16 @@ fn replace_error(path: &Path, source: std::io::Error) -> AppError {
     AppError::ReplaceInput {
         path: path.to_path_buf(),
         source,
+    }
+}
+
+/// Whether two paths point at the same existing file, resolving
+/// symlinks and relative components. A path that cannot be resolved
+/// (e.g. an output file that does not exist yet) aliases nothing.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 

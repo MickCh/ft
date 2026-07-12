@@ -358,6 +358,64 @@ fn output_flag_writes_to_file_instead_of_stdout() {
 }
 
 #[test]
+fn output_aliasing_the_input_file_is_rejected() {
+    //`File::create` would truncate the input before the first read
+    let input = TempFile::new("output-is-input", INPUT);
+    let output = run_ft(&["-R", "1-2", "-o", input.path_str(), input.path_str()]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--in-place"),
+        "stderr should point at --in-place: {stderr}"
+    );
+    //the input file must be left untouched, not truncated
+    assert_eq!(fs::read_to_string(&input.path).unwrap(), INPUT);
+}
+
+#[cfg(unix)]
+#[test]
+fn output_symlink_aliasing_the_input_is_rejected() {
+    let input = TempFile::new("output-is-input-target", INPUT);
+    let link = std::env::temp_dir().join(format!("ft-test-{}-output-link", std::process::id()));
+    std::os::unix::fs::symlink(&input.path, &link).unwrap();
+
+    let output = run_ft(&["-o", link.to_str().unwrap(), input.path_str()]);
+    let _ = fs::remove_file(&link);
+
+    assert!(!output.status.success());
+    assert_eq!(fs::read_to_string(&input.path).unwrap(), INPUT);
+}
+
+#[cfg(unix)]
+#[test]
+fn broken_pipe_from_a_closed_consumer_is_not_an_error() {
+    //enough output to overfill the pipe buffer, so writing blocks until
+    //the reading end is gone and fails with EPIPE
+    let content = "0123456789abcdef\n".repeat(100_000);
+    let input = TempFile::new("broken-pipe", &content);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ft"))
+        .arg(input.path_str())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ft binary");
+    //close the reading end without consuming anything, like `head -0`
+    drop(child.stdout.take());
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to wait for ft binary");
+    assert!(
+        output.status.success(),
+        "expected a quiet exit, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn in_place_rewrites_the_input_file() {
     let input = TempFile::new("in-place", INPUT);
     let stdout = run_ft_stdout(&["-i", "-f", "foo", "-r", "BAR", input.path_str()]);
@@ -405,6 +463,26 @@ fn in_place_leaves_no_temporary_file_behind() {
     let _ = fs::remove_dir_all(&dir);
     //only the rewritten input remains, no `.ft-*.tmp` sibling
     assert_eq!(entries, [std::ffi::OsString::from("data.txt")]);
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_edits_the_symlink_target_and_keeps_the_link() {
+    let target = TempFile::new("in-place-link-target", INPUT);
+    let link = std::env::temp_dir().join(format!("ft-test-{}-in-place-link", std::process::id()));
+    std::os::unix::fs::symlink(&target.path, &link).unwrap();
+
+    let stdout = run_ft_stdout(&["-i", "-f", "foo", "-r", "BAR", link.to_str().unwrap()]);
+    assert_eq!(stdout, "");
+
+    let still_symlink = fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink();
+    let rewritten = fs::read_to_string(&target.path).unwrap();
+    let _ = fs::remove_file(&link);
+    assert!(still_symlink, "the symlink must survive in-place editing");
+    assert_eq!(rewritten, "delta BAR\nalpha BAR\ncharlie BAR\nbravo BAR\n");
 }
 
 #[test]
