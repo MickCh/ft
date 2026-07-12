@@ -158,10 +158,11 @@ impl Config {
         self.span_of(Some(columns))
     }
 
-    /// What separates the columns of a summary row: the output
+    /// What separates the columns `ft` writes of its own (a summary
+    /// row's, or the row number `--number` prefixes): the output
     /// delimiter, then the input one, and a tab when neither says
     /// otherwise (in char mode there is no delimiter to inherit).
-    pub fn summary_separator(&self) -> String {
+    pub fn output_separator(&self) -> String {
         self.output_delimiter
             .clone()
             .or_else(|| self.field_delimiter.clone())

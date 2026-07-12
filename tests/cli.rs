@@ -295,6 +295,16 @@ fn count_summarizes_the_rows() {
 }
 
 #[test]
+fn count_reports_zero_when_nothing_matches() {
+    //like `grep -c`: the count is 0 and the exit code still says
+    //"nothing matched"
+    let input = TempFile::new("count-zero", "a\nb\n");
+    let output = run_ft(&["--count", "-g", "NOTHING", input.path_str()]);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n");
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
 fn group_by_summarizes_per_key() {
     let input = TempFile::new("group-by", "fruit,3\nveg,10\nfruit,4\n");
     let stdout = run_ft_stdout(&[

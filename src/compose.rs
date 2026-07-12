@@ -53,7 +53,7 @@ fn build_reducer(config: &Config) -> Option<Box<dyn LineReducer>> {
     Some(Box::new(Summarize::new(
         key_span,
         aggregates,
-        config.summary_separator(),
+        config.output_separator(),
     )))
 }
 
@@ -191,7 +191,7 @@ fn build_pipeline(config: &Config) -> Pipeline {
     //numbering comes after every row is settled — after expansion and
     //after the empties are gone — so the numbers come out contiguous
     if config.number {
-        pipeline.push(Box::new(NumberLines::new(config.summary_separator())));
+        pipeline.push(Box::new(NumberLines::new(config.output_separator())));
     }
 
     Pipeline::new(pipeline)

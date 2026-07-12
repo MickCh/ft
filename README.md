@@ -2,15 +2,15 @@
 
 [![Rust](https://github.com/MickCh/ft/actions/workflows/rust.yml/badge.svg)](https://github.com/MickCh/ft/actions/workflows/rust.yml)
 
-A small command-line tool for transforming text files: select row ranges, delete rows or columns, sort lines by a column key, and find/replace restricted to a column range.
+A small command-line tool for transforming text files: select or delete row and column ranges, reorder columns, sort/reverse/shuffle lines, filter by content, find/replace within a column range, wrap/split/join rows, summarize them (count, sum, avg, min, max, per group), and edit files in place — with real CSV support.
 
 ## Usage
 
 ```
-ft [OPTIONS] [filename]
+ft [OPTIONS] [filename]...
 ```
 
-When `filename` is omitted (or given as `-`), `ft` reads from standard input, so it works in pipelines.
+When no filename is given (or a filename is `-`), `ft` reads from standard input, so it works in pipelines. Several files are read as one stream, like `cat`.
 
 | Option | Description |
 |---|---|
@@ -75,7 +75,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - `--wrap` cuts every processed line into chunks of at most `<width>` **characters** — one row in, several rows out. It runs after the other transforms, so the chunks are cut from the finished line. If the input's last line had no terminator, neither does the last chunk.
 - `--split-on` cuts every processed line at each occurrence of the separator, turning one row into one row per piece (`tr , '\n'`, but only on the rows being processed). It runs after the column-scoped transforms and before `--wrap`.
 - `--join` folds every processed row into a single row — the inverse of `--split-on`, and the two compose: `ft --split-on , --join ,` returns what it was given. Like a summary, it consumes the rows, so it cannot be combined with one (or with `--delete` or `--number`).
-- **Summaries** (`--count`, `--sum`, `--avg`, `--min`, `--max`) *replace* the rows they summarize: the rows are consumed and only the summary is printed. They see exactly the rows that survive `--rows`, `--grep` and `--unique`, so `--unique --count` counts the distinct rows. Add `--group-by <cols>` for one summary row per distinct key, printed in the order the keys first appear. The output columns are the key (if any), then the count, sum, avg, min and max that were asked for, separated by `--output-delimiter`, else `--fields`, else a tab. A value that is not a number takes no part in the statistics (it is not a zero), so a group with no numbers at all shows an empty average, minimum and maximum. Summaries cannot be combined with `--delete` or `--number`, which would have nothing left to act on; a reordering is fine — the reducer takes the rows in the order they come out, so `--sort --group-by` reports the groups in sorted order and `--sort --join` folds them sorted.
+- **Summaries** (`--count`, `--sum`, `--avg`, `--min`, `--max`) *replace* the rows they summarize: the rows are consumed and only the summary is printed. They see exactly the rows that survive `--rows`, `--grep` and `--unique`, so `--unique --count` counts the distinct rows. Add `--group-by <cols>` for one summary row per distinct key, printed in the order the keys first appear. The output columns are the key (if any), then the count, sum, avg, min and max that were asked for, separated by `--output-delimiter`, else `--fields`, else a tab. A value that is not a number takes no part in the statistics (it is not a zero), so a group with no numbers at all shows an empty average, minimum and maximum. Without `--group-by` the summary always appears, even over no rows at all — `ft --count -g X` prints `0` when nothing matches, like `grep -c` (and still exits 1); with `--group-by`, no rows means no groups and no output. Summaries cannot be combined with `--delete` or `--number`, which would have nothing left to act on; a reordering is fine — the reducer takes the rows in the order they come out, so `--sort --group-by` reports the groups in sorted order and `--sort --join` folds them sorted.
 - `--drop-empty` removes lines that are empty *after* the transforms ran — which `--grep --invert` cannot do, since a predicate sees the line as it was read. `ft -C 3 --drop-empty` drops the rows too short to reach column 3, and `--trim --drop-empty` drops whitespace-only lines.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
 - `--unique` keeps the first row per key (the column range, or the whole line without one) and drops later duplicates; combined with `--sort`, "first" means first in sorted order, like `sort -u`.

@@ -180,13 +180,33 @@ impl Summarize {
         aggregates: Vec<Aggregate>,
         separator: impl Into<String>,
     ) -> Summarize {
-        Summarize {
+        let mut summarize = Summarize {
             key_span,
             aggregates,
             separator: separator.into(),
             order: Vec::new(),
             groups: HashMap::new(),
+        };
+        //without --group-by the summary describes the whole input, and
+        //an input with no rows still has a description: a count of 0,
+        //a sum of 0 — like `grep -c` or `wc -l`. With --group-by, no
+        //rows means no groups, and no rows to print.
+        if summarize.key_span.is_none() {
+            summarize.start_group(String::new());
         }
+        summarize
+    }
+
+    /// Register a group the first time its key appears, keeping the
+    /// first-seen order the summary is printed in.
+    fn start_group(&mut self, key: String) {
+        self.order.push(key.clone());
+        let accumulators = self
+            .aggregates
+            .iter()
+            .map(Accumulator::start)
+            .collect();
+        self.groups.insert(key, accumulators);
     }
 }
 
@@ -201,14 +221,7 @@ impl LineReducer for Summarize {
         };
 
         if !self.groups.contains_key(&key) {
-            self.order.push(key.clone());
-            let accumulators = self
-                .aggregates
-                .iter()
-                .map(Accumulator::start)
-                .collect();
-            self.groups
-                .insert(key.clone(), accumulators);
+            self.start_group(key.clone());
         }
 
         let Some(accumulators) = self.groups.get_mut(&key) else {
@@ -291,6 +304,32 @@ mod tests {
     fn counts_every_row_without_a_group() {
         let reducer = Summarize::new(None, vec![Aggregate::Count], ",");
         assert_eq!(summarized(reducer, &["a", "b", "c"]), "3\n");
+    }
+
+    #[test]
+    fn an_input_with_no_rows_still_has_a_summary() {
+        //like `grep -c` or `wc -l`: no rows is a count of 0, not silence
+        let reducer = Summarize::new(None, vec![Aggregate::Count], ",");
+        assert_eq!(summarized(reducer, &[]), "0\n");
+
+        let reducer = Summarize::new(
+            None,
+            vec![
+                Aggregate::Count,
+                Aggregate::Sum(field(1)),
+                Aggregate::Avg(field(1)),
+            ],
+            ",",
+        );
+        //a sum of nothing is 0; an average of nothing is nothing
+        assert_eq!(summarized(reducer, &[]), "0,0,\n");
+    }
+
+    #[test]
+    fn group_by_with_no_rows_prints_no_groups() {
+        //with a key there is nothing to describe: no rows, no groups
+        let reducer = Summarize::new(Some(field(1)), vec![Aggregate::Count], ",");
+        assert_eq!(summarized(reducer, &[]), "");
     }
 
     #[test]
