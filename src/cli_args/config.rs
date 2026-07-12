@@ -88,6 +88,8 @@ pub struct Config {
     //`Some` wraps every line into chunks of that many chars
     pub wrap: Option<usize>,
     pub drop_empty: bool,
+    //`Some` joins every processed row into one, separated by this
+    pub join: Option<String>,
     //the summary to write instead of the processed rows: how many rows
     //(`--count`) and statistics over a column, optionally per group
     pub count: bool,
@@ -323,6 +325,9 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<usize>("wrap")
                 .copied(),
             drop_empty: matches.get_flag("drop-empty"),
+            join: matches
+                .get_one::<String>("join")
+                .cloned(),
             count: matches.get_flag("count"),
             sum: matches
                 .get_one::<ColumnList>("sum")

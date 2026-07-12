@@ -261,6 +261,28 @@ fn split_on_makes_one_row_per_piece() {
 }
 
 #[test]
+fn join_folds_the_rows_into_one() {
+    let input = TempFile::new("join", "a\nb\nc\n");
+    let stdout = run_ft_stdout(&["--join", ",", input.path_str()]);
+    assert_eq!(stdout.trim_end(), "a,b,c");
+}
+
+#[test]
+fn join_and_split_on_are_inverses() {
+    let input = TempFile::new("join-split", "a,b\nc\n");
+    let stdout = run_ft_stdout(&["--split-on", ",", "--join", ",", input.path_str()]);
+    assert_eq!(stdout.trim_end(), "a,b,c");
+}
+
+#[test]
+fn join_conflicts_with_a_summary() {
+    //both consume the rows, and there is only one set of them
+    let input = TempFile::new("join-count", "a\n");
+    let output = run_ft(&["--join", ",", "--count", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn count_summarizes_the_rows() {
     let input = TempFile::new("count", "a ERROR\nb INFO\nc ERROR\n");
 

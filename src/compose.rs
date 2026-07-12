@@ -8,7 +8,7 @@ use crate::cli_args::{Config, FindPattern, ReorderMode, Replacement};
 use crate::columns::{ColumnList, ColumnSpan};
 use crate::file_processor::{FileProcessor, Reorder, RowMode, SortSpec};
 use crate::predicate::{GrepPredicate, LinePredicate};
-use crate::reduce::{Aggregate, LineReducer, Summarize};
+use crate::reduce::{Aggregate, Join, LineReducer, Summarize};
 use crate::transform::{
     DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, Pipeline,
     RegexReplaceInColumns, ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns, SplitLines,
@@ -31,9 +31,15 @@ pub fn build_processor(config: &Config) -> FileProcessor {
     }
 }
 
-/// Build the summary implied by the configuration, if any: the
-/// aggregates asked for, keyed by `--group-by` when it is given.
+/// Build the reducer implied by the configuration, if any: the rows are
+/// joined into one (`--join`), or summarized (`--count` and friends).
+/// The two are mutually exclusive on the command line — there is only
+/// one set of rows to consume.
 fn build_reducer(config: &Config) -> Option<Box<dyn LineReducer>> {
+    if let Some(separator) = &config.join {
+        return Some(Box::new(Join::new(separator.clone())));
+    }
+
     let aggregates = build_aggregates(config);
     if aggregates.is_empty() {
         return None;
@@ -713,6 +719,36 @@ mod tests {
         //only the selected row is split; row 2 is not even output
         let result = run(config, "a,b\nc,d\n");
         assert_eq!(result, "a\nb\n");
+    }
+
+    #[test]
+    fn join_folds_every_row_into_one() {
+        let mut config = Config::default();
+        config.join = Some(",".to_owned());
+
+        let result = run(config, "a\nb\nc\n");
+        assert_eq!(result, format!("a,b,c{NEW_LINE}"));
+    }
+
+    #[test]
+    fn join_is_the_inverse_of_split_on() {
+        let mut config = Config::default();
+        config.split_on = Some(",".to_owned());
+        config.join = Some(",".to_owned());
+
+        //split into rows, then folded back: the input, restored
+        let result = run(config, "a,b\nc\n");
+        assert_eq!(result, format!("a,b,c{NEW_LINE}"));
+    }
+
+    #[test]
+    fn join_folds_only_the_rows_that_survive_the_filters() {
+        let mut config = Config::default();
+        config.join = Some(",".to_owned());
+        config.grep = Some(regex::Regex::new("keep").unwrap());
+
+        let result = run(config, "keep a\ndrop b\nkeep c\n");
+        assert_eq!(result, format!("keep a,keep c{NEW_LINE}"));
     }
 
     #[test]

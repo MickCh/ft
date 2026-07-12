@@ -217,6 +217,19 @@ pub fn cli() -> Command {
                 .help("Split every line at each occurrence of this separator, one row per piece"),
         )
         .arg(
+            Arg::new("join")
+                .long("join")
+                .required(false)
+                //a reducer consumes the rows, and there is only one set of
+                //them: --join and a summary cannot both have it
+                .conflicts_with_all([
+                    "count", "sum", "avg", "min", "max", "delete", "sort", "tac", "shuffle",
+                    "number",
+                ])
+                .value_parser(parse_delimiter)
+                .help("Join every row into a single row, separated by this (like paste -s)"),
+        )
+        .arg(
             Arg::new("count")
                 .long("count")
                 .required(false)

@@ -11,13 +11,54 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 
 use crate::columns::ColumnSpan;
+use crate::constants::NEW_LINE;
 
-/// A summary computed over the processed lines.
+/// Something computed over the processed lines as a whole.
 pub trait LineReducer {
-    /// Take one processed line (without its terminator).
-    fn accept(&mut self, line: &str);
-    /// Write the summary, once every line has been accepted.
+    /// Take one processed line (without its terminator). The writer is
+    /// there for a reducer that can already say something — `--join`
+    /// writes each line as it arrives — rather than forcing every one of
+    /// them to hoard the input until the end.
+    fn accept(&mut self, line: &str, writer: &mut dyn Write) -> io::Result<()>;
+    /// Write what is left to write, once every line has been accepted.
     fn finish(&mut self, writer: &mut dyn Write) -> io::Result<()>;
+}
+
+/// Joins every processed line into a single row (`paste -s`). It has
+/// nothing to accumulate: each line is written as it arrives, with the
+/// separator in front of all but the first.
+pub struct Join {
+    separator: String,
+    started: bool,
+}
+
+impl Join {
+    pub fn new(separator: impl Into<String>) -> Join {
+        Join {
+            separator: separator.into(),
+            started: false,
+        }
+    }
+}
+
+impl LineReducer for Join {
+    fn accept(&mut self, line: &str, writer: &mut dyn Write) -> io::Result<()> {
+        if self.started {
+            writer.write_all(self.separator.as_bytes())?;
+        }
+        writer.write_all(line.as_bytes())?;
+        self.started = true;
+        Ok(())
+    }
+
+    fn finish(&mut self, writer: &mut dyn Write) -> io::Result<()> {
+        //the one row that was written still needs its terminator; with no
+        //rows at all there is nothing to terminate
+        if self.started {
+            writer.write_all(NEW_LINE.as_bytes())?;
+        }
+        Ok(())
+    }
 }
 
 /// One summary column: how many rows, or a statistic over the numbers
@@ -150,7 +191,9 @@ impl Summarize {
 }
 
 impl LineReducer for Summarize {
-    fn accept(&mut self, line: &str) {
+    /// A summary can say nothing until the input ends, so the writer
+    /// goes unused here.
+    fn accept(&mut self, line: &str, _writer: &mut dyn Write) -> io::Result<()> {
         //without --group-by every row lands in the same, unnamed group
         let key = match &self.key_span {
             Some(span) => span.select(line).into_owned(),
@@ -169,11 +212,12 @@ impl LineReducer for Summarize {
         }
 
         let Some(accumulators) = self.groups.get_mut(&key) else {
-            return;
+            return Ok(());
         };
         for (aggregate, accumulator) in self.aggregates.iter().zip(accumulators) {
             accumulator.accept(aggregate, line);
         }
+        Ok(())
     }
 
     fn finish(&mut self, writer: &mut dyn Write) -> io::Result<()> {
@@ -207,15 +251,40 @@ mod tests {
         ColumnSpan::fields(",", ColumnList::from(index..=index))
     }
 
-    fn summarized(mut reducer: Summarize, lines: &[&str]) -> String {
-        for line in lines {
-            reducer.accept(line);
-        }
+    /// Everything a reducer writes over the lines it is given.
+    fn reduced(mut reducer: impl LineReducer, lines: &[&str]) -> String {
         let mut output = Vec::new();
+        for line in lines {
+            reducer
+                .accept(line, &mut output)
+                .expect("accepting a line failed");
+        }
         reducer
             .finish(&mut output)
-            .expect("writing the summary failed");
-        String::from_utf8(output).expect("summary is not valid UTF-8")
+            .expect("writing the result failed");
+        String::from_utf8(output).expect("the result is not valid UTF-8")
+    }
+
+    fn summarized(reducer: Summarize, lines: &[&str]) -> String {
+        reduced(reducer, lines)
+    }
+
+    #[test]
+    fn join_writes_the_rows_as_one_row() {
+        assert_eq!(
+            reduced(Join::new(","), &["a", "b", "c"]),
+            format!("a,b,c{NEW_LINE}")
+        );
+        assert_eq!(
+            reduced(Join::new(" | "), &["a", "b"]),
+            format!("a | b{NEW_LINE}")
+        );
+    }
+
+    #[test]
+    fn join_writes_nothing_when_there_are_no_rows() {
+        //no row means no row to terminate either
+        assert_eq!(reduced(Join::new(","), &[]), "");
     }
 
     #[test]

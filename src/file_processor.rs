@@ -317,10 +317,10 @@ impl FileProcessor {
         if !self.passes_unique(content, &mut state.seen_keys) {
             return Ok(());
         }
-        //a reducer swallows the line: only its summary reaches the writer
+        //a reducer swallows the line: what reaches the writer is whatever
+        //it makes of the rows, not the rows themselves
         if let Some(reducer) = &mut self.reducer {
-            reducer.accept(content);
-            return Ok(());
+            return reducer.accept(content, writer);
         }
         write_content(content, terminator, state, writer)
     }
