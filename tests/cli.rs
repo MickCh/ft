@@ -178,6 +178,24 @@ fn trim_and_drop_empty_remove_whitespace_only_lines() {
 }
 
 #[test]
+fn number_numbers_the_output_rows() {
+    let input = TempFile::new("number", "a\nb\nc\n");
+    let stdout = run_ft_stdout(&["--number", input.path_str()]);
+    assert_eq!(stdout, "1\ta\n2\tb\n3\tc\n");
+
+    //the numbers count the rows that survive the filters, contiguously
+    let stdout = run_ft_stdout(&["--number", "-g", "[ac]", input.path_str()]);
+    assert_eq!(stdout, "1\ta\n2\tc\n");
+}
+
+#[test]
+fn title_case_and_squeeze_clean_up_text() {
+    let input = TempFile::new("tidy", "  hello   WIDE world  \n");
+    let stdout = run_ft_stdout(&["--title-case", "--squeeze", "--trim", input.path_str()]);
+    assert_eq!(stdout, "Hello Wide World\n");
+}
+
+#[test]
 fn split_on_makes_one_row_per_piece() {
     let input = TempFile::new("split-on", "a,b,c\nd\n");
     let stdout = run_ft_stdout(&["--split-on", ",", input.path_str()]);

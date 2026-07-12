@@ -10,8 +10,9 @@ use crate::file_processor::{FileProcessor, Reorder, RowMode, SortSpec};
 use crate::predicate::{GrepPredicate, LinePredicate};
 use crate::reduce::{Aggregate, LineReducer, Summarize};
 use crate::transform::{
-    DeleteColumns, DropEmpty, LineTransform, MapColumns, Pipeline, RegexReplaceInColumns,
-    ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns, SplitLines, WrapLines,
+    DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, Pipeline,
+    RegexReplaceInColumns, ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns, SplitLines,
+    WrapLines,
 };
 
 /// Assemble the streaming processor implied by the configuration.
@@ -152,6 +153,14 @@ fn build_pipeline(config: &Config) -> Pipeline {
     if config.lower {
         pipeline.push(Box::new(MapColumns::lowercase(config.col_span())));
     }
+    if config.title_case {
+        pipeline.push(Box::new(MapColumns::title_case(config.col_span())));
+    }
+    //squeezing runs before trimming, so a run of whitespace at the ends
+    //collapses to one space and is then removed altogether
+    if config.squeeze {
+        pipeline.push(Box::new(MapColumns::squeeze(config.col_span())));
+    }
     if config.trim {
         pipeline.push(Box::new(MapColumns::trim(config.col_span())));
     }
@@ -171,6 +180,11 @@ fn build_pipeline(config: &Config) -> Pipeline {
     //became — `--trim --drop-empty` drops whitespace-only lines
     if config.drop_empty {
         pipeline.push(Box::new(DropEmpty));
+    }
+    //numbering comes after every row is settled — after expansion and
+    //after the empties are gone — so the numbers come out contiguous
+    if config.number {
+        pipeline.push(Box::new(NumberLines::new(config.summary_separator())));
     }
 
     Pipeline::new(pipeline)
@@ -209,7 +223,7 @@ mod tests {
     }
 
     /// The single line a pipeline turns `line` into.
-    fn piped(pipeline: &Pipeline, line: &str) -> String {
+    fn piped(pipeline: &mut Pipeline, line: &str) -> String {
         match pipeline.apply(line) {
             Lines::One(content) => content.into_owned(),
             Lines::Several(contents) => panic!("expected a single line, got {contents:?}"),
@@ -911,9 +925,9 @@ mod tests {
         let mut replace_config = Config::default();
         replace_config.cols = Some((5..=10).into());
         replace_config.replacements = vec![literal("a", "b")];
-        let pipeline = build_pipeline(&replace_config);
+        let mut pipeline = build_pipeline(&replace_config);
         assert_eq!(pipeline.len(), 1);
-        assert_eq!(piped(&pipeline, "aaaa aaaa"), "aaaa bbbb");
+        assert_eq!(piped(&mut pipeline, "aaaa aaaa"), "aaaa bbbb");
     }
 
     #[test]
@@ -937,10 +951,10 @@ mod tests {
         config.upper = true;
         config.replacements = vec![literal("foo", "bar")];
 
-        let pipeline = build_pipeline(&config);
+        let mut pipeline = build_pipeline(&config);
         assert_eq!(pipeline.len(), 2);
         //replace runs first, so the replacement is uppercased too
-        assert_eq!(piped(&pipeline, "x foo y"), "X BAR Y");
+        assert_eq!(piped(&mut pipeline, "x foo y"), "X BAR Y");
     }
 
     #[test]
@@ -948,9 +962,9 @@ mod tests {
         let mut config = Config::default();
         config.replacements = vec![literal("a", "b"), literal("b", "c")];
 
-        let pipeline = build_pipeline(&config);
+        let mut pipeline = build_pipeline(&config);
         assert_eq!(pipeline.len(), 2);
         //pairs run in order: a->b then b->c turns "a" into "c"
-        assert_eq!(piped(&pipeline, "a"), "c");
+        assert_eq!(piped(&mut pipeline, "a"), "c");
     }
 }

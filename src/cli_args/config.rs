@@ -77,6 +77,10 @@ pub struct Config {
     pub upper: bool,
     pub lower: bool,
     pub trim: bool,
+    pub title_case: bool,
+    pub squeeze: bool,
+    //number the output rows, like `nl`
+    pub number: bool,
     //--fields splits on the delimiter even inside quotes unless set
     pub quoted: bool,
     //`Some` splits every line at each occurrence of the separator
@@ -186,6 +190,8 @@ impl Config {
             || self.upper
             || self.lower
             || self.trim
+            || self.title_case
+            || self.squeeze
             || self.grep.is_some()
             || (self.unique && self.unique_key.is_none())
     }
@@ -303,6 +309,9 @@ impl TryFrom<ArgMatches> for Config {
             upper: matches.get_flag("upper"),
             lower: matches.get_flag("lower"),
             trim: matches.get_flag("trim"),
+            title_case: matches.get_flag("title-case"),
+            squeeze: matches.get_flag("squeeze"),
+            number: matches.get_flag("number"),
             quoted: matches.get_flag("quoted"),
             split_on: matches
                 .get_one::<String>("split-on")

@@ -31,7 +31,7 @@ pub enum LineOutcome {
 /// A single per-line operation in the processing pipeline.
 pub trait LineTransform {
     /// Transform line content (without its terminator).
-    fn apply(&self, line: &str) -> LineOutcome;
+    fn apply(&mut self, line: &str) -> LineOutcome;
 }
 
 /// What a whole pipeline made of one input line: still a single line —
@@ -46,7 +46,7 @@ pub enum Lines<'a> {
 impl<'a> Lines<'a> {
     /// Run every line through one more transform, flattening whatever
     /// each of them expands into.
-    fn through(self, transform: &dyn LineTransform) -> Lines<'a> {
+    fn through(self, transform: &mut dyn LineTransform) -> Lines<'a> {
         match self {
             Lines::One(content) => match transform.apply(&content) {
                 LineOutcome::Keep => Lines::One(content),
@@ -91,11 +91,11 @@ impl Pipeline {
 
     /// Run one line through every transform. With no transforms
     /// configured the line passes through without an allocation.
-    pub fn apply<'a>(&self, line: &'a str) -> Lines<'a> {
+    pub fn apply<'a>(&mut self, line: &'a str) -> Lines<'a> {
         self.transforms
-            .iter()
+            .iter_mut()
             .fold(Lines::One(Cow::Borrowed(line)), |lines, transform| {
-                lines.through(transform.as_ref())
+                lines.through(transform.as_mut())
             })
     }
 }
@@ -114,7 +114,7 @@ impl SelectColumns {
 }
 
 impl LineTransform for SelectColumns {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         LineOutcome::Replace(self.span.select(line).into_owned())
     }
 }
@@ -132,7 +132,7 @@ impl DeleteColumns {
 }
 
 impl LineTransform for DeleteColumns {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         LineOutcome::Replace(text::remove_ranges(line, &self.span.delete_ranges(line)))
     }
 }
@@ -170,10 +170,72 @@ impl MapColumns {
             map: |within| within.trim().to_owned(),
         }
     }
+
+    /// Uppercases the first letter of every word within the span and
+    /// lowercases the rest of it.
+    pub fn title_case(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns {
+            span: span.into(),
+            map: title_case,
+        }
+    }
+
+    /// Collapses every run of whitespace within the span into a single
+    /// space (the ends are left to `--trim`).
+    pub fn squeeze(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns {
+            span: span.into(),
+            map: squeeze_whitespace,
+        }
+    }
+}
+
+/// Title-case a piece of text: a letter starts a word when the char
+/// before it does not.
+fn title_case(within: &str) -> String {
+    let mut result = String::with_capacity(within.len());
+    let mut starts_word = true;
+
+    for character in within.chars() {
+        if character.is_alphanumeric() {
+            match starts_word {
+                true => result.extend(character.to_uppercase()),
+                false => result.extend(character.to_lowercase()),
+            }
+            starts_word = false;
+        } else {
+            result.push(character);
+            starts_word = true;
+        }
+    }
+
+    result
+}
+
+/// Collapse each run of whitespace into one space, keeping the runs at
+/// the ends (a leading run collapses to a single leading space, which
+/// `--trim` then removes if that is what was wanted).
+fn squeeze_whitespace(within: &str) -> String {
+    let mut result = String::with_capacity(within.len());
+    let mut in_whitespace = false;
+
+    for character in within.chars() {
+        if character.is_whitespace() {
+            if !in_whitespace {
+                result.push(' ');
+            }
+            in_whitespace = true;
+        } else {
+            result.push(character);
+            in_whitespace = false;
+        }
+    }
+
+    result
 }
 
 impl LineTransform for MapColumns {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         LineOutcome::Replace(text::map_ranges(
             line,
             &self.span.write_ranges(line),
@@ -200,7 +262,7 @@ impl ReplaceInColumns {
 }
 
 impl LineTransform for ReplaceInColumns {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         LineOutcome::Replace(text::replace_in_ranges(
             line,
             &self.find,
@@ -238,7 +300,7 @@ impl ReplaceInColumnsIgnoreCase {
 }
 
 impl LineTransform for ReplaceInColumnsIgnoreCase {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         LineOutcome::Replace(text::map_ranges(
             line,
             &self.span.write_ranges(line),
@@ -274,7 +336,7 @@ impl RegexReplaceInColumns {
 }
 
 impl LineTransform for RegexReplaceInColumns {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         LineOutcome::Replace(text::map_ranges(
             line,
             &self.span.write_ranges(line),
@@ -300,7 +362,7 @@ impl WrapLines {
 }
 
 impl LineTransform for WrapLines {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         let chunks = text::wrap_chars(line, self.width);
         match chunks.as_slice() {
             //a line that already fits is left alone, allocating nothing
@@ -312,6 +374,32 @@ impl LineTransform for WrapLines {
                     .collect(),
             ),
         }
+    }
+}
+
+/// Numbers the rows it is given, like `nl`. The first transform to
+/// carry state: its counter is why [`LineTransform::apply`] takes
+/// `&mut self`. It numbers the rows *as processed* — after filtering
+/// and after any expansion, so the numbers come out contiguous.
+pub struct NumberLines {
+    separator: String,
+    next: u64,
+}
+
+impl NumberLines {
+    pub fn new(separator: impl Into<String>) -> NumberLines {
+        NumberLines {
+            separator: separator.into(),
+            next: 1,
+        }
+    }
+}
+
+impl LineTransform for NumberLines {
+    fn apply(&mut self, line: &str) -> LineOutcome {
+        let numbered = format!("{}{}{line}", self.next, self.separator);
+        self.next += 1;
+        LineOutcome::Replace(numbered)
     }
 }
 
@@ -330,7 +418,7 @@ impl SplitLines {
 }
 
 impl LineTransform for SplitLines {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         if !line.contains(&self.separator) {
             //nothing to split on: the line stands as it is
             return LineOutcome::Keep;
@@ -349,7 +437,7 @@ impl LineTransform for SplitLines {
 pub struct DropEmpty;
 
 impl LineTransform for DropEmpty {
-    fn apply(&self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> LineOutcome {
         if line.is_empty() {
             LineOutcome::Drop
         } else {
@@ -365,7 +453,7 @@ mod tests {
 
     /// The one line a transform leaves behind, for the transforms that
     /// rewrite a line rather than expand or drop it.
-    fn applied(transform: &dyn LineTransform, line: &str) -> String {
+    fn applied(transform: &mut dyn LineTransform, line: &str) -> String {
         match transform.apply(line) {
             LineOutcome::Keep => line.to_owned(),
             LineOutcome::Replace(rewritten) => rewritten,
@@ -375,103 +463,111 @@ mod tests {
 
     #[test]
     fn delete_columns_removes_range() {
-        let transform = DeleteColumns::new(5..=10);
+        let mut transform = DeleteColumns::new(5..=10);
         assert_eq!(
-            applied(&transform, "Test01234567891231234567"),
+            applied(&mut transform, "Test01234567891231234567"),
             "Test67891231234567"
         );
     }
 
     #[test]
     fn replace_in_columns_replaces_within_range() {
-        let transform = ReplaceInColumns::new("123".to_owned(), "ABCD".to_owned(), 5..=10);
+        let mut transform = ReplaceInColumns::new("123".to_owned(), "ABCD".to_owned(), 5..=10);
         assert_eq!(
-            applied(&transform, "Test01234567891231234567"),
+            applied(&mut transform, "Test01234567891231234567"),
             "Test0ABCD4567891231234567"
         );
     }
 
     #[test]
     fn uppercase_columns_respects_range_and_unicode() {
-        let transform = MapColumns::uppercase(1..=4);
-        assert_eq!(applied(&transform, "ąbcdefgh"), "ĄBCDefgh");
+        let mut transform = MapColumns::uppercase(1..=4);
+        assert_eq!(applied(&mut transform, "ąbcdefgh"), "ĄBCDefgh");
     }
 
     #[test]
     fn lowercase_columns_respects_range_and_unicode() {
-        let transform = MapColumns::lowercase(1..=4);
-        assert_eq!(applied(&transform, "ĄBCDEFGH"), "ąbcdEFGH");
+        let mut transform = MapColumns::lowercase(1..=4);
+        assert_eq!(applied(&mut transform, "ĄBCDEFGH"), "ąbcdEFGH");
     }
 
     #[test]
     fn trim_columns_trims_whole_line_with_full_range() {
-        let transform = MapColumns::trim(1..=usize::MAX);
-        assert_eq!(applied(&transform, "  padded  "), "padded");
+        let mut transform = MapColumns::trim(1..=usize::MAX);
+        assert_eq!(applied(&mut transform, "  padded  "), "padded");
     }
 
     #[test]
     fn trim_columns_trims_only_inside_range() {
         //columns 4-9 are " mid  ", trimmed to "mid"
-        let transform = MapColumns::trim(4..=9);
-        assert_eq!(applied(&transform, "ab  mid   cd"), "ab mid cd");
+        let mut transform = MapColumns::trim(4..=9);
+        assert_eq!(applied(&mut transform, "ab  mid   cd"), "ab mid cd");
     }
 
     #[test]
     fn ignore_case_replace_matches_any_case() {
-        let transform = ReplaceInColumnsIgnoreCase::new("foo", "BAR".to_owned(), 1..=usize::MAX);
-        assert_eq!(applied(&transform, "foo FOO Foo fOO"), "BAR BAR BAR BAR");
+        let mut transform =
+            ReplaceInColumnsIgnoreCase::new("foo", "BAR".to_owned(), 1..=usize::MAX);
+        assert_eq!(
+            applied(&mut transform, "foo FOO Foo fOO"),
+            "BAR BAR BAR BAR"
+        );
     }
 
     #[test]
     fn ignore_case_replace_folds_unicode_case() {
-        let transform = ReplaceInColumnsIgnoreCase::new("łódź", "X".to_owned(), 1..=usize::MAX);
-        assert_eq!(applied(&transform, "ŁÓDŹ łódź Łódź"), "X X X");
+        let mut transform = ReplaceInColumnsIgnoreCase::new("łódź", "X".to_owned(), 1..=usize::MAX);
+        assert_eq!(applied(&mut transform, "ŁÓDŹ łódź Łódź"), "X X X");
     }
 
     #[test]
     fn ignore_case_replace_does_not_expand_dollar_references() {
         //the literal find "a$1b" must not be treated as a regex, and the
         //replacement "$0" must be inserted verbatim
-        let transform = ReplaceInColumnsIgnoreCase::new("a$1b", "$0".to_owned(), 1..=usize::MAX);
-        assert_eq!(applied(&transform, "xA$1Bx"), "x$0x");
+        let mut transform =
+            ReplaceInColumnsIgnoreCase::new("a$1b", "$0".to_owned(), 1..=usize::MAX);
+        assert_eq!(applied(&mut transform, "xA$1Bx"), "x$0x");
     }
 
     #[test]
     fn ignore_case_replace_respects_column_range() {
-        let transform = ReplaceInColumnsIgnoreCase::new("ab", "X".to_owned(), 1..=4);
-        assert_eq!(applied(&transform, "ABababAB"), "XXabAB");
+        let mut transform = ReplaceInColumnsIgnoreCase::new("ab", "X".to_owned(), 1..=4);
+        assert_eq!(applied(&mut transform, "ABababAB"), "XXabAB");
     }
 
     #[test]
     fn regex_replace_in_columns_replaces_matches() {
-        let transform =
+        let mut transform =
             RegexReplaceInColumns::new(Regex::new(r"\d+").unwrap(), "N".to_owned(), 1..=usize::MAX);
-        assert_eq!(applied(&transform, "a1 bb22 ccc333"), "aN bbN cccN");
+        assert_eq!(applied(&mut transform, "a1 bb22 ccc333"), "aN bbN cccN");
     }
 
     #[test]
     fn regex_replace_supports_capture_groups() {
-        let transform = RegexReplaceInColumns::new(
+        let mut transform = RegexReplaceInColumns::new(
             Regex::new(r"(\w+)@(\w+)").unwrap(),
             "$2.$1".to_owned(),
             1..=usize::MAX,
         );
-        assert_eq!(applied(&transform, "user@host"), "host.user");
+        assert_eq!(applied(&mut transform, "user@host"), "host.user");
     }
 
     #[test]
     fn regex_replace_respects_column_range() {
-        let transform =
+        let mut transform =
             RegexReplaceInColumns::new(Regex::new(r"\d").unwrap(), "X".to_owned(), 1..=4);
-        assert_eq!(applied(&transform, "1234567890"), "XXXX567890");
+        assert_eq!(applied(&mut transform, "1234567890"), "XXXX567890");
     }
 
     #[test]
     fn select_columns_keeps_only_range() {
-        let transform = SelectColumns::new(5..=10);
-        assert_eq!(applied(&transform, "Test01234567891231234567"), "012345");
+        let mut transform = SelectColumns::new(5..=10);
+        assert_eq!(
+            applied(&mut transform, "Test01234567891231234567"),
+            "012345"
+        );
         //a line shorter than the range start selects nothing
-        assert_eq!(applied(&transform, "abc"), "");
+        assert_eq!(applied(&mut transform, "abc"), "");
     }
 
     fn field_span(delimiter: &str, fields: std::ops::RangeInclusive<usize>) -> ColumnSpan {
@@ -488,46 +584,46 @@ mod tests {
 
     #[test]
     fn select_fields_keeps_only_the_field_range() {
-        let transform = SelectColumns::new(field_span(",", 2..=3));
-        assert_eq!(applied(&transform, "a,bb,ccc,d"), "bb,ccc");
+        let mut transform = SelectColumns::new(field_span(",", 2..=3));
+        assert_eq!(applied(&mut transform, "a,bb,ccc,d"), "bb,ccc");
         //a line with fewer fields than the range start selects nothing
-        assert_eq!(applied(&transform, "a"), "");
+        assert_eq!(applied(&mut transform, "a"), "");
     }
 
     #[test]
     fn delete_fields_removes_an_adjacent_delimiter_too() {
-        let transform = DeleteColumns::new(field_span(",", 2..=2));
-        assert_eq!(applied(&transform, "a,b,c"), "a,c");
+        let mut transform = DeleteColumns::new(field_span(",", 2..=2));
+        assert_eq!(applied(&mut transform, "a,b,c"), "a,c");
         //deleting the last field removes the delimiter before it
-        assert_eq!(applied(&transform, "a,b"), "a");
+        assert_eq!(applied(&mut transform, "a,b"), "a");
     }
 
     #[test]
     fn uppercase_fields_transforms_only_the_field_range() {
-        let transform = MapColumns::uppercase(field_span(",", 2..=2));
-        assert_eq!(applied(&transform, "ab,cd,ef"), "ab,CD,ef");
+        let mut transform = MapColumns::uppercase(field_span(",", 2..=2));
+        assert_eq!(applied(&mut transform, "ab,cd,ef"), "ab,CD,ef");
     }
 
     #[test]
     fn replace_in_fields_is_scoped_to_the_field_range() {
-        let transform =
+        let mut transform =
             ReplaceInColumns::new("x".to_owned(), "Y".to_owned(), field_span(",", 2..=2));
-        assert_eq!(applied(&transform, "x,x,x"), "x,Y,x");
+        assert_eq!(applied(&mut transform, "x,x,x"), "x,Y,x");
     }
 
     #[test]
     fn select_columns_reads_a_list_in_the_written_order() {
-        let transform = SelectColumns::new(char_list(&[5..=6, 1..=2]));
-        assert_eq!(applied(&transform, "abcdef"), "efab");
+        let mut transform = SelectColumns::new(char_list(&[5..=6, 1..=2]));
+        assert_eq!(applied(&mut transform, "abcdef"), "efab");
     }
 
     #[test]
     fn select_fields_permutes_and_rejoins_them() {
-        let transform = SelectColumns::new(field_list(",", &[3..=3, 1..=1]));
-        assert_eq!(applied(&transform, "a,b,c"), "c,a");
+        let mut transform = SelectColumns::new(field_list(",", &[3..=3, 1..=1]));
+        assert_eq!(applied(&mut transform, "a,b,c"), "c,a");
 
         //a missing field is skipped instead of joining a stray delimiter
-        assert_eq!(applied(&transform, "a,b"), "a");
+        assert_eq!(applied(&mut transform, "a,b"), "a");
     }
 
     #[test]
@@ -536,45 +632,91 @@ mod tests {
             output_delimiter: Some(" | ".to_owned()),
             ..FieldSpan::new(",", ColumnList::new(vec![2..=2, 1..=1]))
         });
-        let transform = SelectColumns::new(span);
-        assert_eq!(applied(&transform, "a,b"), "b | a");
+        let mut transform = SelectColumns::new(span);
+        assert_eq!(applied(&mut transform, "a,b"), "b | a");
     }
 
     #[test]
     fn delete_columns_removes_every_part_of_a_list() {
-        let transform = DeleteColumns::new(char_list(&[1..=2, 5..=6]));
-        assert_eq!(applied(&transform, "abcdef"), "cd");
+        let mut transform = DeleteColumns::new(char_list(&[1..=2, 5..=6]));
+        assert_eq!(applied(&mut transform, "abcdef"), "cd");
     }
 
     #[test]
     fn delete_fields_removes_every_part_of_a_list() {
-        let transform = DeleteColumns::new(field_list(",", &[1..=1, 3..=3]));
-        assert_eq!(applied(&transform, "a,b,c"), "b");
+        let mut transform = DeleteColumns::new(field_list(",", &[1..=1, 3..=3]));
+        assert_eq!(applied(&mut transform, "a,b,c"), "b");
 
         //adjacent parts normalize, so `2,3` deletes just like `2-3`
-        let transform = DeleteColumns::new(field_list(",", &[2..=2, 3..=3]));
-        assert_eq!(applied(&transform, "a,b,c"), "a");
+        let mut transform = DeleteColumns::new(field_list(",", &[2..=2, 3..=3]));
+        assert_eq!(applied(&mut transform, "a,b,c"), "a");
     }
 
     #[test]
     fn map_columns_maps_every_part_of_a_list() {
-        let transform = MapColumns::uppercase(char_list(&[1..=1, 3..=3]));
-        assert_eq!(applied(&transform, "abc"), "AbC");
+        let mut transform = MapColumns::uppercase(char_list(&[1..=1, 3..=3]));
+        assert_eq!(applied(&mut transform, "abc"), "AbC");
     }
 
     #[test]
     fn replace_in_columns_covers_every_part_of_a_list() {
-        let transform = ReplaceInColumns::new(
+        let mut transform = ReplaceInColumns::new(
             "x".to_owned(),
             "Y".to_owned(),
             field_list(",", &[1..=1, 3..=3]),
         );
-        assert_eq!(applied(&transform, "x,x,x"), "Y,x,Y");
+        assert_eq!(applied(&mut transform, "x,x,x"), "Y,x,Y");
+    }
+
+    #[test]
+    fn title_case_capitalizes_every_word() {
+        let mut transform = MapColumns::title_case(1..=usize::MAX);
+        assert_eq!(
+            applied(&mut transform, "hello wide WORLD"),
+            "Hello Wide World"
+        );
+        //a word starts after anything that is not alphanumeric
+        assert_eq!(applied(&mut transform, "o'neill-smith"), "O'Neill-Smith");
+        //and Unicode capitalizes like Unicode
+        assert_eq!(
+            applied(&mut transform, "łódź ma ŁADNE ulice"),
+            "Łódź Ma Ładne Ulice"
+        );
+    }
+
+    #[test]
+    fn squeeze_collapses_runs_of_whitespace() {
+        let mut transform = MapColumns::squeeze(1..=usize::MAX);
+        assert_eq!(applied(&mut transform, "a   b\t\tc"), "a b c");
+        //the runs at the ends collapse to one space, for --trim to remove
+        assert_eq!(applied(&mut transform, "   a  "), " a ");
+    }
+
+    #[test]
+    fn number_lines_counts_the_rows_it_is_given() {
+        let mut transform = NumberLines::new("\t");
+        assert_eq!(applied(&mut transform, "a"), "1\ta");
+        assert_eq!(applied(&mut transform, "b"), "2\tb");
+        assert_eq!(applied(&mut transform, "c"), "3\tc");
+    }
+
+    #[test]
+    fn number_lines_numbers_what_the_pipeline_produced() {
+        //wrapping first: each chunk is a row of its own by the time it
+        //reaches the counter, so the numbers stay contiguous
+        let mut pipeline = Pipeline::new(vec![
+            Box::new(WrapLines::new(2)),
+            Box::new(NumberLines::new(".")),
+        ]);
+        assert_eq!(
+            pipeline.apply("abcde"),
+            Lines::Several(vec!["1.ab".to_owned(), "2.cd".to_owned(), "3.e".to_owned()])
+        );
     }
 
     #[test]
     fn wrap_expands_a_long_line_into_several() {
-        let transform = WrapLines::new(3);
+        let mut transform = WrapLines::new(3);
         assert_eq!(
             transform.apply("abcdefg"),
             LineOutcome::Expand(vec!["abc".to_owned(), "def".to_owned(), "g".to_owned()])
@@ -583,14 +725,14 @@ mod tests {
 
     #[test]
     fn wrap_keeps_a_line_that_already_fits() {
-        let transform = WrapLines::new(3);
+        let mut transform = WrapLines::new(3);
         assert_eq!(transform.apply("abc"), LineOutcome::Keep);
         assert_eq!(transform.apply(""), LineOutcome::Keep);
     }
 
     #[test]
     fn drop_empty_drops_only_empty_lines() {
-        let transform = DropEmpty;
+        let mut transform = DropEmpty;
         assert_eq!(transform.apply(""), LineOutcome::Drop);
         assert_eq!(transform.apply("a"), LineOutcome::Keep);
         //whitespace is content; --trim in front of it makes it empty
@@ -599,14 +741,14 @@ mod tests {
 
     #[test]
     fn empty_pipeline_borrows_the_line() {
-        let pipeline = Pipeline::default();
+        let mut pipeline = Pipeline::default();
         assert!(pipeline.is_empty());
         assert_eq!(pipeline.apply("abc"), Lines::One(Cow::Borrowed("abc")));
     }
 
     #[test]
     fn pipeline_applies_transforms_in_order() {
-        let pipeline = Pipeline::new(vec![
+        let mut pipeline = Pipeline::new(vec![
             Box::new(ReplaceInColumns::new(
                 "a".to_owned(),
                 "b".to_owned(),
@@ -620,7 +762,7 @@ mod tests {
     #[test]
     fn pipeline_runs_later_transforms_on_every_expanded_line() {
         //wrapping first, so --upper must reach each of the three chunks
-        let pipeline = Pipeline::new(vec![
+        let mut pipeline = Pipeline::new(vec![
             Box::new(WrapLines::new(2)),
             Box::new(MapColumns::uppercase(1..=usize::MAX)),
         ]);
@@ -633,14 +775,14 @@ mod tests {
     #[test]
     fn pipeline_drops_expanded_lines_one_by_one() {
         //splitting "a,,b" into fields would leave an empty middle line
-        let pipeline = Pipeline::new(vec![Box::new(WrapLines::new(1)), Box::new(DropEmpty)]);
+        let mut pipeline = Pipeline::new(vec![Box::new(WrapLines::new(1)), Box::new(DropEmpty)]);
         assert_eq!(
             pipeline.apply("ab"),
             Lines::Several(vec!["a".to_owned(), "b".to_owned()])
         );
 
         //a dropped single line leaves nothing behind
-        let pipeline = Pipeline::new(vec![Box::new(DropEmpty)]);
+        let mut pipeline = Pipeline::new(vec![Box::new(DropEmpty)]);
         assert_eq!(pipeline.apply(""), Lines::Several(Vec::new()));
     }
 }

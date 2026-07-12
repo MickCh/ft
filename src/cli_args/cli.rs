@@ -183,6 +183,32 @@ pub fn cli() -> Command {
                 .help("Trim whitespace at both ends of the column range"),
         )
         .arg(
+            Arg::new("title-case")
+                .long("title-case")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(["upper", "lower", "delete"])
+                .help("Capitalize the first letter of every word in the column range"),
+        )
+        .arg(
+            Arg::new("squeeze")
+                .long("squeeze")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("delete")
+                .help("Collapse runs of whitespace in the column range into single spaces"),
+        )
+        .arg(
+            Arg::new("number")
+                .long("number")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                //numbering the rows and then reordering them would shuffle
+                //the numbers along with the rows
+                .conflicts_with_all(["delete", "sort", "tac", "shuffle"])
+                .help("Number the output rows, like nl"),
+        )
+        .arg(
             Arg::new("split-on")
                 .long("split-on")
                 .required(false)
