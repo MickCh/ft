@@ -56,11 +56,15 @@ One place where the stairway breaks: **`transform`, `predicate` and `file_proces
 
 **Suggested fix:** move the `build_pipeline`/`build_predicate` factories and the `FileProcessor::new` derivation into a composition layer (e.g. `Config` produces the components, or a dedicated `compose` module), and have the engine accept ready-made `Vec<Box<dyn LineTransform>>`, `RangeSpec`, etc. The `text`, `columns` and `ranges` modules are already clean in this respect.
 
+**Status: fixed** — `src/compose.rs` now owns `build_processor`/`build_pipeline`/`build_predicate`; `transform`, `predicate` and `file_processor` no longer import `cli_args`, and `FileProcessor` is a plain struct assembled from ready-made parts.
+
 Second point — **`Config` does not make invalid states unrepresentable**:
 
 - `sort`/`tac`/`shuffle` are three bools whose mutual exclusion is policed by clap, and `FileProcessor::new` re-derives the `Reorder` enum from them anyway. If `Config` held an `Option<ReorderMode>` (and analogously an `Option<SortSpec>`), the invariant would be structural and the `if`/`else if` cascade in `src/file_processor.rs:115` would disappear.
 - `finds: Vec<FindPattern>` + `replace_strings: Vec<String>` are parallel vectors whose equal length is policed by validation. A `Vec<Replacement { find, replace }>` (paired up in `try_from`) would remove both the `FindReplaceCountMismatch` validation as a separate state and the `zip` in `build_pipeline`.
 - `has_column_operation()` (`src/cli_args/config.rs:80`) is a list that must be kept in sync by hand with every new operation — a silent failure point when extending the tool. It would fall out for free from the restructuring above (e.g. "is the list of column operations non-empty").
+
+**Status: mostly fixed** — `Config` now holds `reorder: Option<ReorderMode>` and `replacements: Vec<Replacement>` (the lone-`--find` pipeline state became unrepresentable, and its test disappeared with it); the engine additionally gained a `RowMode` enum replacing the two derived booleans. `has_column_operation()` remains a hand-maintained list, now over fewer inputs.
 
 ## 🟢 Rust idioms
 

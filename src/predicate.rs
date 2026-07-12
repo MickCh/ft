@@ -5,7 +5,6 @@
 
 use regex::Regex;
 
-use crate::cli_args::Config;
 use crate::columns::ColumnSpan;
 use crate::text;
 
@@ -40,17 +39,6 @@ impl LinePredicate for GrepPredicate {
         let within = text::select_columns(line, &self.span.char_range(line));
         self.pattern.is_match(within) != self.invert
     }
-}
-
-/// Build the row filter implied by the configuration, if any.
-pub fn build_predicate(config: &Config) -> Option<Box<dyn LinePredicate>> {
-    config.grep.as_ref().map(|pattern| {
-        Box::new(GrepPredicate::new(
-            pattern.clone(),
-            config.col_span(),
-            config.invert,
-        )) as Box<dyn LinePredicate>
-    })
 }
 
 #[cfg(test)]

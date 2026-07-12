@@ -17,6 +17,25 @@ pub enum FindPattern {
     Regex(Regex),
 }
 
+/// One `--find`/`--replace` pair. Pairing the two arguments up while
+/// building the `Config` makes their positional correspondence
+/// structural instead of an invariant to re-validate downstream.
+#[derive(Debug)]
+pub struct Replacement {
+    pub find: FindPattern,
+    pub replace: String,
+}
+
+/// How the selected rows are reordered (`--sort`, `--tac` or
+/// `--shuffle`). The flags are mutually exclusive on the command line;
+/// the enum makes that exclusivity structural.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReorderMode {
+    Sort { numeric: bool, reverse: bool },
+    Tac,
+    Shuffle,
+}
+
 //the derived Default (no ranges, no operations, stdin to stdout) is a
 //test-only base configuration; real configs always come from TryFrom
 #[cfg_attr(test, derive(Default))]
@@ -26,11 +45,7 @@ pub struct Config {
     pub cols: Option<RangeInclusive<usize>>,
     //`Some` switches `cols` from counting chars to delimited fields
     pub field_delimiter: Option<String>,
-    pub sort: bool,
-    pub numeric_sort: bool,
-    pub reverse_sort: bool,
-    pub tac: bool,
-    pub shuffle: bool,
+    pub reorder: Option<ReorderMode>,
     pub delete: bool,
     pub ignore_case: bool,
     pub upper: bool,
@@ -41,9 +56,8 @@ pub struct Config {
     pub unique: bool,
     //`None` means the input comes from stdin
     pub filename: Option<PathBuf>,
-    //find/replace pairs are zipped by position and applied in order
-    pub finds: Vec<FindPattern>,
-    pub replace_strings: Vec<String>,
+    //find/replace pairs are applied in the order given
+    pub replacements: Vec<Replacement>,
     pub output_filename: Option<PathBuf>,
     pub in_place: bool,
 }
@@ -79,8 +93,8 @@ impl Config {
     /// key (as opposed to a bare `--cols`, which selects the columns).
     pub fn has_column_operation(&self) -> bool {
         self.delete
-            || self.sort
-            || !self.finds.is_empty()
+            || matches!(self.reorder, Some(ReorderMode::Sort { .. }))
+            || !self.replacements.is_empty()
             || self.upper
             || self.lower
             || self.trim
@@ -107,7 +121,7 @@ impl TryFrom<ArgMatches> for Config {
             })
             .transpose()?;
         let regex_mode = matches.get_flag("regex");
-        let finds = matches
+        let find_patterns = matches
             .get_many::<String>("find")
             .into_iter()
             .flatten()
@@ -124,6 +138,44 @@ impl TryFrom<ArgMatches> for Config {
                 }
             })
             .collect::<Result<Vec<FindPattern>, ConfigError>>()?;
+        let replace_strings: Vec<String> = matches
+            .get_many::<String>("replace")
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect();
+
+        //--find and --replace pair up positionally, so their counts must
+        //match; a lone --find (or --replace) has no partner and is rejected
+        //rather than silently ignored
+        match (find_patterns.len(), replace_strings.len()) {
+            (0, 0) => {}
+            (0, _) => return Err(ConfigError::MissingFindForReplace),
+            (_, 0) => return Err(ConfigError::MissingReplaceForFind),
+            (finds, replaces) if finds != replaces => {
+                return Err(ConfigError::FindReplaceCountMismatch { finds, replaces });
+            }
+            _ => {}
+        }
+        let replacements = find_patterns
+            .into_iter()
+            .zip(replace_strings)
+            .map(|(find, replace)| Replacement { find, replace })
+            .collect();
+
+        //clap conflict rules keep the three reorder flags mutually exclusive
+        let reorder = if matches.get_flag("sort") {
+            Some(ReorderMode::Sort {
+                numeric: matches.get_flag("numeric"),
+                reverse: matches.get_flag("reverse"),
+            })
+        } else if matches.get_flag("tac") {
+            Some(ReorderMode::Tac)
+        } else if matches.get_flag("shuffle") {
+            Some(ReorderMode::Shuffle)
+        } else {
+            None
+        };
 
         let config = Config {
             rows: matches
@@ -135,11 +187,7 @@ impl TryFrom<ArgMatches> for Config {
             field_delimiter: matches
                 .get_one::<String>("fields")
                 .cloned(),
-            sort: matches.get_flag("sort"),
-            numeric_sort: matches.get_flag("numeric"),
-            reverse_sort: matches.get_flag("reverse"),
-            tac: matches.get_flag("tac"),
-            shuffle: matches.get_flag("shuffle"),
+            reorder,
             delete: matches.get_flag("delete"),
             ignore_case,
             upper: matches.get_flag("upper"),
@@ -152,33 +200,14 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<String>("filename")
                 .filter(|name| name.as_str() != "-")
                 .map(PathBuf::from),
-            finds,
-            replace_strings: matches
-                .get_many::<String>("replace")
-                .into_iter()
-                .flatten()
-                .cloned()
-                .collect(),
+            replacements,
             output_filename: matches
                 .get_one::<String>("output")
                 .map(PathBuf::from),
             in_place: matches.get_flag("in-place"),
         };
 
-        //--find and --replace pair up positionally, so their counts must
-        //match; a lone --find (or --replace) has no partner and is rejected
-        //rather than silently ignored
-        match (config.finds.len(), config.replace_strings.len()) {
-            (0, 0) => {}
-            (0, _) => return Err(ConfigError::MissingFindForReplace),
-            (_, 0) => return Err(ConfigError::MissingReplaceForFind),
-            (finds, replaces) if finds != replaces => {
-                return Err(ConfigError::FindReplaceCountMismatch { finds, replaces });
-            }
-            _ => {}
-        }
-
-        if !config.finds.is_empty() && config.delete {
+        if !config.replacements.is_empty() && config.delete {
             return Err(ConfigError::ReplaceWithDelete);
         }
 
@@ -189,11 +218,11 @@ impl TryFrom<ArgMatches> for Config {
 
         //deleting whole rows and reordering them is contradictory; with a
         //column range `--delete` removes columns, so reordering is fine
-        if config.delete && config.cols.is_none() && (config.sort || config.tac || config.shuffle) {
+        if config.delete && config.cols.is_none() && config.reorder.is_some() {
             return Err(ConfigError::DeleteWithReorder);
         }
 
-        if config.ignore_case && config.finds.is_empty() && config.grep.is_none() {
+        if config.ignore_case && config.replacements.is_empty() && config.grep.is_none() {
             return Err(ConfigError::IgnoreCaseWithoutPattern);
         }
 
@@ -224,10 +253,9 @@ mod tests {
         assert_eq!(config.filename, Some(PathBuf::from("input.txt")));
         assert!(config.rows.is_none());
         assert!(config.cols.is_none());
-        assert!(!config.sort);
+        assert!(config.reorder.is_none());
         assert!(!config.delete);
-        assert!(config.finds.is_empty());
-        assert!(config.replace_strings.is_empty());
+        assert!(config.replacements.is_empty());
         assert!(config.output_filename.is_none());
     }
 
@@ -252,9 +280,17 @@ mod tests {
 
         assert_eq!(config.rows, Some(RangeSpec::from(2..=4)));
         assert_eq!(config.cols, Some(1..=10));
-        assert!(config.sort);
-        assert!(matches!(config.finds.as_slice(), [FindPattern::Literal(f)] if f == "a"));
-        assert_eq!(config.replace_strings, ["b"]);
+        assert_eq!(
+            config.reorder,
+            Some(ReorderMode::Sort {
+                numeric: false,
+                reverse: false
+            })
+        );
+        assert!(matches!(
+            config.replacements.as_slice(),
+            [Replacement { find: FindPattern::Literal(f), replace }] if f == "a" && replace == "b"
+        ));
         assert_eq!(config.output_filename, Some(PathBuf::from("out.txt")));
     }
 
@@ -318,13 +354,34 @@ mod tests {
         );
 
         let config = config_from(&["ft", "-s", "-n", "--reverse", "input.txt"]).unwrap();
-        assert!(config.sort && config.numeric_sort && config.reverse_sort);
+        assert_eq!(
+            config.reorder,
+            Some(ReorderMode::Sort {
+                numeric: true,
+                reverse: true
+            })
+        );
+    }
+
+    #[test]
+    fn tac_and_shuffle_map_to_reorder_modes() {
+        let config = config_from(&["ft", "--tac", "input.txt"]).unwrap();
+        assert_eq!(config.reorder, Some(ReorderMode::Tac));
+
+        let config = config_from(&["ft", "--shuffle", "input.txt"]).unwrap();
+        assert_eq!(config.reorder, Some(ReorderMode::Shuffle));
     }
 
     #[test]
     fn regex_flag_compiles_find_as_regex() {
         let config = config_from(&["ft", "-e", "-f", r"\d+", "-r", "N", "input.txt"]).unwrap();
-        assert!(matches!(config.finds.as_slice(), [FindPattern::Regex(_)]));
+        assert!(matches!(
+            config.replacements.as_slice(),
+            [Replacement {
+                find: FindPattern::Regex(_),
+                ..
+            }]
+        ));
     }
 
     #[test]
@@ -343,10 +400,13 @@ mod tests {
         ])
         .unwrap();
 
-        assert!(
-            matches!(config.finds.as_slice(), [FindPattern::Literal(x), FindPattern::Literal(y)] if x == "a" && y == "b")
-        );
-        assert_eq!(config.replace_strings, ["1", "2"]);
+        assert!(matches!(
+            config.replacements.as_slice(),
+            [
+                Replacement { find: FindPattern::Literal(x), replace: r1 },
+                Replacement { find: FindPattern::Literal(y), replace: r2 },
+            ] if x == "a" && r1 == "1" && y == "b" && r2 == "2"
+        ));
     }
 
     #[test]
@@ -388,7 +448,13 @@ mod tests {
             "input.txt",
         ])
         .unwrap();
-        let [FindPattern::Regex(pattern)] = config.finds.as_slice() else {
+        let [
+            Replacement {
+                find: FindPattern::Regex(pattern),
+                ..
+            },
+        ] = config.replacements.as_slice()
+        else {
             panic!("expected a regex find pattern");
         };
         assert!(pattern.is_match("ABC"));

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ft::cli_args::{Config, cli};
+use ft::compose;
 use ft::error::AppError;
-use ft::file_processor::FileProcessor;
 
 fn main() -> ExitCode {
     match run() {
@@ -157,7 +157,7 @@ fn process<R: BufRead, W: Write>(
     reader: R,
     writer: &mut W,
 ) -> Result<(), AppError> {
-    FileProcessor::new(config)
+    compose::build_processor(config)
         .run(reader, writer)
         .map_err(AppError::Processing)
 }

@@ -1,5 +1,6 @@
 pub mod cli_args;
 pub mod columns;
+pub mod compose;
 pub mod constants;
 pub mod error;
 pub mod file_processor;

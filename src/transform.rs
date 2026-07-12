@@ -1,13 +1,13 @@
 //! Per-line operations composed into a processing pipeline.
 //!
 //! Each operation implements [`LineTransform`] and works on line content
-//! without its terminator. [`build_pipeline`] derives the pipeline from
-//! the configuration once, so adding a new operation means adding a new
-//! transform here instead of branching inside the processing loop.
+//! without its terminator. The pipeline itself is derived from the
+//! configuration by [`crate::compose`], so adding a new operation means
+//! adding a new transform here instead of branching inside the
+//! processing loop.
 
 use regex::{NoExpand, Regex, RegexBuilder};
 
-use crate::cli_args::{Config, FindPattern};
 use crate::columns::ColumnSpan;
 use crate::text;
 
@@ -185,61 +185,7 @@ impl LineTransform for RegexReplaceInColumns {
     }
 }
 
-/// Build the per-line transform pipeline implied by the configuration.
-pub fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
-    let mut pipeline: Vec<Box<dyn LineTransform>> = Vec::new();
-
-    if config.delete && config.cols.is_some() {
-        pipeline.push(Box::new(DeleteColumns::new(config.col_span())));
-    }
-
-    //with no operation claiming the column range, `--cols` alone
-    //selects the range, mirroring how `--rows` alone selects lines
-    if !config.has_column_operation() && config.cols.is_some() {
-        pipeline.push(Box::new(SelectColumns::new(config.col_span())));
-    }
-
-    //each --find pairs with the --replace at the same position; the
-    //pairs run in order, so a later one can rewrite an earlier result
-    for (find, replace) in config
-        .finds
-        .iter()
-        .zip(&config.replace_strings)
-    {
-        match find {
-            FindPattern::Literal(text) if config.ignore_case => pipeline.push(Box::new(
-                ReplaceInColumnsIgnoreCase::new(text, replace.clone(), config.col_span()),
-            )),
-            FindPattern::Literal(text) => pipeline.push(Box::new(ReplaceInColumns::new(
-                text.clone(),
-                replace.clone(),
-                config.col_span(),
-            ))),
-            FindPattern::Regex(pattern) => pipeline.push(Box::new(RegexReplaceInColumns::new(
-                pattern.clone(),
-                replace.clone(),
-                config.col_span(),
-            ))),
-        }
-    }
-
-    if config.upper {
-        pipeline.push(Box::new(MapColumns::uppercase(config.col_span())));
-    }
-    if config.lower {
-        pipeline.push(Box::new(MapColumns::lowercase(config.col_span())));
-    }
-    if config.trim {
-        pipeline.push(Box::new(MapColumns::trim(config.col_span())));
-    }
-
-    pipeline
-}
-
 #[cfg(test)]
-//tests tweak single flags on a default config; mutating it reads
-//better here than struct-update syntax
-#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -284,24 +230,6 @@ mod tests {
         //columns 4-9 are " mid  ", trimmed to "mid"
         let transform = MapColumns::trim(4..=9);
         assert_eq!(transform.apply("ab  mid   cd"), "ab mid cd");
-    }
-
-    #[test]
-    fn build_pipeline_orders_replace_before_case_transforms() {
-        let mut config = Config::default();
-        config.upper = true;
-        config.finds = vec![FindPattern::Literal("foo".to_owned())];
-        config.replace_strings = vec!["bar".to_owned()];
-
-        let pipeline = build_pipeline(&config);
-        assert_eq!(pipeline.len(), 2);
-        //replace runs first, so the replacement is uppercased too
-        let result = pipeline
-            .iter()
-            .fold("x foo y".to_owned(), |line, transform| {
-                transform.apply(&line)
-            });
-        assert_eq!(result, "X BAR Y");
     }
 
     #[test]
@@ -396,78 +324,5 @@ mod tests {
         let transform =
             ReplaceInColumns::new("x".to_owned(), "Y".to_owned(), field_span(",", 2..=2));
         assert_eq!(transform.apply("x,x,x"), "x,Y,x");
-    }
-
-    #[test]
-    fn build_pipeline_is_empty_by_default() {
-        assert!(build_pipeline(&Config::default()).is_empty());
-    }
-
-    #[test]
-    fn build_pipeline_selects_columns_when_no_other_operation() {
-        let mut config = Config::default();
-        config.cols = Some(5..=10);
-        assert_eq!(build_pipeline(&config).len(), 1);
-    }
-
-    #[test]
-    fn build_pipeline_does_not_select_columns_when_they_key_another_operation() {
-        //sort uses the column range as its key
-        let mut sort_config = Config::default();
-        sort_config.cols = Some(5..=10);
-        sort_config.sort = true;
-        assert!(build_pipeline(&sort_config).is_empty());
-
-        //find/replace is scoped by the column range
-        let mut replace_config = Config::default();
-        replace_config.cols = Some(5..=10);
-        replace_config.finds = vec![FindPattern::Literal("a".to_owned())];
-        replace_config.replace_strings = vec!["b".to_owned()];
-        let pipeline = build_pipeline(&replace_config);
-        assert_eq!(pipeline.len(), 1);
-        assert_eq!(pipeline[0].apply("aaaa aaaa"), "aaaa bbbb");
-    }
-
-    #[test]
-    fn build_pipeline_adds_delete_columns() {
-        let mut config = Config::default();
-        config.delete = true;
-        config.cols = Some(5..=10);
-        assert_eq!(build_pipeline(&config).len(), 1);
-    }
-
-    #[test]
-    fn build_pipeline_ignores_delete_without_columns() {
-        let mut config = Config::default();
-        config.delete = true;
-        assert!(build_pipeline(&config).is_empty());
-    }
-
-    #[test]
-    fn build_pipeline_adds_replace_only_when_find_and_replace_present() {
-        let mut config = Config::default();
-        config.finds = vec![FindPattern::Literal("foo".to_owned())];
-        assert!(build_pipeline(&config).is_empty());
-
-        config.replace_strings = vec!["bar".to_owned()];
-        assert_eq!(build_pipeline(&config).len(), 1);
-    }
-
-    #[test]
-    fn build_pipeline_adds_one_transform_per_find_replace_pair() {
-        let mut config = Config::default();
-        config.finds = vec![
-            FindPattern::Literal("a".to_owned()),
-            FindPattern::Literal("b".to_owned()),
-        ];
-        config.replace_strings = vec!["b".to_owned(), "c".to_owned()];
-
-        let pipeline = build_pipeline(&config);
-        assert_eq!(pipeline.len(), 2);
-        //pairs run in order: a->b then b->c turns "a" into "c"
-        let result = pipeline
-            .iter()
-            .fold("a".to_owned(), |line, transform| transform.apply(&line));
-        assert_eq!(result, "c");
     }
 }
