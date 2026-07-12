@@ -583,6 +583,77 @@ fn in_place_rewrites_the_input_file() {
     assert_eq!(rewritten, "delta BAR\nalpha BAR\ncharlie BAR\nbravo BAR\n");
 }
 
+#[test]
+fn several_files_are_read_as_one_stream() {
+    let first = TempFile::new("multi-a", "a1\na2\n");
+    let second = TempFile::new("multi-b", "b1\nb2\n");
+
+    let stdout = run_ft_stdout(&[first.path_str(), second.path_str()]);
+    assert_eq!(stdout, "a1\na2\nb1\nb2\n");
+
+    //row numbers address the concatenation, like `cat a b | ft`
+    let stdout = run_ft_stdout(&["-R", "2-3", first.path_str(), second.path_str()]);
+    assert_eq!(stdout, "a2\nb1\n");
+}
+
+#[test]
+fn in_place_edits_each_file_on_its_own() {
+    let first = TempFile::new("batch-a", "foo one\nfoo two\n");
+    let second = TempFile::new("batch-b", "foo three\n");
+
+    let stdout = run_ft_stdout(&[
+        "-i",
+        "-f",
+        "foo",
+        "-r",
+        "BAR",
+        first.path_str(),
+        second.path_str(),
+    ]);
+    assert_eq!(stdout, "");
+
+    assert_eq!(
+        fs::read_to_string(first.path_str()).expect("first file vanished"),
+        "BAR one\nBAR two\n"
+    );
+    assert_eq!(
+        fs::read_to_string(second.path_str()).expect("second file vanished"),
+        "BAR three\n"
+    );
+}
+
+#[test]
+fn in_place_numbers_rows_per_file() {
+    //row 1 of each file, not row 1 of the concatenation
+    let first = TempFile::new("batch-rows-a", "a1\na2\n");
+    let second = TempFile::new("batch-rows-b", "b1\nb2\n");
+
+    run_ft_stdout(&["-i", "-d", "-R", "1", first.path_str(), second.path_str()]);
+
+    assert_eq!(
+        fs::read_to_string(first.path_str()).expect("first file vanished"),
+        "a2\n"
+    );
+    assert_eq!(
+        fs::read_to_string(second.path_str()).expect("second file vanished"),
+        "b2\n"
+    );
+}
+
+#[test]
+fn output_aliasing_any_input_is_rejected() {
+    let first = TempFile::new("alias-a", "a\n");
+    let second = TempFile::new("alias-b", "b\n");
+
+    //the output aliases the *second* input, which would be truncated
+    let output = run_ft(&["-o", second.path_str(), first.path_str(), second.path_str()]);
+    assert!(!output.status.success());
+    assert_eq!(
+        fs::read_to_string(second.path_str()).expect("input file vanished"),
+        "b\n"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn in_place_preserves_file_permissions() {

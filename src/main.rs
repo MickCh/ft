@@ -1,9 +1,9 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Write};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use ft::cli_args::{Config, cli};
+use ft::cli_args::{Config, Input, cli};
 use ft::compose;
 use ft::error::AppError;
 
@@ -25,27 +25,32 @@ fn main() -> ExitCode {
 fn run() -> Result<(), AppError> {
     let config = Config::try_from(cli().get_matches())?;
 
-    match (&config.in_place, &config.filename) {
-        //validated in Config: --in-place always has an input file
-        (true, Some(path)) => run_in_place(&config, path),
-        _ => run_streaming(&config),
+    if config.in_place {
+        //validated in Config: --in-place only ever has file inputs, and
+        //each is edited on its own, with its own row numbering
+        return config
+            .input_files()
+            .try_for_each(|path| run_in_place(&config, path));
     }
+    run_streaming(&config)
 }
 
-/// Stream from the configured input (file or stdin) to the configured
-/// output (file or stdout).
+/// Stream the inputs (files, stdin, or both — read one after another as
+/// a single stream) to the configured output (file or stdout).
 fn run_streaming(config: &Config) -> Result<(), AppError> {
-    //`File::create` truncates, so an output aliasing the input would
-    //destroy the data before the first line is read
-    if let (Some(input), Some(output)) = (&config.filename, &config.output_filename)
-        && same_file(input, output)
+    //`File::create` truncates, so an output aliasing any input would
+    //destroy that data before the first line is read
+    if let Some(output) = &config.output_filename
+        && let Some(input) = config
+            .input_files()
+            .find(|input| same_file(input, output))
     {
         return Err(AppError::OutputIsInput {
-            path: output.clone(),
+            path: input.to_path_buf(),
         });
     }
 
-    let reader = open_input(config)?;
+    let reader = open_inputs(config)?;
 
     let mut writer: Box<dyn Write> = match &config.output_filename {
         Some(path) => {
@@ -68,7 +73,7 @@ fn run_streaming(config: &Config) -> Result<(), AppError> {
 /// link being replaced by a regular file. The temporary file inherits
 /// the original's permissions and is synced to disk before the swap.
 fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
-    let reader = open_input(config)?;
+    let reader = open_file(path)?;
     //resolve symlinks so the rename below swaps out the link's target,
     //not the link itself (which would turn it into a regular file)
     let path = &std::fs::canonicalize(path).map_err(|source| replace_error(path, source))?;
@@ -139,17 +144,34 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-fn open_input(config: &Config) -> Result<Box<dyn BufRead>, AppError> {
-    match &config.filename {
-        Some(path) => {
-            let file = File::open(path).map_err(|source| AppError::OpenInput {
-                path: path.clone(),
-                source,
-            })?;
-            Ok(Box::new(BufReader::new(file)))
-        }
-        None => Ok(Box::new(std::io::stdin().lock())),
+/// Open every input and read them as one stream, in the order given —
+/// like `cat`, so a row range addresses the concatenation rather than
+/// each file separately.
+fn open_inputs(config: &Config) -> Result<Box<dyn BufRead>, AppError> {
+    let mut readers: Vec<Box<dyn Read>> = Vec::with_capacity(config.inputs.len());
+    for input in &config.inputs {
+        readers.push(match input {
+            Input::Stdin => Box::new(std::io::stdin()),
+            Input::File(path) => Box::new(open_file(path)?),
+        });
     }
+
+    let chained = readers
+        .into_iter()
+        .reduce(|left, right| Box::new(left.chain(right)))
+        //`Config` guarantees at least one input, but a missing one would
+        //simply be an empty stream rather than a reason to panic
+        .unwrap_or_else(|| Box::new(std::io::empty()));
+
+    Ok(Box::new(BufReader::new(chained)))
+}
+
+fn open_file(path: &Path) -> Result<BufReader<File>, AppError> {
+    let file = File::open(path).map_err(|source| AppError::OpenInput {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(BufReader::new(file))
 }
 
 fn process<R: BufRead, W: Write>(

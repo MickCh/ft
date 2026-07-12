@@ -240,7 +240,11 @@ pub fn cli() -> Command {
         .arg(
             Arg::new("filename")
                 .required(false)
-                .help("Input file; reads standard input when omitted or `-`"),
+                .num_args(1..)
+                .help(
+                    "Input files, read as one stream (--in-place edits each on its own); \
+                     reads standard input when omitted or `-`",
+                ),
         )
 }
 

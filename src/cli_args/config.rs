@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::ArgMatches;
 use regex::{Regex, RegexBuilder};
@@ -35,6 +35,25 @@ pub enum ReorderMode {
     Shuffle,
 }
 
+/// Where input comes from. Standard input is written `-` (or simply
+/// omitted), and is a valid member of a list of inputs — but not one
+/// `--in-place` can edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Input {
+    Stdin,
+    File(PathBuf),
+}
+
+impl Input {
+    /// The file this input reads, if it is one.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Input::Stdin => None,
+            Input::File(path) => Some(path),
+        }
+    }
+}
+
 //the derived Default (no ranges, no operations, stdin to stdout) is a
 //test-only base configuration; real configs always come from TryFrom
 #[cfg_attr(test, derive(Default))]
@@ -66,8 +85,9 @@ pub struct Config {
     pub grep: Option<Regex>,
     pub invert: bool,
     pub unique: bool,
-    //`None` means the input comes from stdin
-    pub filename: Option<PathBuf>,
+    //the inputs, read one after another as a single stream (`--in-place`
+    //edits each file on its own); never empty, as no argument means stdin
+    pub inputs: Vec<Input>,
     //find/replace pairs are applied in the order given
     pub replacements: Vec<Replacement>,
     pub output_filename: Option<PathBuf>,
@@ -141,6 +161,14 @@ impl Config {
     /// Whether `--sort` takes its key from `--cols` (no `--sort-key`).
     fn sort_keys_on_cols(&self) -> bool {
         matches!(self.reorder, Some(ReorderMode::Sort { .. })) && self.sort_key.is_none()
+    }
+
+    /// The files among the inputs, in order. With `--in-place` these are
+    /// all of them (validated), and each is edited on its own.
+    pub fn input_files(&self) -> impl Iterator<Item = &Path> {
+        self.inputs
+            .iter()
+            .filter_map(Input::path)
     }
 }
 
@@ -251,10 +279,7 @@ impl TryFrom<ArgMatches> for Config {
             grep,
             invert: matches.get_flag("invert"),
             unique: matches.get_flag("unique"),
-            filename: matches
-                .get_one::<String>("filename")
-                .filter(|name| name.as_str() != "-")
-                .map(PathBuf::from),
+            inputs: inputs(&matches),
             replacements,
             output_filename: matches
                 .get_one::<String>("output")
@@ -281,11 +306,38 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::IgnoreCaseWithoutPattern);
         }
 
-        if config.in_place && config.filename.is_none() {
+        //--in-place rewrites its inputs, and standard input cannot be
+        //rewritten, so every input has to be a file
+        if config.in_place
+            && config
+                .inputs
+                .iter()
+                .any(|input| input.path().is_none())
+        {
             return Err(ConfigError::InPlaceWithoutFile);
         }
 
         Ok(config)
+    }
+}
+
+/// The inputs named on the command line, in order. No argument (or a
+/// lone `-`) means standard input, so the list is never empty.
+fn inputs(matches: &ArgMatches) -> Vec<Input> {
+    let inputs: Vec<Input> = matches
+        .get_many::<String>("filename")
+        .into_iter()
+        .flatten()
+        .map(|name| match name.as_str() {
+            "-" => Input::Stdin,
+            path => Input::File(PathBuf::from(path)),
+        })
+        .collect();
+
+    if inputs.is_empty() {
+        vec![Input::Stdin]
+    } else {
+        inputs
     }
 }
 
@@ -314,7 +366,7 @@ mod tests {
     fn defaults_when_only_filename_given() {
         let config = config_from(&["ft", "input.txt"]).unwrap();
 
-        assert_eq!(config.filename, Some(PathBuf::from("input.txt")));
+        assert_eq!(config.inputs, [Input::File(PathBuf::from("input.txt"))]);
         assert!(config.rows.is_none());
         assert!(config.cols.is_none());
         assert!(config.reorder.is_none());
@@ -361,10 +413,45 @@ mod tests {
     #[test]
     fn omitted_or_dash_filename_means_stdin() {
         let config = config_from(&["ft"]).unwrap();
-        assert!(config.filename.is_none());
+        assert_eq!(config.inputs, [Input::Stdin]);
 
         let config = config_from(&["ft", "-"]).unwrap();
-        assert!(config.filename.is_none());
+        assert_eq!(config.inputs, [Input::Stdin]);
+    }
+
+    #[test]
+    fn several_filenames_become_several_inputs() {
+        let config = config_from(&["ft", "a.txt", "b.txt"]).unwrap();
+        assert_eq!(
+            config.inputs,
+            [
+                Input::File(PathBuf::from("a.txt")),
+                Input::File(PathBuf::from("b.txt")),
+            ]
+        );
+        assert_eq!(
+            config.input_files().collect::<Vec<_>>(),
+            [Path::new("a.txt"), Path::new("b.txt")]
+        );
+
+        //stdin may sit among the files, and is not one of them
+        let config = config_from(&["ft", "a.txt", "-"]).unwrap();
+        assert_eq!(
+            config.inputs,
+            [Input::File(PathBuf::from("a.txt")), Input::Stdin]
+        );
+        assert_eq!(
+            config.input_files().collect::<Vec<_>>(),
+            [Path::new("a.txt")]
+        );
+    }
+
+    #[test]
+    fn in_place_rejects_stdin_among_the_inputs() {
+        let error = config_from(&["ft", "-i", "a.txt", "-"]).unwrap_err();
+        assert!(matches!(error, ConfigError::InPlaceWithoutFile));
+
+        assert!(config_from(&["ft", "-i", "a.txt", "b.txt"]).is_ok());
     }
 
     #[test]
