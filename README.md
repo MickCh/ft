@@ -40,7 +40,9 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `--wrap <width>` | Wrap every line into chunks of at most `<width>` characters (like `fold -w`) |
 | `--drop-empty` | Drop lines that are empty after the other transforms ran |
 | `-o, --output <file>` | Write to a file instead of stdout |
-| `-i, --in-place` | Edit the input file in place (needs a file, conflicts with `-o`) |
+| `-i, --in-place` | Edit the input files in place (needs files, conflicts with `-o`) |
+| `--backup <suffix>` | Keep a copy of each edited file, with this suffix (requires `--in-place`) |
+| `--dry-run` | Report which files the edit would change, without writing (requires `--in-place`) |
 
 ### Semantics
 
@@ -64,7 +66,9 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - `--unique` keeps the first row per key (the column range, or the whole line without one) and drops later duplicates; combined with `--sort`, "first" means first in sorted order, like `sort -u`.
 - `--sort`, `--tac` and `--shuffle` are mutually exclusive reordering operations; each buffers the selected rows before writing them out. They cannot be combined with `--delete` on whole rows (the rows would be removed, not reordered); combining them with `--delete --cols` is fine, since there `--delete` removes columns.
 - Original line endings (LF or CRLF) are preserved.
-- `--in-place` rewrites the input file itself: the result is written to a temporary file in the same directory and then atomically renamed over the original, so an interrupted run never truncates the input. The original file's permissions are preserved. It needs a real input file (not stdin) and cannot be combined with `--output`.
+- Several input files are read **as one stream**, in the order given (like `cat a b | ft`), so a row range addresses the concatenation. `--in-place` is the exception: it edits each file on its own, so row 1 means row 1 *of each file* — which is what makes `ft -i -f foo -r bar *.txt` a batch edit.
+- `--in-place` rewrites the input file itself: the result is written to a temporary file in the same directory and then atomically renamed over the original, so an interrupted run never truncates the input. The original file's permissions are preserved. It needs real input files (not stdin) and cannot be combined with `--output`.
+- `--backup .bak` keeps the original as `<file>.bak` before the swap; `--dry-run` writes nothing at all and instead reports, per file, whether the edit *would* change it — so a batch edit can be checked before it happens.
 - `--replace` cannot be combined with `--delete`, and `--delete` requires a row or column range.
 
 ### Examples
@@ -154,6 +158,15 @@ ft -s -C 5-12 -o out.txt input.txt
 
 # Edit a file in place (atomic replace)
 ft -i -f foo -r bar input.txt
+
+# Batch edit: every .txt at once, keeping a .bak of each
+ft -i --backup .bak -f foo -r bar *.txt
+
+# Check first what that batch edit would touch, without writing anything
+ft -i --dry-run -f foo -r bar *.txt
+
+# Concatenate several files and process them as one stream
+ft -s a.txt b.txt c.txt
 
 # Use in a pipeline: sort the output of another command
 grep ERROR app.log | ft -s -C 1-19

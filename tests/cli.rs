@@ -584,6 +584,123 @@ fn in_place_rewrites_the_input_file() {
 }
 
 #[test]
+fn backup_keeps_a_copy_of_the_original() {
+    let input = TempFile::new("backup", "foo one\n");
+    let backup = format!("{}.bak", input.path_str());
+
+    run_ft_stdout(&[
+        "-i",
+        "--backup",
+        ".bak",
+        "-f",
+        "foo",
+        "-r",
+        "BAR",
+        input.path_str(),
+    ]);
+
+    assert_eq!(
+        fs::read_to_string(input.path_str()).expect("input file vanished"),
+        "BAR one\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&backup).expect("backup file was not written"),
+        "foo one\n"
+    );
+    let _ = fs::remove_file(&backup);
+}
+
+#[test]
+fn backup_requires_in_place() {
+    let input = TempFile::new("backup-alone", "a\n");
+    let output = run_ft(&["--backup", ".bak", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
+fn dry_run_reports_changes_without_writing() {
+    let input = TempFile::new("dry-run", "foo one\n");
+
+    let stdout = run_ft_stdout(&[
+        "-i",
+        "--dry-run",
+        "-f",
+        "foo",
+        "-r",
+        "BAR",
+        input.path_str(),
+    ]);
+
+    assert!(
+        stdout.contains("would change"),
+        "expected a change report, got {stdout:?}"
+    );
+    //the file itself is untouched
+    assert_eq!(
+        fs::read_to_string(input.path_str()).expect("input file vanished"),
+        "foo one\n"
+    );
+}
+
+#[test]
+fn dry_run_reports_an_unchanged_file() {
+    let input = TempFile::new("dry-run-same", "nothing to find here\n");
+
+    let stdout = run_ft_stdout(&[
+        "-i",
+        "--dry-run",
+        "-f",
+        "foo",
+        "-r",
+        "BAR",
+        input.path_str(),
+    ]);
+    assert!(
+        stdout.contains("unchanged"),
+        "expected an unchanged report, got {stdout:?}"
+    );
+}
+
+#[test]
+fn dry_run_reports_a_shorter_result_as_changed() {
+    //the result is a prefix of the original: comparing byte by byte is
+    //not enough, the leftover input has to count as a difference
+    let input = TempFile::new("dry-run-shorter", "one\ntwo\n");
+
+    let stdout = run_ft_stdout(&["-i", "--dry-run", "-d", "-R", "2", input.path_str()]);
+    assert!(
+        stdout.contains("would change"),
+        "expected a change report, got {stdout:?}"
+    );
+}
+
+#[test]
+fn dry_run_reports_every_file() {
+    let first = TempFile::new("dry-run-multi-a", "foo\n");
+    let second = TempFile::new("dry-run-multi-b", "bar\n");
+
+    let stdout = run_ft_stdout(&[
+        "-i",
+        "--dry-run",
+        "-f",
+        "foo",
+        "-r",
+        "BAZ",
+        first.path_str(),
+        second.path_str(),
+    ]);
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "expected one report per file, got {stdout:?}"
+    );
+    assert!(lines[0].contains("would change"));
+    assert!(lines[1].contains("unchanged"));
+}
+
+#[test]
 fn several_files_are_read_as_one_stream() {
     let first = TempFile::new("multi-a", "a1\na2\n");
     let second = TempFile::new("multi-b", "b1\nb2\n");

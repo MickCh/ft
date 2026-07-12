@@ -13,6 +13,7 @@ pub enum AppError {
     CreateOutput { path: PathBuf, source: io::Error },
     OutputIsInput { path: PathBuf },
     ReplaceInput { path: PathBuf, source: io::Error },
+    Backup { path: PathBuf, source: io::Error },
     Processing(io::Error),
 }
 
@@ -44,6 +45,9 @@ impl fmt::Display for AppError {
                     path.display()
                 )
             }
+            AppError::Backup { path, source } => {
+                write!(f, "Cannot write backup file `{}`: {source}", path.display())
+            }
             AppError::Processing(error) => write!(f, "Processing error: {error}"),
         }
     }
@@ -55,7 +59,8 @@ impl std::error::Error for AppError {
             AppError::InvalidArguments(error) => Some(error),
             AppError::OpenInput { source, .. }
             | AppError::CreateOutput { source, .. }
-            | AppError::ReplaceInput { source, .. } => Some(source),
+            | AppError::ReplaceInput { source, .. }
+            | AppError::Backup { source, .. } => Some(source),
             AppError::OutputIsInput { .. } => None,
             AppError::Processing(error) => Some(error),
         }

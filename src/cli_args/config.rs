@@ -92,6 +92,11 @@ pub struct Config {
     pub replacements: Vec<Replacement>,
     pub output_filename: Option<PathBuf>,
     pub in_place: bool,
+    //`Some` keeps a copy of each edited file, named after it plus this
+    //suffix (`--backup`)
+    pub backup: Option<String>,
+    //report what `--in-place` would change instead of writing it
+    pub dry_run: bool,
 }
 
 impl Config {
@@ -285,6 +290,10 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<String>("output")
                 .map(PathBuf::from),
             in_place: matches.get_flag("in-place"),
+            backup: matches
+                .get_one::<String>("backup")
+                .cloned(),
+            dry_run: matches.get_flag("dry-run"),
         };
 
         if !config.replacements.is_empty() && config.delete {

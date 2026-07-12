@@ -30,9 +30,34 @@ fn run() -> Result<(), AppError> {
         //each is edited on its own, with its own row numbering
         return config
             .input_files()
-            .try_for_each(|path| run_in_place(&config, path));
+            .try_for_each(|path| {
+                if config.dry_run {
+                    report_changes(&config, path)
+                } else {
+                    run_in_place(&config, path)
+                }
+            });
     }
     run_streaming(&config)
+}
+
+/// Process a file without writing anything, reporting whether the edit
+/// would change it — what `--in-place --dry-run` is for.
+fn report_changes(config: &Config, path: &Path) -> Result<(), AppError> {
+    //the file is read twice: once as the input, once as what the result
+    //is compared against
+    let mut comparison = CompareWriter::new(open_file(path)?);
+    process(config, open_file(path)?, &mut comparison)?;
+
+    let verdict = if comparison
+        .differs()
+        .map_err(AppError::Processing)?
+    {
+        "would change"
+    } else {
+        "unchanged"
+    };
+    writeln!(std::io::stdout(), "{}: {verdict}", path.display()).map_err(AppError::Processing)
 }
 
 /// Stream the inputs (files, stdin, or both — read one after another as
@@ -116,6 +141,12 @@ fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
                 .sync_all()
                 .map_err(|source| replace_error(path, source))
         });
+    //the backup is taken from the original, while it is still there, and
+    //before the swap: a failure here must leave the input untouched
+    let result = result.and_then(|()| match &config.backup {
+        Some(suffix) => back_up(path, suffix),
+        None => Ok(()),
+    });
     if let Err(error) = result {
         let _ = std::fs::remove_file(&temp_path);
         return Err(error);
@@ -125,6 +156,21 @@ fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
         let _ = std::fs::remove_file(&temp_path);
         replace_error(path, source)
     })
+}
+
+/// Copy the file about to be edited to a sibling named after it plus
+/// `suffix`, so `notes.txt` with `.bak` is kept as `notes.txt.bak`.
+fn back_up(path: &Path, suffix: &str) -> Result<(), AppError> {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    let backup = PathBuf::from(name);
+
+    std::fs::copy(path, &backup)
+        .map(|_| ())
+        .map_err(|source| AppError::Backup {
+            path: backup,
+            source,
+        })
 }
 
 fn replace_error(path: &Path, source: std::io::Error) -> AppError {
@@ -182,6 +228,68 @@ fn process<R: BufRead, W: Write>(
     compose::build_processor(config)
         .run(reader, writer)
         .map_err(AppError::Processing)
+}
+
+/// A sink that compares what it is asked to write against the bytes of
+/// the file it stands in for, rather than writing them. That is what
+/// `--dry-run` needs: whether the edit would change the file, without
+/// touching it and without holding the result in memory.
+struct CompareWriter<R: Read> {
+    original: R,
+    //as much of the original as the current write covers
+    window: Vec<u8>,
+    differs: bool,
+}
+
+impl<R: Read> CompareWriter<R> {
+    fn new(original: R) -> CompareWriter<R> {
+        CompareWriter {
+            original,
+            window: Vec::new(),
+            differs: false,
+        }
+    }
+
+    /// Whether the result differs from the original — including when the
+    /// original still holds bytes the result never produced (a shorter
+    /// output matches byte for byte up to where it ends).
+    fn differs(&mut self) -> std::io::Result<bool> {
+        if self.differs {
+            return Ok(true);
+        }
+        let mut leftover = [0u8; 1];
+        Ok(self.original.read(&mut leftover)? > 0)
+    }
+}
+
+impl<R: Read> Write for CompareWriter<R> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        //once a difference is found there is nothing left to learn, so
+        //the rest of the output is only counted, not compared
+        if !self.differs {
+            self.window.resize(data.len(), 0);
+            let read = fill(&mut self.original, &mut self.window)?;
+            self.differs = read != data.len() || self.window != data;
+        }
+        //the bytes are consumed either way: they are compared, not written
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Read until `buffer` is full, stopping early only at end of input.
+fn fill<R: Read>(reader: &mut R, buffer: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match reader.read(&mut buffer[filled..])? {
+            0 => break,
+            read => filled += read,
+        }
+    }
+    Ok(filled)
 }
 
 /// A temporary path next to `path` (same directory, so a rename onto

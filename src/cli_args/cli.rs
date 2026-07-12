@@ -238,6 +238,22 @@ pub fn cli() -> Command {
                 .help("Edit the input file in place instead of writing to stdout"),
         )
         .arg(
+            Arg::new("backup")
+                .long("backup")
+                .required(false)
+                .requires("in-place")
+                .value_parser(parse_suffix)
+                .help("Keep a copy of each edited file, with this suffix (requires --in-place)"),
+        )
+        .arg(
+            Arg::new("dry-run")
+                .long("dry-run")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("in-place")
+                .help("Report which files the edit would change, without writing (requires --in-place)"),
+        )
+        .arg(
             Arg::new("filename")
                 .required(false)
                 .num_args(1..)
@@ -312,6 +328,15 @@ fn parse_range_part(part: &str) -> Result<(RangeBound, RangeBound), String> {
 fn parse_delimiter(input: &str) -> Result<String, String> {
     if input.is_empty() {
         return Err("The field delimiter cannot be empty".to_owned());
+    }
+    Ok(input.to_owned())
+}
+
+/// Parse a backup suffix: an empty one would name the file itself, so
+/// the backup would be the very file about to be overwritten.
+fn parse_suffix(input: &str) -> Result<String, String> {
+    if input.is_empty() {
+        return Err("The backup suffix cannot be empty".to_owned());
     }
     Ok(input.to_owned())
 }
