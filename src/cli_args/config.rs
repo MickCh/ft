@@ -98,6 +98,9 @@ pub struct Config {
     pub group_by: Option<ColumnList>,
     pub grep: Option<Regex>,
     pub invert: bool,
+    //answer only whether anything matched: write nothing, and say it
+    //with the exit code
+    pub quiet: bool,
     pub unique: bool,
     //the inputs, read one after another as a single stream (`--in-place`
     //edits each file on its own); never empty, as no argument means stdin
@@ -338,6 +341,7 @@ impl TryFrom<ArgMatches> for Config {
                 .cloned(),
             grep,
             invert: matches.get_flag("invert"),
+            quiet: matches.get_flag("quiet"),
             unique: matches.get_flag("unique"),
             inputs: inputs(&matches),
             replacements,

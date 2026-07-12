@@ -6,10 +6,17 @@ use std::process::ExitCode;
 use ft::cli_args::{Config, Input, cli};
 use ft::compose;
 use ft::error::AppError;
+use ft::file_processor::RunOutcome;
+
+/// Exit codes follow `grep`: 0 when rows matched, 1 when a filter was
+/// given and nothing matched at all, 2 when the run failed outright.
+const NO_MATCH: u8 = 1;
+const FAILURE: u8 = 2;
 
 fn main() -> ExitCode {
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(Verdict::Matched) => ExitCode::SUCCESS,
+        Ok(Verdict::NothingMatched) => ExitCode::from(NO_MATCH),
         //a consumer closing the pipe early (`ft file | head`) ends the
         //output stream normally and is not worth reporting
         Err(AppError::Processing(error)) if error.kind() == ErrorKind::BrokenPipe => {
@@ -17,37 +24,57 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("Error: {error}");
-            ExitCode::FAILURE
+            ExitCode::from(FAILURE)
         }
     }
 }
 
-fn run() -> Result<(), AppError> {
+/// What the run reports back to the shell. Without a `--grep` filter
+/// there is nothing that could fail to match, so a plain transformation
+/// always counts as a match.
+enum Verdict {
+    Matched,
+    NothingMatched,
+}
+
+impl Verdict {
+    fn of(config: &Config, matched: bool) -> Verdict {
+        match config.grep.is_none() || matched {
+            true => Verdict::Matched,
+            false => Verdict::NothingMatched,
+        }
+    }
+}
+
+fn run() -> Result<Verdict, AppError> {
     let config = Config::try_from(cli().get_matches())?;
 
     if config.in_place {
         //validated in Config: --in-place only ever has file inputs, and
         //each is edited on its own, with its own row numbering
-        return config
-            .input_files()
-            .try_for_each(|path| {
-                if config.dry_run {
-                    report_changes(&config, path)
-                } else {
-                    run_in_place(&config, path)
-                }
-            });
+        let mut matched = false;
+        for path in config.input_files() {
+            let outcome = match config.dry_run {
+                true => report_changes(&config, path)?,
+                false => run_in_place(&config, path)?,
+            };
+            //one file matching is enough for the batch to count as a match
+            matched |= outcome.matched;
+        }
+        return Ok(Verdict::of(&config, matched));
     }
-    run_streaming(&config)
+
+    let outcome = run_streaming(&config)?;
+    Ok(Verdict::of(&config, outcome.matched))
 }
 
 /// Process a file without writing anything, reporting whether the edit
 /// would change it — what `--in-place --dry-run` is for.
-fn report_changes(config: &Config, path: &Path) -> Result<(), AppError> {
+fn report_changes(config: &Config, path: &Path) -> Result<RunOutcome, AppError> {
     //the file is read twice: once as the input, once as what the result
     //is compared against
     let mut comparison = CompareWriter::new(open_file(path)?);
-    process(config, open_file(path)?, &mut comparison)?;
+    let outcome = process(config, open_file(path)?, &mut comparison)?;
 
     let verdict = if comparison
         .differs()
@@ -57,12 +84,14 @@ fn report_changes(config: &Config, path: &Path) -> Result<(), AppError> {
     } else {
         "unchanged"
     };
-    writeln!(std::io::stdout(), "{}: {verdict}", path.display()).map_err(AppError::Processing)
+    writeln!(std::io::stdout(), "{}: {verdict}", path.display()).map_err(AppError::Processing)?;
+
+    Ok(outcome)
 }
 
 /// Stream the inputs (files, stdin, or both — read one after another as
 /// a single stream) to the configured output (file or stdout).
-fn run_streaming(config: &Config) -> Result<(), AppError> {
+fn run_streaming(config: &Config) -> Result<RunOutcome, AppError> {
     //`File::create` truncates, so an output aliasing any input would
     //destroy that data before the first line is read
     if let Some(output) = &config.output_filename
@@ -77,15 +106,18 @@ fn run_streaming(config: &Config) -> Result<(), AppError> {
 
     let reader = open_inputs(config)?;
 
-    let mut writer: Box<dyn Write> = match &config.output_filename {
-        Some(path) => {
+    let mut writer: Box<dyn Write> = match (&config.output_filename, config.quiet) {
+        //--quiet asks only whether anything matched: the answer is the
+        //exit code, and the rows themselves go nowhere
+        (_, true) => Box::new(std::io::sink()),
+        (Some(path), _) => {
             let file = File::create(path).map_err(|source| AppError::CreateOutput {
                 path: path.clone(),
                 source,
             })?;
             Box::new(BufWriter::new(file))
         }
-        None => Box::new(BufWriter::new(std::io::stdout())),
+        (None, _) => Box::new(BufWriter::new(std::io::stdout())),
     };
 
     process(config, reader, &mut writer)
@@ -97,7 +129,7 @@ fn run_streaming(config: &Config) -> Result<(), AppError> {
 /// are resolved first, so the link's target is edited instead of the
 /// link being replaced by a regular file. The temporary file inherits
 /// the original's permissions and is synced to disk before the swap.
-fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
+fn run_in_place(config: &Config, path: &Path) -> Result<RunOutcome, AppError> {
     let reader = open_file(path)?;
     //resolve symlinks so the rename below swaps out the link's target,
     //not the link itself (which would turn it into a regular file)
@@ -118,44 +150,45 @@ fn run_in_place(config: &Config, path: &Path) -> Result<(), AppError> {
     })?;
 
     let mut writer = BufWriter::new(temp_file);
-    let processed = process(config, reader, &mut writer);
 
     //finish writing and match the original permissions before renaming,
     //so the temp file holds the whole output and the right mode
-    let result = processed
-        .and_then(|()| {
-            writer
-                .flush()
-                .map_err(AppError::Processing)
-        })
-        .and_then(|()| {
-            std::fs::set_permissions(&temp_path, permissions)
-                .map_err(|source| replace_error(path, source))
-        })
-        .and_then(|()| {
-            //rename is atomic in the namespace but says nothing about
-            //durability: sync so a crash right after the swap cannot
-            //leave an empty or truncated file behind
-            writer
-                .get_ref()
-                .sync_all()
-                .map_err(|source| replace_error(path, source))
-        });
-    //the backup is taken from the original, while it is still there, and
-    //before the swap: a failure here must leave the input untouched
-    let result = result.and_then(|()| match &config.backup {
-        Some(suffix) => back_up(path, suffix),
-        None => Ok(()),
+    let result = process(config, reader, &mut writer).and_then(|outcome| {
+        writer
+            .flush()
+            .map_err(AppError::Processing)?;
+        std::fs::set_permissions(&temp_path, permissions)
+            .map_err(|source| replace_error(path, source))?;
+        //rename is atomic in the namespace but says nothing about
+        //durability: sync so a crash right after the swap cannot
+        //leave an empty or truncated file behind
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|source| replace_error(path, source))?;
+        //the backup is taken from the original, while it is still there,
+        //and before the swap: a failure anywhere above leaves the input
+        //untouched
+        if let Some(suffix) = &config.backup {
+            back_up(path, suffix)?;
+        }
+        Ok(outcome)
     });
-    if let Err(error) = result {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(error);
-    }
+
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(error);
+        }
+    };
 
     std::fs::rename(&temp_path, path).map_err(|source| {
         let _ = std::fs::remove_file(&temp_path);
         replace_error(path, source)
-    })
+    })?;
+
+    Ok(outcome)
 }
 
 /// Copy the file about to be edited to a sibling named after it plus
@@ -224,7 +257,7 @@ fn process<R: BufRead, W: Write>(
     config: &Config,
     reader: R,
     writer: &mut W,
-) -> Result<(), AppError> {
+) -> Result<RunOutcome, AppError> {
     compose::build_processor(config)
         .run(reader, writer)
         .map_err(AppError::Processing)

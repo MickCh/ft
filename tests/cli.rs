@@ -178,6 +178,64 @@ fn trim_and_drop_empty_remove_whitespace_only_lines() {
 }
 
 #[test]
+fn grep_reports_a_match_through_the_exit_code() {
+    let input = TempFile::new("exit-grep", "a ERROR\nb INFO\n");
+
+    //0 when something matched, 1 when nothing did — like grep
+    let output = run_ft(&["-g", "ERROR", input.path_str()]);
+    assert_eq!(output.status.code(), Some(0));
+
+    let output = run_ft(&["-g", "NOTHING", input.path_str()]);
+    assert_eq!(output.status.code(), Some(1));
+    //the rows are still written (there just are none)
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn a_transformation_without_a_filter_always_succeeds() {
+    //nothing to fail to match, so an empty input is not a failure
+    let input = TempFile::new("exit-plain", "");
+    let output = run_ft(&["--upper", input.path_str()]);
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn a_failure_exits_with_two() {
+    //an error is distinguishable from "nothing matched"
+    let output = run_ft(&["-g", "x", "no-such-file.txt"]);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn quiet_answers_with_the_exit_code_alone() {
+    let input = TempFile::new("quiet", "a ERROR\nb INFO\n");
+
+    let output = run_ft(&["-q", "-g", "ERROR", input.path_str()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty(), "--quiet must write nothing");
+
+    let output = run_ft(&["-q", "-g", "NOTHING", input.path_str()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn quiet_requires_grep() {
+    let input = TempFile::new("quiet-alone", "a\n");
+    let output = run_ft(&["-q", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
+fn delete_counts_the_rows_it_removed_as_matches() {
+    //the rows matched — that is why they went
+    let input = TempFile::new("exit-delete", "a ERROR\nb INFO\n");
+    let output = run_ft(&["-d", "-g", "ERROR", input.path_str()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "b INFO\n");
+}
+
+#[test]
 fn number_numbers_the_output_rows() {
     let input = TempFile::new("number", "a\nb\nc\n");
     let stdout = run_ft_stdout(&["--number", input.path_str()]);

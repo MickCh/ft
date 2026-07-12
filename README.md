@@ -30,6 +30,7 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `--unique-key <range>` | Columns keying `--unique`, instead of `--cols` (requires `--unique`) |
 | `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them) |
 | `--invert` | Invert the `--grep` match, like `grep -v` (requires `--grep`) |
+| `-q, --quiet` | Write nothing; say with the exit code whether anything matched (requires `--grep`) |
 | `-f, --find <text>` | Substring to find (repeatable, paired with `--replace`) |
 | `-r, --replace <text>` | Replacement text (repeatable, one per `--find`) |
 | `-e, --regex` | Treat the find pattern as a regular expression (requires `--find`) |
@@ -82,6 +83,22 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - `--in-place` rewrites the input file itself: the result is written to a temporary file in the same directory and then atomically renamed over the original, so an interrupted run never truncates the input. The original file's permissions are preserved. It needs real input files (not stdin) and cannot be combined with `--output`.
 - `--backup .bak` keeps the original as `<file>.bak` before the swap; `--dry-run` writes nothing at all and instead reports, per file, whether the edit *would* change it — so a batch edit can be checked before it happens.
 - `--replace` cannot be combined with `--delete`, and `--delete` requires a row or column range.
+
+### Exit codes
+
+Like `grep`:
+
+| Code | Meaning |
+|---|---|
+| `0` | Rows matched (a run without `--grep` has nothing that could fail to match, so it always succeeds) |
+| `1` | `--grep` was given and no row matched |
+| `2` | The run failed (bad arguments, unreadable file, …) |
+
+A row counts as matched when it lies inside `--rows` *and* satisfies the filter — including the rows a `--delete` removed, since matching is why they went. `--quiet` writes nothing at all and leaves only the exit code, stopping at the first match (`grep -q`), which makes `ft` usable as a condition:
+
+```bash
+if ft -q -g ERROR app.log; then echo "there were errors"; fi
+```
 
 ### Examples
 

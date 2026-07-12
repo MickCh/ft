@@ -27,6 +27,7 @@ pub fn build_processor(config: &Config) -> FileProcessor {
             .then(|| config.unique_key_span()),
         transforms: build_pipeline(config),
         reducer: build_reducer(config),
+        stop_when_matched: config.quiet,
     }
 }
 

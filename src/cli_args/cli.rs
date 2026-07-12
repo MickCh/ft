@@ -321,6 +321,16 @@ pub fn cli() -> Command {
                 .help("Match the find/grep pattern case-insensitively"),
         )
         .arg(
+            Arg::new("quiet")
+                .short('q')
+                .long("quiet")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("grep")
+                .conflicts_with_all(["output", "in-place"])
+                .help("Write nothing; exit 0 if any row matched, 1 if none did (requires --grep)"),
+        )
+        .arg(
             Arg::new("output")
                 .short('o')
                 .long("output")

@@ -34,6 +34,18 @@ struct RunState {
     //the line just written carried no terminator (it was the input's
     //last), so anything written after it needs one put in between
     needs_separator: bool,
+    //at least one row was selected for processing (`RunOutcome::matched`)
+    matched: bool,
+}
+
+/// What a run has to say for itself once it is over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunOutcome {
+    /// Whether any row was selected for processing: it lay inside the
+    /// row range *and* satisfied the predicate. This is what a `grep`-like
+    /// exit code reports, so it counts the rows a `--delete` removed just
+    /// the same — they matched, which is why they went.
+    pub matched: bool,
 }
 
 /// How to order the buffered lines: by which columns, compared
@@ -173,6 +185,9 @@ pub struct FileProcessor {
     /// `Some` summarizes the processed lines instead of writing them
     /// (`--count`, `--sum`, …): the summary replaces the rows.
     pub reducer: Option<Box<dyn LineReducer>>,
+    /// Stop reading as soon as a row matches (`--quiet`, which asks only
+    /// whether anything matches at all).
+    pub stop_when_matched: bool,
 }
 
 impl FileProcessor {
@@ -180,7 +195,11 @@ impl FileProcessor {
     /// row selection, per-line transforms and optional reordering.
     /// Takes `self`: a reducer accumulates into itself, and a processor
     /// is built fresh per input anyway, so there is nothing to reuse.
-    pub fn run<R: BufRead, W: Write>(mut self, mut reader: R, writer: &mut W) -> io::Result<()> {
+    pub fn run<R: BufRead, W: Write>(
+        mut self,
+        mut reader: R,
+        writer: &mut W,
+    ) -> io::Result<RunOutcome> {
         let mut state = RunState::default();
 
         if self.rows.is_absolute() {
@@ -189,8 +208,10 @@ impl FileProcessor {
             let mut line_number = 0usize;
             reader.for_byte_line_with_terminator(|raw_line| {
                 line_number += 1;
-                self.process_line(raw_line, line_number, &rows, &mut state, writer)
-                    .map(|_| true)
+                self.process_line(raw_line, line_number, &rows, &mut state, writer)?;
+                //asked only whether anything matches, there is no reason
+                //to read the rest of the input once something has
+                Ok(!(self.stop_when_matched && state.matched))
             })?;
         } else {
             //end-relative bounds (`~N`) only resolve once the total
@@ -203,6 +224,9 @@ impl FileProcessor {
             let rows = self.rows.resolve(lines.len());
             for (index, raw_line) in lines.iter().enumerate() {
                 self.process_line(raw_line, index + 1, &rows, &mut state, writer)?;
+                if self.stop_when_matched && state.matched {
+                    break;
+                }
             }
         }
 
@@ -212,7 +236,11 @@ impl FileProcessor {
         if let Some(reducer) = &mut self.reducer {
             reducer.finish(writer)?;
         }
-        writer.flush()
+        writer.flush()?;
+
+        Ok(RunOutcome {
+            matched: state.matched,
+        })
     }
 
     fn process_line<W: Write>(
@@ -253,6 +281,10 @@ impl FileProcessor {
             }
             return Ok(());
         }
+
+        //the row lies in the range and satisfied the predicate: it is a
+        //match, whether it is about to be rewritten or deleted
+        state.matched = true;
 
         if self.row_mode.deletes_selected() {
             return Ok(());
