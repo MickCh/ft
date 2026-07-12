@@ -58,6 +58,9 @@ pub struct Config {
     pub upper: bool,
     pub lower: bool,
     pub trim: bool,
+    //`Some` wraps every line into chunks of that many chars
+    pub wrap: Option<usize>,
+    pub drop_empty: bool,
     pub grep: Option<Regex>,
     pub invert: bool,
     pub unique: bool,
@@ -237,6 +240,10 @@ impl TryFrom<ArgMatches> for Config {
             upper: matches.get_flag("upper"),
             lower: matches.get_flag("lower"),
             trim: matches.get_flag("trim"),
+            wrap: matches
+                .get_one::<usize>("wrap")
+                .copied(),
+            drop_empty: matches.get_flag("drop-empty"),
             grep,
             invert: matches.get_flag("invert"),
             unique: matches.get_flag("unique"),

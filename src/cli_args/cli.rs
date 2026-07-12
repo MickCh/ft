@@ -166,6 +166,22 @@ pub fn cli() -> Command {
                 .help("Trim whitespace at both ends of the column range"),
         )
         .arg(
+            Arg::new("wrap")
+                .long("wrap")
+                .required(false)
+                .conflicts_with("delete")
+                .value_parser(parse_width)
+                .help("Wrap every line into chunks of at most this many characters (like fold -w)"),
+        )
+        .arg(
+            Arg::new("drop-empty")
+                .long("drop-empty")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("delete")
+                .help("Drop lines that are empty after the other transforms ran"),
+        )
+        .arg(
             Arg::new("find")
                 .short('f')
                 .long("find")
@@ -286,6 +302,18 @@ fn parse_delimiter(input: &str) -> Result<String, String> {
         return Err("The field delimiter cannot be empty".to_owned());
     }
     Ok(input.to_owned())
+}
+
+/// Parse a wrapping width: a width of 0 would cut the line into
+/// infinitely many empty chunks, so at least one char is required.
+fn parse_width(input: &str) -> Result<usize, String> {
+    let width: usize = input
+        .parse()
+        .map_err(|_| format!("Width `{input}` isn't a number"))?;
+    if width < 1 {
+        return Err("The wrapping width must be at least 1".to_owned());
+    }
+    Ok(width)
 }
 
 fn parse_bound(value: &str) -> Result<RangeBound, String> {

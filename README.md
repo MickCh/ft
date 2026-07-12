@@ -36,6 +36,8 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `--upper` | Convert the column range to uppercase |
 | `--lower` | Convert the column range to lowercase |
 | `--trim` | Trim whitespace at both ends of the column range |
+| `--wrap <width>` | Wrap every line into chunks of at most `<width>` characters (like `fold -w`) |
+| `--drop-empty` | Drop lines that are empty after the other transforms ran |
 | `-o, --output <file>` | Write to a file instead of stdout |
 | `-i, --in-place` | Edit the input file in place (needs a file, conflicts with `-o`) |
 
@@ -54,6 +56,8 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - `--find` and `--replace` may be repeated to run several substitutions: the *n*-th `--find` pairs with the *n*-th `--replace`, and the pairs apply left to right, so a later pair can rewrite what an earlier one produced. Every `--find` must have its own `--replace` and vice versa (a lone `--find` is rejected — use `--grep` to filter rows by content instead).
 - `--grep` filters rows by content, complementing the positional row range: only rows inside `--rows` *and* matching the pattern are processed. With `--delete`, matching rows are deleted instead. The match is scoped to the column range.
 - `--upper`, `--lower` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`.
+- `--wrap` cuts every processed line into chunks of at most `<width>` **characters** — one row in, several rows out. It runs after the other transforms, so the chunks are cut from the finished line. If the input's last line had no terminator, neither does the last chunk.
+- `--drop-empty` removes lines that are empty *after* the transforms ran — which `--grep --invert` cannot do, since a predicate sees the line as it was read. `ft -C 3 --drop-empty` drops the rows too short to reach column 3, and `--trim --drop-empty` drops whitespace-only lines.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
 - `--unique` keeps the first row per key (the column range, or the whole line without one) and drops later duplicates; combined with `--sort`, "first" means first in sorted order, like `sort -u`.
 - `--sort`, `--tac` and `--shuffle` are mutually exclusive reordering operations; each buffers the selected rows before writing them out. They cannot be combined with `--delete` on whole rows (the rows would be removed, not reordered); combining them with `--delete --cols` is fine, since there `--delete` removes columns.
@@ -120,6 +124,13 @@ ft -f cat -r dog -f red -r blue input.txt
 # Uppercase columns 1-3, trim whitespace around every line
 ft --upper -C 1-3 input.txt
 ft --trim input.txt
+
+# Hard-wrap every line at 80 characters (like fold -w 80)
+ft --wrap 80 input.txt
+
+# Drop blank lines; drop rows left empty by cutting a column
+ft --trim --drop-empty input.txt
+ft -C 3 --drop-empty input.txt
 
 # Keep only rows containing ERROR; delete rows that match a pattern
 ft -g ERROR app.log

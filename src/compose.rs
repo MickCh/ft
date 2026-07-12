@@ -8,8 +8,8 @@ use crate::cli_args::{Config, FindPattern, ReorderMode, Replacement};
 use crate::file_processor::{FileProcessor, Reorder, RowMode, SortSpec};
 use crate::predicate::{GrepPredicate, LinePredicate};
 use crate::transform::{
-    DeleteColumns, LineTransform, MapColumns, RegexReplaceInColumns, ReplaceInColumns,
-    ReplaceInColumnsIgnoreCase, SelectColumns,
+    DeleteColumns, DropEmpty, LineTransform, MapColumns, Pipeline, RegexReplaceInColumns,
+    ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns, WrapLines,
 };
 
 /// Assemble the streaming processor implied by the configuration.
@@ -64,7 +64,7 @@ fn build_predicate(config: &Config) -> Option<Box<dyn LinePredicate>> {
 }
 
 /// Build the per-line transform pipeline implied by the configuration.
-fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
+fn build_pipeline(config: &Config) -> Pipeline {
     let mut pipeline: Vec<Box<dyn LineTransform>> = Vec::new();
 
     if config.delete && config.cols.is_some() {
@@ -107,7 +107,18 @@ fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
         pipeline.push(Box::new(MapColumns::trim(config.col_span())));
     }
 
-    pipeline
+    //wrapping comes last of the rewriting transforms, so the chunks are
+    //cut from the finished line rather than from the raw one
+    if let Some(width) = config.wrap {
+        pipeline.push(Box::new(WrapLines::new(width)));
+    }
+    //and dropping empties comes last of all, so it sees what the line
+    //became — `--trim --drop-empty` drops whitespace-only lines
+    if config.drop_empty {
+        pipeline.push(Box::new(DropEmpty));
+    }
+
+    Pipeline::new(pipeline)
 }
 
 #[cfg(test)]
@@ -119,6 +130,7 @@ mod tests {
     use crate::columns::ColumnList;
     use crate::constants::NEW_LINE;
     use crate::ranges::RangeSpec;
+    use crate::transform::Lines;
     use std::io::{self, Cursor};
 
     fn run(config: Config, input: &str) -> String {
@@ -139,6 +151,14 @@ mod tests {
 
     fn sorted(numeric: bool, reverse: bool) -> Option<ReorderMode> {
         Some(ReorderMode::Sort { numeric, reverse })
+    }
+
+    /// The single line a pipeline turns `line` into.
+    fn piped(pipeline: &Pipeline, line: &str) -> String {
+        match pipeline.apply(line) {
+            Lines::One(content) => content.into_owned(),
+            Lines::Several(contents) => panic!("expected a single line, got {contents:?}"),
+        }
     }
 
     #[test]
@@ -542,6 +562,70 @@ mod tests {
     }
 
     #[test]
+    fn wrap_expands_long_lines_into_several() {
+        let mut config = Config::default();
+        config.wrap = Some(3);
+
+        let result = run(config, "abcdefg\nhi\n");
+        assert_eq!(result, "abc\ndef\ng\nhi\n");
+    }
+
+    #[test]
+    fn wrap_keeps_the_terminator_off_the_last_line() {
+        let mut config = Config::default();
+        config.wrap = Some(3);
+
+        //the input's last line carries no terminator, so neither does
+        //the last chunk it expands into — but the chunks before it must
+        //still be separated
+        let result = run(config, "abcdef");
+        assert_eq!(result, format!("abc{NEW_LINE}def"));
+    }
+
+    #[test]
+    fn wrap_runs_after_the_other_transforms() {
+        let mut config = Config::default();
+        config.wrap = Some(2);
+        config.upper = true;
+
+        //the chunks are cut from the finished line, and each is uppercased
+        let result = run(config, "abcde\n");
+        assert_eq!(result, "AB\nCD\nE\n");
+    }
+
+    #[test]
+    fn wrap_combines_with_sort() {
+        let mut config = Config::default();
+        config.wrap = Some(2);
+        config.reorder = sorted(false, false);
+
+        //every chunk is a line of its own by the time the rows reorder
+        let result = run(config, "cd\nab\n");
+        assert_eq!(result, "ab\ncd\n");
+    }
+
+    #[test]
+    fn drop_empty_removes_lines_left_empty_by_a_transform() {
+        let mut config = Config::default();
+        config.cols = Some((3..=3).into());
+        config.drop_empty = true;
+
+        //only the rows that reach column 3 survive the cut
+        let result = run(config, "abc\nx\ndef\n");
+        assert_eq!(result, "c\nf\n");
+    }
+
+    #[test]
+    fn drop_empty_after_trim_removes_whitespace_only_lines() {
+        let mut config = Config::default();
+        config.trim = true;
+        config.drop_empty = true;
+
+        let result = run(config, "a\n   \nb\n\n");
+        assert_eq!(result, "a\nb\n");
+    }
+
+    #[test]
     fn column_list_selects_the_parts_in_the_written_order() {
         let mut config = Config::default();
         config.cols = Some(ColumnList::new(vec![3..=3, 1..=1, 2..=2]));
@@ -668,7 +752,7 @@ mod tests {
         replace_config.replacements = vec![literal("a", "b")];
         let pipeline = build_pipeline(&replace_config);
         assert_eq!(pipeline.len(), 1);
-        assert_eq!(pipeline[0].apply("aaaa aaaa"), "aaaa bbbb");
+        assert_eq!(piped(&pipeline, "aaaa aaaa"), "aaaa bbbb");
     }
 
     #[test]
@@ -695,12 +779,7 @@ mod tests {
         let pipeline = build_pipeline(&config);
         assert_eq!(pipeline.len(), 2);
         //replace runs first, so the replacement is uppercased too
-        let result = pipeline
-            .iter()
-            .fold("x foo y".to_owned(), |line, transform| {
-                transform.apply(&line)
-            });
-        assert_eq!(result, "X BAR Y");
+        assert_eq!(piped(&pipeline, "x foo y"), "X BAR Y");
     }
 
     #[test]
@@ -711,9 +790,6 @@ mod tests {
         let pipeline = build_pipeline(&config);
         assert_eq!(pipeline.len(), 2);
         //pairs run in order: a->b then b->c turns "a" into "c"
-        let result = pipeline
-            .iter()
-            .fold("a".to_owned(), |line, transform| transform.apply(&line));
-        assert_eq!(result, "c");
+        assert_eq!(piped(&pipeline, "a"), "c");
     }
 }

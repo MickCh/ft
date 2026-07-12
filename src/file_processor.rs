@@ -9,10 +9,9 @@ use crate::constants::NEW_LINE;
 use crate::predicate::LinePredicate;
 use crate::ranges::{RangeSet, RangeSpec};
 use crate::text;
-use crate::transform::LineTransform;
+use crate::transform::{Lines, Pipeline};
 
 use bstr::io::BufReadExt;
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io;
 use std::io::{BufRead, Write};
@@ -31,6 +30,9 @@ struct RunState {
     reorder_buffer: Vec<Line>,
     //unique keys already written (`--unique`)
     seen_keys: HashSet<String>,
+    //the line just written carried no terminator (it was the input's
+    //last), so anything written after it needs one put in between
+    needs_separator: bool,
 }
 
 /// How to order the buffered lines: by which columns, compared
@@ -129,6 +131,36 @@ fn key_of(content: &str, span: &ColumnSpan) -> String {
     text::select_ranges(content, &span.read_ranges(content), span.joiner()).into_owned()
 }
 
+/// Write one line of content, terminated as it was on input. An input
+/// line without a terminator is the last one of the file — but it may
+/// have been reordered, or expanded into several lines, so it can end
+/// up with output after it. Rather than looking ahead, the terminator
+/// it owes is only written once something actually follows it.
+fn write_content<W: Write>(
+    content: &str,
+    terminator: &str,
+    state: &mut RunState,
+    writer: &mut W,
+) -> io::Result<()> {
+    write_pending_separator(state, writer)?;
+    writer.write_all(content.as_bytes())?;
+
+    if terminator.is_empty() {
+        state.needs_separator = true;
+    } else {
+        writer.write_all(terminator.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn write_pending_separator<W: Write>(state: &mut RunState, writer: &mut W) -> io::Result<()> {
+    if state.needs_separator {
+        writer.write_all(NEW_LINE.as_bytes())?;
+        state.needs_separator = false;
+    }
+    Ok(())
+}
+
 /// The streaming processor, configured by its fields and assembled by
 /// the composition layer.
 pub struct FileProcessor {
@@ -143,7 +175,7 @@ pub struct FileProcessor {
     /// Key columns for `--unique`; `None` means duplicates are kept.
     pub unique_key_span: Option<ColumnSpan>,
     /// Per-line transforms, applied in order.
-    pub transforms: Vec<Box<dyn LineTransform>>,
+    pub transforms: Pipeline,
 }
 
 impl FileProcessor {
@@ -222,22 +254,34 @@ impl FileProcessor {
             return Ok(());
         }
 
-        let content = self.apply_transforms(content);
+        //a transform may expand the line into several, or drop it
+        match self.transforms.apply(content) {
+            Lines::One(content) => self.emit(&content, terminator, state, writer),
+            Lines::Several(contents) => contents
+                .iter()
+                .try_for_each(|content| self.emit(content, terminator, state, writer)),
+        }
+    }
 
+    /// Write (or buffer, when reordering) one line the pipeline produced.
+    fn emit<W: Write>(
+        &self,
+        content: &str,
+        terminator: &'static str,
+        state: &mut RunState,
+        writer: &mut W,
+    ) -> io::Result<()> {
         if self.reorder.is_some() {
             state.reorder_buffer.push(Line {
-                content: content.into_owned(),
+                content: content.to_owned(),
                 terminator,
             });
-        } else {
-            if !self.passes_unique(&content, &mut state.seen_keys) {
-                return Ok(());
-            }
-            writer.write_all(content.as_bytes())?;
-            writer.write_all(terminator.as_bytes())?;
+            return Ok(());
         }
-
-        Ok(())
+        if !self.passes_unique(content, &mut state.seen_keys) {
+            return Ok(());
+        }
+        write_content(content, terminator, state, writer)
     }
 
     /// Write a line that passes through unchanged (outside the row
@@ -252,6 +296,9 @@ impl FileProcessor {
         writer: &mut W,
     ) -> io::Result<()> {
         self.flush_reordered(state, writer)?;
+        //the raw line carries its own terminator, so it is written as it
+        //was read — but whatever came before it may still owe one
+        write_pending_separator(state, writer)?;
         writer.write_all(raw_line)
     }
 
@@ -265,16 +312,6 @@ impl FileProcessor {
         }
     }
 
-    /// Run the line through the transform pipeline; with no transforms
-    /// configured the content passes through without an allocation.
-    fn apply_transforms<'a>(&self, content: &'a str) -> Cow<'a, str> {
-        self.transforms
-            .iter()
-            .fold(Cow::Borrowed(content), |line, transform| {
-                Cow::Owned(transform.apply(&line))
-            })
-    }
-
     fn flush_reordered<W: Write>(&self, state: &mut RunState, writer: &mut W) -> io::Result<()> {
         let Some(reorder) = &self.reorder else {
             return Ok(());
@@ -282,38 +319,25 @@ impl FileProcessor {
         if state.reorder_buffer.is_empty() {
             return Ok(());
         }
-        let RunState {
-            reorder_buffer,
-            seen_keys,
-            ..
-        } = state;
 
+        let mut buffer = std::mem::take(&mut state.reorder_buffer);
         match reorder {
-            Reorder::Sort(spec) => Self::sort_lines(reorder_buffer, spec),
-            Reorder::Tac => reorder_buffer.reverse(),
+            Reorder::Sort(spec) => Self::sort_lines(&mut buffer, spec),
+            Reorder::Tac => buffer.reverse(),
             Reorder::Shuffle => {
                 use rand::seq::SliceRandom;
-                reorder_buffer.shuffle(&mut rand::rng());
+                buffer.shuffle(&mut rand::rng());
             }
         }
 
-        //`--unique` keeps the first line per key in reordered order
-        let lines: Vec<&Line> = reorder_buffer
-            .iter()
-            .filter(|line| self.passes_unique(&line.content, seen_keys))
-            .collect();
-
-        let last_index = lines.len().saturating_sub(1);
-        for (index, line) in lines.iter().enumerate() {
-            writer.write_all(line.content.as_bytes())?;
-            if !line.terminator.is_empty() {
-                writer.write_all(line.terminator.as_bytes())?;
-            } else if index < last_index {
-                //a line missing its terminator must not glue to the next one
-                writer.write_all(NEW_LINE.as_bytes())?;
+        for line in &buffer {
+            //`--unique` keeps the first line per key in reordered order
+            if !self.passes_unique(&line.content, &mut state.seen_keys) {
+                continue;
             }
+            write_content(&line.content, line.terminator, state, writer)?;
         }
-        state.reorder_buffer.clear();
+
         Ok(())
     }
 

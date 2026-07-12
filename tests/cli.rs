@@ -148,6 +148,36 @@ fn sort_uses_column_range_as_key() {
 }
 
 #[test]
+fn wrap_expands_lines_into_chunks() {
+    let input = TempFile::new("wrap", "abcdefg\nhi\n");
+    let stdout = run_ft_stdout(&["--wrap", "3", input.path_str()]);
+    assert_eq!(stdout, "abc\ndef\ng\nhi\n");
+}
+
+#[test]
+fn wrap_rejects_a_zero_width() {
+    let input = TempFile::new("wrap-zero", "abc\n");
+    let output = run_ft(&["--wrap", "0", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
+fn drop_empty_removes_lines_emptied_by_a_transform() {
+    //cutting column 3 leaves the short row empty, and --drop-empty
+    //removes it — a predicate could not, it runs before the cut
+    let input = TempFile::new("drop-empty", "abc\nx\ndef\n");
+    let stdout = run_ft_stdout(&["-C", "3", "--drop-empty", input.path_str()]);
+    assert_eq!(stdout, "c\nf\n");
+}
+
+#[test]
+fn trim_and_drop_empty_remove_whitespace_only_lines() {
+    let input = TempFile::new("drop-blank", "a\n   \nb\n\n");
+    let stdout = run_ft_stdout(&["--trim", "--drop-empty", input.path_str()]);
+    assert_eq!(stdout, "a\nb\n");
+}
+
+#[test]
 fn column_list_permutes_fields() {
     //an awk-style projection: -F , -C 3,1,2 reorders the fields
     let input = TempFile::new("cols-permute", "a,b,c\nx,y,z\n");

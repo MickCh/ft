@@ -23,6 +23,30 @@ pub fn split_line_terminator(line: &str) -> (&str, &'static str) {
     (line, "")
 }
 
+/// Cut the line into consecutive chunks of at most `width` characters
+/// (like `fold -w`), counting chars rather than bytes. A line that
+/// already fits yields itself, so the result is never empty; a `width`
+/// of 0 would never advance and is rejected before it gets here.
+pub fn wrap_chars(line: &str, width: usize) -> Vec<&str> {
+    debug_assert!(width > 0, "wrapping needs a width of at least one char");
+
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let mut chars = 0usize;
+
+    for (offset, _) in line.char_indices() {
+        if chars == width {
+            chunks.push(&line[start..offset]);
+            start = offset;
+            chars = 0;
+        }
+        chars += 1;
+    }
+    chunks.push(&line[start..]);
+
+    chunks
+}
+
 /// Map a 1-based inclusive char range onto the byte range it occupies
 /// on `line`, clamping the end to the line length. `None` means the
 /// range lies entirely beyond the line (or is inverted) and covers
@@ -227,6 +251,23 @@ mod tests {
         assert_eq!(replace("123", "ABCD", 30..=40), line_str);
         //inverted range built explicitly, `10..=5` literal trips clippy
         assert_eq!(replace("123", "ABCD", RangeInclusive::new(10, 5)), line_str);
+    }
+
+    #[test]
+    fn wrap_chars_cuts_the_line_into_chunks() {
+        assert_eq!(wrap_chars("abcdefg", 3), ["abc", "def", "g"]);
+        //an exact multiple of the width leaves no remainder chunk
+        assert_eq!(wrap_chars("abcdef", 3), ["abc", "def"]);
+        //a line that already fits yields itself
+        assert_eq!(wrap_chars("abc", 3), ["abc"]);
+        assert_eq!(wrap_chars("", 3), [""]);
+    }
+
+    #[test]
+    fn wrap_chars_counts_chars_not_bytes() {
+        //each of these is multi-byte, so a byte-based split would tear
+        //them apart mid-character
+        assert_eq!(wrap_chars("ąłć😊😍😁", 2), ["ął", "ć😊", "😍😁"]);
     }
 
     #[test]
