@@ -14,6 +14,7 @@ use std::borrow::Cow;
 use std::ops::RangeInclusive;
 
 use crate::ranges::RangeSet;
+use crate::text;
 
 /// Column parts as written on the command line, together with their
 /// normalized form. Both are needed: reading honours the written order,
@@ -131,6 +132,14 @@ impl ColumnSpan {
                 Cow::Owned(resolve_fields(line, spec, spec.fields.normalized(), true))
             }
         }
+    }
+
+    /// The content this span selects from the line: its parts read in
+    /// the order written and joined. A span reaching past the line
+    /// selects nothing, like `cut` — which is what makes it a usable
+    /// sort, unique or grouping key on a short line.
+    pub fn select<'a>(&self, line: &'a str) -> Cow<'a, str> {
+        text::select_ranges(line, &self.read_ranges(line), self.joiner())
     }
 
     /// What joins the parts of a selection: the output delimiter in

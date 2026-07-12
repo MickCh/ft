@@ -39,7 +39,16 @@ pub fn cli() -> Command {
         //three will do, so they form one group it can require
         .group(
             ArgGroup::new("column-ranges")
-                .args(["columns", "sort-key", "unique-key"])
+                .args([
+                    "columns",
+                    "sort-key",
+                    "unique-key",
+                    "sum",
+                    "avg",
+                    "min",
+                    "max",
+                    "group-by",
+                ])
                 .multiple(true),
         )
         .arg(
@@ -172,6 +181,70 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
                 .conflicts_with("delete")
                 .help("Trim whitespace at both ends of the column range"),
+        )
+        .arg(
+            Arg::new("split-on")
+                .long("split-on")
+                .required(false)
+                .conflicts_with("delete")
+                .value_parser(parse_delimiter)
+                .help("Split every line at each occurrence of this separator, one row per piece"),
+        )
+        .arg(
+            Arg::new("count")
+                .long("count")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .help("Summarize: how many rows (per --group-by key, if given)"),
+        )
+        .arg(
+            Arg::new("sum")
+                .long("sum")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_list)
+                .help("Summarize: the total of the numbers in these columns"),
+        )
+        .arg(
+            Arg::new("avg")
+                .long("avg")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_list)
+                .help("Summarize: the mean of the numbers in these columns"),
+        )
+        .arg(
+            Arg::new("min")
+                .long("min")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_list)
+                .help("Summarize: the smallest number in these columns"),
+        )
+        .arg(
+            Arg::new("max")
+                .long("max")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_list)
+                .help("Summarize: the largest number in these columns"),
+        )
+        .arg(
+            Arg::new("group-by")
+                .long("group-by")
+                .required(false)
+                .allow_hyphen_values(true)
+                .requires("summary")
+                .value_parser(parse_column_list)
+                .help("Summarize once per distinct value of these columns (requires a summary)"),
+        )
+        //a summary replaces the rows it summarizes, so there is nothing
+        //left for --delete to remove or for a reordering to reorder
+        .group(
+            ArgGroup::new("summary")
+                .args(["count", "sum", "avg", "min", "max"])
+                .multiple(true)
+                .conflicts_with_all(["delete", "sort", "tac", "shuffle"]),
         )
         .arg(
             Arg::new("wrap")

@@ -115,10 +115,7 @@ impl SelectColumns {
 
 impl LineTransform for SelectColumns {
     fn apply(&self, line: &str) -> LineOutcome {
-        LineOutcome::Replace(
-            text::select_ranges(line, &self.span.read_ranges(line), self.span.joiner())
-                .into_owned(),
-        )
+        LineOutcome::Replace(self.span.select(line).into_owned())
     }
 }
 
@@ -315,6 +312,34 @@ impl LineTransform for WrapLines {
                     .collect(),
             ),
         }
+    }
+}
+
+/// Splits the line at every occurrence of a separator, one row in,
+/// several rows out (`tr , '\n'`, but only on the rows being processed).
+pub struct SplitLines {
+    separator: String,
+}
+
+impl SplitLines {
+    pub fn new(separator: impl Into<String>) -> SplitLines {
+        SplitLines {
+            separator: separator.into(),
+        }
+    }
+}
+
+impl LineTransform for SplitLines {
+    fn apply(&self, line: &str) -> LineOutcome {
+        if !line.contains(&self.separator) {
+            //nothing to split on: the line stands as it is
+            return LineOutcome::Keep;
+        }
+        LineOutcome::Expand(
+            line.split(&self.separator)
+                .map(str::to_owned)
+                .collect(),
+        )
     }
 }
 

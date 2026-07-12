@@ -178,6 +178,66 @@ fn trim_and_drop_empty_remove_whitespace_only_lines() {
 }
 
 #[test]
+fn split_on_makes_one_row_per_piece() {
+    let input = TempFile::new("split-on", "a,b,c\nd\n");
+    let stdout = run_ft_stdout(&["--split-on", ",", input.path_str()]);
+    assert_eq!(stdout, "a\nb\nc\nd\n");
+}
+
+#[test]
+fn count_summarizes_the_rows() {
+    let input = TempFile::new("count", "a ERROR\nb INFO\nc ERROR\n");
+
+    let stdout = run_ft_stdout(&["--count", input.path_str()]);
+    assert_eq!(stdout, "3\n");
+
+    //the summary counts what the filters let through
+    let stdout = run_ft_stdout(&["--count", "-g", "ERROR", input.path_str()]);
+    assert_eq!(stdout, "2\n");
+}
+
+#[test]
+fn group_by_summarizes_per_key() {
+    let input = TempFile::new("group-by", "fruit,3\nveg,10\nfruit,4\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "--group-by",
+        "1",
+        "--count",
+        "--sum",
+        "2",
+        "--avg",
+        "2",
+        input.path_str(),
+    ]);
+    //key, count, sum, avg — one row per key, in first-seen order
+    assert_eq!(stdout, "fruit,2,7,3.5\nveg,1,10,10\n");
+}
+
+#[test]
+fn min_and_max_report_the_extremes() {
+    let input = TempFile::new("min-max", "a,3\nb,-1.5\nc,7\n");
+    let stdout = run_ft_stdout(&["-F", ",", "--min", "2", "--max", "2", input.path_str()]);
+    assert_eq!(stdout, "-1.5,7\n");
+}
+
+#[test]
+fn group_by_requires_a_summary() {
+    let input = TempFile::new("group-alone", "a,1\n");
+    let output = run_ft(&["-F", ",", "--group-by", "1", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
+fn a_summary_conflicts_with_reordering() {
+    //a summary replaces the rows, so there is nothing left to sort
+    let input = TempFile::new("count-sort", "a\n");
+    let output = run_ft(&["--count", "-s", input.path_str()]);
+    assert!(!output.status.success());
+}
+
+#[test]
 fn quoted_csv_does_not_split_inside_quotes() {
     let input = TempFile::new("csv-quoted", "a,\"b,c\",d\nx,\"y,z\",w\n");
 

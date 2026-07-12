@@ -8,6 +8,7 @@ use crate::columns::ColumnSpan;
 use crate::constants::NEW_LINE;
 use crate::predicate::LinePredicate;
 use crate::ranges::{RangeSet, RangeSpec};
+use crate::reduce::LineReducer;
 use crate::text;
 use crate::transform::{Lines, Pipeline};
 
@@ -124,13 +125,6 @@ impl Ord for NumericKey {
     }
 }
 
-/// The sort/unique key of a line: the content of its key columns, read
-/// in the order written. A key span beyond the line yields an empty
-/// key, like `cut`.
-fn key_of(content: &str, span: &ColumnSpan) -> String {
-    text::select_ranges(content, &span.read_ranges(content), span.joiner()).into_owned()
-}
-
 /// Write one line of content, terminated as it was on input. An input
 /// line without a terminator is the last one of the file — but it may
 /// have been reordered, or expanded into several lines, so it can end
@@ -176,12 +170,17 @@ pub struct FileProcessor {
     pub unique_key_span: Option<ColumnSpan>,
     /// Per-line transforms, applied in order.
     pub transforms: Pipeline,
+    /// `Some` summarizes the processed lines instead of writing them
+    /// (`--count`, `--sum`, …): the summary replaces the rows.
+    pub reducer: Option<Box<dyn LineReducer>>,
 }
 
 impl FileProcessor {
     /// Stream `reader` line by line into `writer`, applying the configured
     /// row selection, per-line transforms and optional reordering.
-    pub fn run<R: BufRead, W: Write>(&self, mut reader: R, writer: &mut W) -> io::Result<()> {
+    /// Takes `self`: a reducer accumulates into itself, and a processor
+    /// is built fresh per input anyway, so there is nothing to reuse.
+    pub fn run<R: BufRead, W: Write>(mut self, mut reader: R, writer: &mut W) -> io::Result<()> {
         let mut state = RunState::default();
 
         if self.rows.is_absolute() {
@@ -208,11 +207,16 @@ impl FileProcessor {
         }
 
         self.flush_reordered(&mut state, writer)?;
+        //the summary replaces the rows it summarizes, so it is all the
+        //output there is
+        if let Some(reducer) = &mut self.reducer {
+            reducer.finish(writer)?;
+        }
         writer.flush()
     }
 
     fn process_line<W: Write>(
-        &self,
+        &mut self,
         raw_line: &[u8],
         line_number: usize,
         rows: &RangeSet,
@@ -263,9 +267,9 @@ impl FileProcessor {
         }
     }
 
-    /// Write (or buffer, when reordering) one line the pipeline produced.
+    /// Write (or buffer, or summarize) one line the pipeline produced.
     fn emit<W: Write>(
-        &self,
+        &mut self,
         content: &str,
         terminator: &'static str,
         state: &mut RunState,
@@ -279,6 +283,11 @@ impl FileProcessor {
             return Ok(());
         }
         if !self.passes_unique(content, &mut state.seen_keys) {
+            return Ok(());
+        }
+        //a reducer swallows the line: only its summary reaches the writer
+        if let Some(reducer) = &mut self.reducer {
+            reducer.accept(content);
             return Ok(());
         }
         write_content(content, terminator, state, writer)
@@ -308,7 +317,7 @@ impl FileProcessor {
     fn passes_unique(&self, content: &str, seen_keys: &mut HashSet<String>) -> bool {
         match &self.unique_key_span {
             None => true,
-            Some(span) => seen_keys.insert(key_of(content, span)),
+            Some(span) => seen_keys.insert(span.select(content).into_owned()),
         }
     }
 
@@ -344,7 +353,12 @@ impl FileProcessor {
     fn sort_lines(buffer: &mut [Line], spec: &SortSpec) {
         //`Reverse` keeps the sort stable in descending order too
         use std::cmp::Reverse;
-        let text_key = |line: &Line| key_of(&line.content, &spec.key_span);
+        //a key span beyond the line yields an empty key, like `cut`
+        let text_key = |line: &Line| {
+            spec.key_span
+                .select(&line.content)
+                .into_owned()
+        };
         match (spec.numeric, spec.reverse) {
             (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
             (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),

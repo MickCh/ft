@@ -5,11 +5,13 @@
 //! CLI layer never constructs engine internals itself.
 
 use crate::cli_args::{Config, FindPattern, ReorderMode, Replacement};
+use crate::columns::{ColumnList, ColumnSpan};
 use crate::file_processor::{FileProcessor, Reorder, RowMode, SortSpec};
 use crate::predicate::{GrepPredicate, LinePredicate};
+use crate::reduce::{Aggregate, LineReducer, Summarize};
 use crate::transform::{
     DeleteColumns, DropEmpty, LineTransform, MapColumns, Pipeline, RegexReplaceInColumns,
-    ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns, WrapLines,
+    ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns, SplitLines, WrapLines,
 };
 
 /// Assemble the streaming processor implied by the configuration.
@@ -23,7 +25,54 @@ pub fn build_processor(config: &Config) -> FileProcessor {
             .unique
             .then(|| config.unique_key_span()),
         transforms: build_pipeline(config),
+        reducer: build_reducer(config),
     }
+}
+
+/// Build the summary implied by the configuration, if any: the
+/// aggregates asked for, keyed by `--group-by` when it is given.
+fn build_reducer(config: &Config) -> Option<Box<dyn LineReducer>> {
+    let aggregates = build_aggregates(config);
+    if aggregates.is_empty() {
+        return None;
+    }
+
+    let key_span = config
+        .group_by
+        .clone()
+        .map(|columns| config.span_for(columns));
+
+    Some(Box::new(Summarize::new(
+        key_span,
+        aggregates,
+        config.summary_separator(),
+    )))
+}
+
+/// One statistic flag: the columns it reads, and what it computes.
+type Statistic<'a> = (&'a Option<ColumnList>, fn(ColumnSpan) -> Aggregate);
+
+/// The summary columns, in the order they are printed: the row count
+/// first, then each statistic in the order the flags are declared.
+fn build_aggregates(config: &Config) -> Vec<Aggregate> {
+    let mut aggregates = Vec::new();
+
+    if config.count {
+        aggregates.push(Aggregate::Count);
+    }
+    let statistics: [Statistic; 4] = [
+        (&config.sum, Aggregate::Sum),
+        (&config.avg, Aggregate::Avg),
+        (&config.min, Aggregate::Min),
+        (&config.max, Aggregate::Max),
+    ];
+    for (columns, aggregate) in statistics {
+        if let Some(columns) = columns {
+            aggregates.push(aggregate(config.span_for(columns.clone())));
+        }
+    }
+
+    aggregates
 }
 
 /// How rows inside vs outside the row range are treated.
@@ -107,6 +156,12 @@ fn build_pipeline(config: &Config) -> Pipeline {
         pipeline.push(Box::new(MapColumns::trim(config.col_span())));
     }
 
+    //splitting comes after the rewriting transforms (they are scoped to
+    //columns of the original line) and before wrapping, which then cuts
+    //each piece to width
+    if let Some(separator) = &config.split_on {
+        pipeline.push(Box::new(SplitLines::new(separator.clone())));
+    }
     //wrapping comes last of the rewriting transforms, so the chunks are
     //cut from the finished line rather than from the raw one
     if let Some(width) = config.wrap {
@@ -623,6 +678,81 @@ mod tests {
 
         let result = run(config, "a\n   \nb\n\n");
         assert_eq!(result, "a\nb\n");
+    }
+
+    #[test]
+    fn split_on_expands_a_line_into_one_row_per_piece() {
+        let mut config = Config::default();
+        config.split_on = Some(",".to_owned());
+
+        let result = run(config, "a,b,c\nd\n");
+        assert_eq!(result, "a\nb\nc\nd\n");
+    }
+
+    #[test]
+    fn split_on_combines_with_a_row_range() {
+        let mut config = Config::default();
+        config.split_on = Some(",".to_owned());
+        config.rows = Some((1..=1).into());
+
+        //only the selected row is split; row 2 is not even output
+        let result = run(config, "a,b\nc,d\n");
+        assert_eq!(result, "a\nb\n");
+    }
+
+    #[test]
+    fn count_replaces_the_rows_with_their_number() {
+        let mut config = Config::default();
+        config.count = true;
+
+        let result = run(config, "a\nb\nc\n");
+        assert_eq!(result, "3\n");
+    }
+
+    #[test]
+    fn count_counts_only_the_rows_that_survive_the_filters() {
+        let mut config = Config::default();
+        config.count = true;
+        config.grep = Some(regex::Regex::new("ERROR").unwrap());
+
+        //a reducer sees the rows the pipeline let through, no others
+        let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
+        assert_eq!(result, "2\n");
+    }
+
+    #[test]
+    fn group_by_summarizes_each_key() {
+        let mut config = Config::default();
+        config.field_delimiter = Some(",".to_owned());
+        config.group_by = Some((1..=1).into());
+        config.count = true;
+        config.sum = Some((2..=2).into());
+
+        let result = run(config, "a,1\nb,10\na,3\n");
+        //one row per key, in first-seen order: key, count, sum
+        assert_eq!(result, "a,2,4\nb,1,10\n");
+    }
+
+    #[test]
+    fn summary_columns_are_separated_by_a_tab_in_char_mode() {
+        let mut config = Config::default();
+        config.count = true;
+        config.sum = Some((1..=2).into());
+
+        //no delimiter to inherit, so the summary falls back to a tab
+        let result = run(config, "10\n20\n");
+        assert_eq!(result, "2\t30\n");
+    }
+
+    #[test]
+    fn unique_and_count_together_count_the_distinct_rows() {
+        let mut config = Config::default();
+        config.unique = true;
+        config.count = true;
+
+        //--unique drops the duplicates before the reducer sees them
+        let result = run(config, "a\nb\na\nc\n");
+        assert_eq!(result, "3\n");
     }
 
     #[test]

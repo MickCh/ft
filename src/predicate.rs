@@ -6,7 +6,6 @@
 use regex::Regex;
 
 use crate::columns::ColumnSpan;
-use crate::text;
 
 /// A content-based test applied to each line within the row range.
 /// In selection mode failing lines are dropped; in delete mode they
@@ -36,7 +35,7 @@ impl GrepPredicate {
 
 impl LinePredicate for GrepPredicate {
     fn matches(&self, line: &str) -> bool {
-        let within = text::select_ranges(line, &self.span.read_ranges(line), self.span.joiner());
+        let within = self.span.select(line);
         self.pattern.is_match(&within) != self.invert
     }
 }

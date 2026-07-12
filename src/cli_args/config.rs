@@ -79,9 +79,19 @@ pub struct Config {
     pub trim: bool,
     //--fields splits on the delimiter even inside quotes unless set
     pub quoted: bool,
+    //`Some` splits every line at each occurrence of the separator
+    pub split_on: Option<String>,
     //`Some` wraps every line into chunks of that many chars
     pub wrap: Option<usize>,
     pub drop_empty: bool,
+    //the summary to write instead of the processed rows: how many rows
+    //(`--count`) and statistics over a column, optionally per group
+    pub count: bool,
+    pub sum: Option<ColumnList>,
+    pub avg: Option<ColumnList>,
+    pub min: Option<ColumnList>,
+    pub max: Option<ColumnList>,
+    pub group_by: Option<ColumnList>,
     pub grep: Option<Regex>,
     pub invert: bool,
     pub unique: bool,
@@ -130,6 +140,23 @@ impl Config {
     /// `--cols` otherwise.
     pub fn unique_key_span(&self) -> ColumnSpan {
         self.span_of(self.unique_key.clone())
+    }
+
+    /// The span of an explicit column list (a `--sum` column, a
+    /// `--group-by` key), in the same char or field mode as every other
+    /// column range.
+    pub fn span_for(&self, columns: ColumnList) -> ColumnSpan {
+        self.span_of(Some(columns))
+    }
+
+    /// What separates the columns of a summary row: the output
+    /// delimiter, then the input one, and a tab when neither says
+    /// otherwise (in char mode there is no delimiter to inherit).
+    pub fn summary_separator(&self) -> String {
+        self.output_delimiter
+            .clone()
+            .or_else(|| self.field_delimiter.clone())
+            .unwrap_or_else(|| "\t".to_owned())
     }
 
     /// Turn a column list into a span, falling back to `--cols` (and
@@ -277,10 +304,29 @@ impl TryFrom<ArgMatches> for Config {
             lower: matches.get_flag("lower"),
             trim: matches.get_flag("trim"),
             quoted: matches.get_flag("quoted"),
+            split_on: matches
+                .get_one::<String>("split-on")
+                .cloned(),
             wrap: matches
                 .get_one::<usize>("wrap")
                 .copied(),
             drop_empty: matches.get_flag("drop-empty"),
+            count: matches.get_flag("count"),
+            sum: matches
+                .get_one::<ColumnList>("sum")
+                .cloned(),
+            avg: matches
+                .get_one::<ColumnList>("avg")
+                .cloned(),
+            min: matches
+                .get_one::<ColumnList>("min")
+                .cloned(),
+            max: matches
+                .get_one::<ColumnList>("max")
+                .cloned(),
+            group_by: matches
+                .get_one::<ColumnList>("group-by")
+                .cloned(),
             grep,
             invert: matches.get_flag("invert"),
             unique: matches.get_flag("unique"),

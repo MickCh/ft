@@ -37,8 +37,14 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | `--upper` | Convert the column range to uppercase |
 | `--lower` | Convert the column range to lowercase |
 | `--trim` | Trim whitespace at both ends of the column range |
+| `--split-on <sep>` | Split every line at each occurrence of `<sep>`, one row per piece |
 | `--wrap <width>` | Wrap every line into chunks of at most `<width>` characters (like `fold -w`) |
 | `--drop-empty` | Drop lines that are empty after the other transforms ran |
+| `--count` | Summarize: how many rows |
+| `--sum <cols>` | Summarize: the total of the numbers in those columns |
+| `--avg <cols>` | Summarize: the mean of the numbers in those columns |
+| `--min <cols>` / `--max <cols>` | Summarize: the smallest / largest number in those columns |
+| `--group-by <cols>` | Summarize once per distinct value of those columns (requires a summary) |
 | `-o, --output <file>` | Write to a file instead of stdout |
 | `-i, --in-place` | Edit the input files in place (needs files, conflicts with `-o`) |
 | `--backup <suffix>` | Keep a copy of each edited file, with this suffix (requires `--in-place`) |
@@ -61,6 +67,8 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 - `--grep` filters rows by content, complementing the positional row range: only rows inside `--rows` *and* matching the pattern are processed. With `--delete`, matching rows are deleted instead. The match is scoped to the column range.
 - `--upper`, `--lower` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`.
 - `--wrap` cuts every processed line into chunks of at most `<width>` **characters** — one row in, several rows out. It runs after the other transforms, so the chunks are cut from the finished line. If the input's last line had no terminator, neither does the last chunk.
+- `--split-on` cuts every processed line at each occurrence of the separator, turning one row into one row per piece (`tr , '\n'`, but only on the rows being processed). It runs after the column-scoped transforms and before `--wrap`.
+- **Summaries** (`--count`, `--sum`, `--avg`, `--min`, `--max`) *replace* the rows they summarize: the rows are consumed and only the summary is printed. They see exactly the rows that survive `--rows`, `--grep` and `--unique`, so `--unique --count` counts the distinct rows. Add `--group-by <cols>` for one summary row per distinct key, printed in the order the keys first appear. The output columns are the key (if any), then the count, sum, avg, min and max that were asked for, separated by `--output-delimiter`, else `--fields`, else a tab. A value that is not a number takes no part in the statistics (it is not a zero), so a group with no numbers at all shows an empty average, minimum and maximum. Summaries cannot be combined with `--delete` or a reordering, which would have nothing left to act on.
 - `--drop-empty` removes lines that are empty *after* the transforms ran — which `--grep --invert` cannot do, since a predicate sees the line as it was read. `ft -C 3 --drop-empty` drops the rows too short to reach column 3, and `--trim --drop-empty` drops whitespace-only lines.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines.
 - `--unique` keeps the first row per key (the column range, or the whole line without one) and drops later duplicates; combined with `--sort`, "first" means first in sorted order, like `sort -u`.
@@ -137,6 +145,17 @@ ft --trim input.txt
 
 # Hard-wrap every line at 80 characters (like fold -w 80)
 ft --wrap 80 input.txt
+
+# Explode a comma-separated row into one row per value
+ft --split-on , input.txt
+
+# Summaries: count the rows, count only the errors, count the distinct ones
+ft --count input.txt
+ft --count -g ERROR app.log
+ft --unique --count input.txt
+
+# Per-key statistics (like a small datamash): total and mean of field 2 per field 1
+ft -F , --group-by 1 --count --sum 2 --avg 2 data.csv
 
 # Drop blank lines; drop rows left empty by cutting a column
 ft --trim --drop-empty input.txt
