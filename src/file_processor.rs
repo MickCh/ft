@@ -299,7 +299,9 @@ impl FileProcessor {
         }
     }
 
-    /// Write (or buffer, or summarize) one line the pipeline produced.
+    /// Take one line the pipeline produced. Reordering holds it back —
+    /// its place is not known until the run of selected rows ends — and
+    /// everything else about it is settled later, on the way out.
     fn emit<W: Write>(
         &mut self,
         content: &str,
@@ -314,11 +316,24 @@ impl FileProcessor {
             });
             return Ok(());
         }
+        self.output(content, terminator, state, writer)
+    }
+
+    /// Put out one line, in the order it is to appear: dropped by
+    /// `--unique`, swallowed by a reducer (what reaches the writer is
+    /// then whatever the reducer makes of the rows) or written as it is.
+    /// Reordered lines take this path too, once their order is known, so
+    /// a reducer sees them in the order they are put out.
+    fn output<W: Write>(
+        &mut self,
+        content: &str,
+        terminator: &str,
+        state: &mut RunState,
+        writer: &mut W,
+    ) -> io::Result<()> {
         if !self.passes_unique(content, &mut state.seen_keys) {
             return Ok(());
         }
-        //a reducer swallows the line: what reaches the writer is whatever
-        //it makes of the rows, not the rows themselves
         if let Some(reducer) = &mut self.reducer {
             return reducer.accept(content, writer);
         }
@@ -331,7 +346,7 @@ impl FileProcessor {
     /// flushed first — each contiguous run of selected rows reorders
     /// in place instead of drifting past the kept lines.
     fn write_kept_line<W: Write>(
-        &self,
+        &mut self,
         raw_line: &[u8],
         state: &mut RunState,
         writer: &mut W,
@@ -353,7 +368,11 @@ impl FileProcessor {
         }
     }
 
-    fn flush_reordered<W: Write>(&self, state: &mut RunState, writer: &mut W) -> io::Result<()> {
+    fn flush_reordered<W: Write>(
+        &mut self,
+        state: &mut RunState,
+        writer: &mut W,
+    ) -> io::Result<()> {
         let Some(reorder) = &self.reorder else {
             return Ok(());
         };
@@ -371,12 +390,11 @@ impl FileProcessor {
             }
         }
 
+        //the order is settled: the lines now take the same way out as the
+        //ones that never needed reordering, so `--unique` keeps the first
+        //per key in reordered order and a reducer sees them in that order
         for line in &buffer {
-            //`--unique` keeps the first line per key in reordered order
-            if !self.passes_unique(&line.content, &mut state.seen_keys) {
-                continue;
-            }
-            write_content(&line.content, line.terminator, state, writer)?;
+            self.output(&line.content, line.terminator, state, writer)?;
         }
 
         Ok(())

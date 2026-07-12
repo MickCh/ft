@@ -752,6 +752,31 @@ mod tests {
     }
 
     #[test]
+    fn reorder_feeds_the_reducer_in_reordered_order() {
+        //the reorder buffer drains through the same path as streamed
+        //lines, so a reducer sees the rows in their final order
+        let mut config = Config::default();
+        config.reorder = sorted(false, false);
+        config.join = Some(",".to_owned());
+
+        let result = run(config, "c\na\nb\n");
+        assert_eq!(result, format!("a,b,c{NEW_LINE}"));
+    }
+
+    #[test]
+    fn sort_with_group_by_reports_groups_in_sorted_order() {
+        let mut config = Config::default();
+        config.field_delimiter = Some(",".to_owned());
+        config.reorder = sorted(false, false);
+        config.group_by = Some((1..=1).into());
+        config.sum = Some((2..=2).into());
+
+        //unsorted, "b" would be seen (and reported) first
+        let result = run(config, "b,1\na,2\nb,3\n");
+        assert_eq!(result, "a,2\nb,4\n");
+    }
+
+    #[test]
     fn count_replaces_the_rows_with_their_number() {
         let mut config = Config::default();
         config.count = true;

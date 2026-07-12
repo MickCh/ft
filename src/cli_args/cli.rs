@@ -221,11 +221,9 @@ pub fn cli() -> Command {
                 .long("join")
                 .required(false)
                 //a reducer consumes the rows, and there is only one set of
-                //them: --join and a summary cannot both have it
-                .conflicts_with_all([
-                    "count", "sum", "avg", "min", "max", "delete", "sort", "tac", "shuffle",
-                    "number",
-                ])
+                //them: --join and a summary cannot both have it. Numbering
+                //them would number rows nobody ever sees
+                .conflicts_with_all(["count", "sum", "avg", "min", "max", "delete", "number"])
                 .value_parser(parse_delimiter)
                 .help("Join every row into a single row, separated by this (like paste -s)"),
         )
@@ -278,12 +276,14 @@ pub fn cli() -> Command {
                 .help("Summarize once per distinct value of these columns (requires a summary)"),
         )
         //a summary replaces the rows it summarizes, so there is nothing
-        //left for --delete to remove or for a reordering to reorder
+        //left for --delete to remove, nor any rows to number. Reordering
+        //is fine: a reducer takes the rows in the order they come out, so
+        //`--sort --group-by` reports the groups in sorted order
         .group(
             ArgGroup::new("summary")
                 .args(["count", "sum", "avg", "min", "max"])
                 .multiple(true)
-                .conflicts_with_all(["delete", "sort", "tac", "shuffle"]),
+                .conflicts_with_all(["delete", "number"]),
         )
         .arg(
             Arg::new("wrap")

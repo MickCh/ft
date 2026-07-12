@@ -328,10 +328,35 @@ fn group_by_requires_a_summary() {
 }
 
 #[test]
-fn a_summary_conflicts_with_reordering() {
-    //a summary replaces the rows, so there is nothing left to sort
-    let input = TempFile::new("count-sort", "a\n");
-    let output = run_ft(&["--count", "-s", input.path_str()]);
+fn sort_feeds_the_reducer_in_sorted_order() {
+    //a reducer takes the rows in the order they come out, so sorting
+    //first reports the groups in sorted order
+    let input = TempFile::new("sort-group", "b,1\na,2\nb,3\na,4\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "-s",
+        "--group-by",
+        "1",
+        "--sum",
+        "2",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "a,6\nb,4\n");
+}
+
+#[test]
+fn sort_and_join_fold_the_rows_in_sorted_order() {
+    let input = TempFile::new("sort-join", "c\na\nb\n");
+    let stdout = run_ft_stdout(&["-s", "--join", ",", input.path_str()]);
+    assert_eq!(stdout.trim_end(), "a,b,c");
+}
+
+#[test]
+fn a_summary_conflicts_with_number() {
+    //a summary consumes the rows, so there is nothing left to number
+    let input = TempFile::new("count-number", "a\n");
+    let output = run_ft(&["--count", "--number", input.path_str()]);
     assert!(!output.status.success());
 }
 
