@@ -116,6 +116,7 @@ fn build_pipeline(config: &Config) -> Vec<Box<dyn LineTransform>> {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+    use crate::columns::ColumnList;
     use crate::constants::NEW_LINE;
     use crate::ranges::RangeSpec;
     use std::io::{self, Cursor};
@@ -159,7 +160,7 @@ mod tests {
         //--delete with columns edits the selected rows in place
         let mut delete_cols = Config::default();
         delete_cols.delete = true;
-        delete_cols.cols = Some(1..=2);
+        delete_cols.cols = Some((1..=2).into());
         assert_eq!(row_mode(&delete_cols), RowMode::EditSelected);
     }
 
@@ -236,7 +237,7 @@ mod tests {
     fn sort_key_beyond_short_lines_is_empty() {
         let mut config = Config::default();
         config.reorder = sorted(false, false);
-        config.cols = Some(5..=6);
+        config.cols = Some((5..=6).into());
 
         //no line reaches column 5: all keys are empty, so the stable
         //sort keeps the input order instead of comparing whole lines
@@ -257,7 +258,7 @@ mod tests {
     fn numeric_reverse_sort_with_column_key() {
         let mut config = Config::default();
         config.reorder = sorted(true, true);
-        config.cols = Some(3..=4);
+        config.cols = Some((3..=4).into());
 
         let result = run(config, "a  2\nb 10\nc  9\n");
         assert_eq!(result, "b 10\nc  9\na  2\n");
@@ -285,7 +286,7 @@ mod tests {
     #[test]
     fn replace_respects_column_boundaries_per_line() {
         let mut config = Config::default();
-        config.cols = Some(7..=9);
+        config.cols = Some((7..=9).into());
         config.replacements = vec![literal("foo", "BAR")];
 
         //"foo" starts at column 7 in the first line and column 9 in the second
@@ -308,7 +309,7 @@ mod tests {
         let mut config = Config::default();
         config.delete = true;
         config.rows = Some((1..=1).into());
-        config.cols = Some(1..=4);
+        config.cols = Some((1..=4).into());
 
         let result = run(config, "one one\ntwo two\n");
         assert_eq!(result, "one\ntwo two\n");
@@ -424,7 +425,7 @@ mod tests {
         //drifting past the kept lines in between
         let mut config = Config::default();
         config.delete = true;
-        config.cols = Some(1..=1);
+        config.cols = Some((1..=1).into());
         config.reorder = Some(ReorderMode::Tac);
         config.rows = Some(RangeSpec::new(vec![
             (FromStart(2), FromStart(3)),
@@ -459,7 +460,7 @@ mod tests {
     fn unique_compares_only_key_columns() {
         let mut config = Config::default();
         config.unique = true;
-        config.cols = Some(1..=1);
+        config.cols = Some((1..=1).into());
 
         //"a1" and "a2" share the key "a", the first one wins
         let result = run(config, "a1\na2\nb1\n");
@@ -470,7 +471,7 @@ mod tests {
     fn unique_dedupes_empty_fields() {
         let mut config = Config::default();
         config.unique = true;
-        config.cols = Some(2..=2);
+        config.cols = Some((2..=2).into());
         config.field_delimiter = Some(",".to_owned());
 
         //"b," and "c," share the empty field 2 as their key
@@ -494,8 +495,8 @@ mod tests {
         let mut config = Config::default();
         config.reorder = sorted(false, false);
         config.field_delimiter = Some(",".to_owned());
-        config.cols = Some(2..=2);
-        config.sort_key = Some(1..=1);
+        config.cols = Some((2..=2).into());
+        config.sort_key = Some((1..=1).into());
         config.replacements = vec![literal("x", "X")];
 
         let result = run(config, "b,x\na,x\n");
@@ -509,8 +510,8 @@ mod tests {
         //the sort key then addresses the cut result
         let mut config = Config::default();
         config.reorder = sorted(false, false);
-        config.cols = Some(3..=5);
-        config.sort_key = Some(1..=1);
+        config.cols = Some((3..=5).into());
+        config.sort_key = Some((1..=1).into());
 
         let result = run(config, "xxb..\nxxa..\n");
         assert_eq!(result, "a..\nb..\n");
@@ -521,8 +522,8 @@ mod tests {
         let mut config = Config::default();
         config.unique = true;
         config.field_delimiter = Some(",".to_owned());
-        config.cols = Some(2..=2);
-        config.unique_key = Some(1..=1);
+        config.cols = Some((2..=2).into());
+        config.unique_key = Some((1..=1).into());
         config.upper = true;
 
         //rows dedupe on field 1, while --upper still works on field 2
@@ -534,16 +535,61 @@ mod tests {
     fn unique_falls_back_to_cols_without_its_own_key() {
         let mut config = Config::default();
         config.unique = true;
-        config.cols = Some(1..=1);
+        config.cols = Some((1..=1).into());
 
         let result = run(config, "a1\na2\nb1\n");
         assert_eq!(result, "a1\nb1\n");
     }
 
     #[test]
+    fn column_list_selects_the_parts_in_the_written_order() {
+        let mut config = Config::default();
+        config.cols = Some(ColumnList::new(vec![3..=3, 1..=1, 2..=2]));
+        config.field_delimiter = Some(",".to_owned());
+
+        //an awk-style projection: fields reordered, rejoined by the delimiter
+        let result = run(config, "a,b,c\nx,y,z\n");
+        assert_eq!(result, "c,a,b\nz,x,y\n");
+    }
+
+    #[test]
+    fn column_list_joins_on_the_output_delimiter() {
+        let mut config = Config::default();
+        config.cols = Some(ColumnList::new(vec![2..=2, 1..=1]));
+        config.field_delimiter = Some(",".to_owned());
+        config.output_delimiter = Some(";".to_owned());
+
+        let result = run(config, "a,b\n");
+        assert_eq!(result, "b;a\n");
+    }
+
+    #[test]
+    fn column_list_deletes_every_part() {
+        let mut config = Config::default();
+        config.delete = true;
+        config.cols = Some(ColumnList::new(vec![1..=1, 3..=3]));
+        config.field_delimiter = Some(",".to_owned());
+
+        let result = run(config, "a,b,c\n");
+        assert_eq!(result, "b\n");
+    }
+
+    #[test]
+    fn column_list_scopes_a_write_to_every_part() {
+        let mut config = Config::default();
+        config.cols = Some(ColumnList::new(vec![1..=1, 3..=3]));
+        config.field_delimiter = Some(",".to_owned());
+        config.upper = true;
+
+        //writing works on the normalized set, so the order is irrelevant
+        let result = run(config, "a,b,c\n");
+        assert_eq!(result, "A,b,C\n");
+    }
+
+    #[test]
     fn field_mode_selects_delimited_fields() {
         let mut config = Config::default();
-        config.cols = Some(2..=2);
+        config.cols = Some((2..=2).into());
         config.field_delimiter = Some(",".to_owned());
 
         let result = run(config, "a,bb,c\nx,yy,z\n");
@@ -554,7 +600,7 @@ mod tests {
     fn field_mode_delete_removes_field_and_delimiter() {
         let mut config = Config::default();
         config.delete = true;
-        config.cols = Some(2..=2);
+        config.cols = Some((2..=2).into());
         config.field_delimiter = Some(",".to_owned());
 
         let result = run(config, "a,b,c\nx,y\n");
@@ -565,7 +611,7 @@ mod tests {
     fn field_mode_sorts_by_field_key() {
         let mut config = Config::default();
         config.reorder = sorted(false, false);
-        config.cols = Some(2..=2);
+        config.cols = Some((2..=2).into());
         config.field_delimiter = Some(",".to_owned());
 
         let result = run(config, "x,c\ny,a\nz,b\n");
@@ -576,7 +622,7 @@ mod tests {
     fn field_mode_unique_keys_on_field() {
         let mut config = Config::default();
         config.unique = true;
-        config.cols = Some(1..=1);
+        config.cols = Some((1..=1).into());
         config.field_delimiter = Some(",".to_owned());
 
         let result = run(config, "a,1\na,2\nb,1\n");
@@ -604,7 +650,7 @@ mod tests {
     #[test]
     fn build_pipeline_selects_columns_when_no_other_operation() {
         let mut config = Config::default();
-        config.cols = Some(5..=10);
+        config.cols = Some((5..=10).into());
         assert_eq!(build_pipeline(&config).len(), 1);
     }
 
@@ -612,13 +658,13 @@ mod tests {
     fn build_pipeline_does_not_select_columns_when_they_key_another_operation() {
         //sort uses the column range as its key
         let mut sort_config = Config::default();
-        sort_config.cols = Some(5..=10);
+        sort_config.cols = Some((5..=10).into());
         sort_config.reorder = sorted(false, false);
         assert!(build_pipeline(&sort_config).is_empty());
 
         //find/replace is scoped by the column range
         let mut replace_config = Config::default();
-        replace_config.cols = Some(5..=10);
+        replace_config.cols = Some((5..=10).into());
         replace_config.replacements = vec![literal("a", "b")];
         let pipeline = build_pipeline(&replace_config);
         assert_eq!(pipeline.len(), 1);
@@ -629,7 +675,7 @@ mod tests {
     fn build_pipeline_adds_delete_columns() {
         let mut config = Config::default();
         config.delete = true;
-        config.cols = Some(5..=10);
+        config.cols = Some((5..=10).into());
         assert_eq!(build_pipeline(&config).len(), 1);
     }
 

@@ -17,7 +17,9 @@ pub trait LineTransform {
     fn apply(&self, line: &str) -> String;
 }
 
-/// Keeps only the characters within a column span (like `cut`).
+/// Keeps only the characters within a column span (like `cut`). The
+/// parts are read in the order written, so a permuted list reorders
+/// them; in field mode they are joined by the output delimiter.
 pub struct SelectColumns {
     span: ColumnSpan,
 }
@@ -30,7 +32,7 @@ impl SelectColumns {
 
 impl LineTransform for SelectColumns {
     fn apply(&self, line: &str) -> String {
-        text::select_columns(line, &self.span.char_range(line)).to_owned()
+        text::select_ranges(line, &self.span.read_ranges(line), self.span.joiner()).into_owned()
     }
 }
 
@@ -48,7 +50,7 @@ impl DeleteColumns {
 
 impl LineTransform for DeleteColumns {
     fn apply(&self, line: &str) -> String {
-        text::remove_columns(line, &self.span.char_range_for_delete(line))
+        text::remove_ranges(line, &self.span.delete_ranges(line))
     }
 }
 
@@ -89,7 +91,7 @@ impl MapColumns {
 
 impl LineTransform for MapColumns {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.span.char_range(line), self.map)
+        text::map_ranges(line, &self.span.write_ranges(line), self.map)
     }
 }
 
@@ -112,7 +114,12 @@ impl ReplaceInColumns {
 
 impl LineTransform for ReplaceInColumns {
     fn apply(&self, line: &str) -> String {
-        text::replace_in_columns(line, &self.find, &self.replace, &self.span.char_range(line))
+        text::replace_in_ranges(
+            line,
+            &self.find,
+            &self.replace,
+            &self.span.write_ranges(line),
+        )
     }
 }
 
@@ -145,7 +152,7 @@ impl ReplaceInColumnsIgnoreCase {
 
 impl LineTransform for ReplaceInColumnsIgnoreCase {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.span.char_range(line), |within| {
+        text::map_ranges(line, &self.span.write_ranges(line), |within| {
             self.pattern
                 .replace_all(within, NoExpand(&self.replace))
                 .into_owned()
@@ -177,7 +184,7 @@ impl RegexReplaceInColumns {
 
 impl LineTransform for RegexReplaceInColumns {
     fn apply(&self, line: &str) -> String {
-        text::map_columns(line, &self.span.char_range(line), |within| {
+        text::map_ranges(line, &self.span.write_ranges(line), |within| {
             self.pattern
                 .replace_all(within, self.replacement.as_str())
                 .into_owned()
@@ -188,6 +195,7 @@ impl LineTransform for RegexReplaceInColumns {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::columns::ColumnList;
 
     #[test]
     fn delete_columns_removes_range() {
@@ -291,10 +299,15 @@ mod tests {
     }
 
     fn field_span(delimiter: &str, fields: std::ops::RangeInclusive<usize>) -> ColumnSpan {
-        ColumnSpan::Fields {
-            delimiter: delimiter.to_owned(),
-            fields,
-        }
+        ColumnSpan::fields(delimiter, ColumnList::from(fields))
+    }
+
+    fn field_list(delimiter: &str, parts: &[std::ops::RangeInclusive<usize>]) -> ColumnSpan {
+        ColumnSpan::fields(delimiter, ColumnList::new(parts.to_vec()))
+    }
+
+    fn char_list(parts: &[std::ops::RangeInclusive<usize>]) -> ColumnSpan {
+        ColumnSpan::Chars(ColumnList::new(parts.to_vec()))
     }
 
     #[test]
@@ -324,5 +337,63 @@ mod tests {
         let transform =
             ReplaceInColumns::new("x".to_owned(), "Y".to_owned(), field_span(",", 2..=2));
         assert_eq!(transform.apply("x,x,x"), "x,Y,x");
+    }
+
+    #[test]
+    fn select_columns_reads_a_list_in_the_written_order() {
+        let transform = SelectColumns::new(char_list(&[5..=6, 1..=2]));
+        assert_eq!(transform.apply("abcdef"), "efab");
+    }
+
+    #[test]
+    fn select_fields_permutes_and_rejoins_them() {
+        let transform = SelectColumns::new(field_list(",", &[3..=3, 1..=1]));
+        assert_eq!(transform.apply("a,b,c"), "c,a");
+
+        //a missing field is skipped instead of joining a stray delimiter
+        assert_eq!(transform.apply("a,b"), "a");
+    }
+
+    #[test]
+    fn select_fields_joins_on_the_output_delimiter() {
+        let span = ColumnSpan::Fields {
+            delimiter: ",".to_owned(),
+            output_delimiter: Some(" | ".to_owned()),
+            fields: ColumnList::new(vec![2..=2, 1..=1]),
+        };
+        let transform = SelectColumns::new(span);
+        assert_eq!(transform.apply("a,b"), "b | a");
+    }
+
+    #[test]
+    fn delete_columns_removes_every_part_of_a_list() {
+        let transform = DeleteColumns::new(char_list(&[1..=2, 5..=6]));
+        assert_eq!(transform.apply("abcdef"), "cd");
+    }
+
+    #[test]
+    fn delete_fields_removes_every_part_of_a_list() {
+        let transform = DeleteColumns::new(field_list(",", &[1..=1, 3..=3]));
+        assert_eq!(transform.apply("a,b,c"), "b");
+
+        //adjacent parts normalize, so `2,3` deletes just like `2-3`
+        let transform = DeleteColumns::new(field_list(",", &[2..=2, 3..=3]));
+        assert_eq!(transform.apply("a,b,c"), "a");
+    }
+
+    #[test]
+    fn map_columns_maps_every_part_of_a_list() {
+        let transform = MapColumns::uppercase(char_list(&[1..=1, 3..=3]));
+        assert_eq!(transform.apply("abc"), "AbC");
+    }
+
+    #[test]
+    fn replace_in_columns_covers_every_part_of_a_list() {
+        let transform = ReplaceInColumns::new(
+            "x".to_owned(),
+            "Y".to_owned(),
+            field_list(",", &[1..=1, 3..=3]),
+        );
+        assert_eq!(transform.apply("x,x,x"), "Y,x,Y");
     }
 }

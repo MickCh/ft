@@ -148,6 +148,60 @@ fn sort_uses_column_range_as_key() {
 }
 
 #[test]
+fn column_list_permutes_fields() {
+    //an awk-style projection: -F , -C 3,1,2 reorders the fields
+    let input = TempFile::new("cols-permute", "a,b,c\nx,y,z\n");
+    let stdout = run_ft_stdout(&["-F", ",", "-C", "3,1,2", input.path_str()]);
+    assert_eq!(stdout, "c,a,b\nz,x,y\n");
+}
+
+#[test]
+fn column_list_selects_disjoint_char_ranges() {
+    let input = TempFile::new("cols-list", "abcdef\n");
+    let stdout = run_ft_stdout(&["-C", "1,3,5-6", input.path_str()]);
+    assert_eq!(stdout, "acef\n");
+}
+
+#[test]
+fn column_list_with_output_delimiter() {
+    let input = TempFile::new("cols-outdelim", "a,b,c\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "-C",
+        "3,1",
+        "--output-delimiter",
+        " | ",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "c | a\n");
+}
+
+#[test]
+fn column_list_deletes_disjoint_fields() {
+    let input = TempFile::new("cols-del-list", "a,b,c,d\n");
+    let stdout = run_ft_stdout(&["-d", "-F", ",", "-C", "1,3", input.path_str()]);
+    assert_eq!(stdout, "b,d\n");
+}
+
+#[test]
+fn column_list_scopes_a_replacement_to_every_part() {
+    let input = TempFile::new("cols-replace-list", "x,x,x\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "-C",
+        "1,3",
+        "-f",
+        "x",
+        "-r",
+        "Y",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "Y,x,Y\n");
+}
+
+#[test]
 fn sort_key_leaves_cols_to_another_operation() {
     //sort by field 1, while --cols scopes the replacement to field 2
     let input = TempFile::new("sort-key", "b,x\na,x\n");

@@ -36,14 +36,15 @@ impl GrepPredicate {
 
 impl LinePredicate for GrepPredicate {
     fn matches(&self, line: &str) -> bool {
-        let within = text::select_columns(line, &self.span.char_range(line));
-        self.pattern.is_match(within) != self.invert
+        let within = text::select_ranges(line, &self.span.read_ranges(line), self.span.joiner());
+        self.pattern.is_match(&within) != self.invert
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::columns::ColumnList;
 
     #[test]
     fn grep_matches_lines_containing_pattern() {
@@ -73,13 +74,20 @@ mod tests {
 
     #[test]
     fn grep_is_scoped_to_the_field_range() {
-        let span = ColumnSpan::Fields {
-            delimiter: ",".to_owned(),
-            fields: 2..=2,
-        };
+        let span = ColumnSpan::fields(",", ColumnList::from(2..=2));
         let predicate = GrepPredicate::new(Regex::new("foo").unwrap(), span, false);
 
         assert!(predicate.matches("bar,foo"));
         assert!(!predicate.matches("foo,bar"));
+    }
+
+    #[test]
+    fn grep_matches_the_selected_fields_joined() {
+        //fields 1 and 3, read in that order and joined by the delimiter
+        let span = ColumnSpan::fields(",", ColumnList::new(vec![1..=1, 3..=3]));
+        let predicate = GrepPredicate::new(Regex::new("^a,c$").unwrap(), span, false);
+
+        assert!(predicate.matches("a,b,c"));
+        assert!(!predicate.matches("a,b,x"));
     }
 }

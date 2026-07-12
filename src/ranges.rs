@@ -111,6 +111,11 @@ impl RangeSet {
             .iter()
             .any(|part| part.contains(&value))
     }
+
+    /// The normalized parts, ascending and non-overlapping.
+    pub fn parts(&self) -> &[RangeInclusive<usize>] {
+        &self.parts
+    }
 }
 
 impl From<RangeInclusive<usize>> for RangeSet {

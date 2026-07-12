@@ -15,8 +15,9 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 | Option | Description |
 |---|---|
 | `-R, --rows <ranges>` | Rows to process: `3`, `2-5`, `10-`, `-5`, `~10-~1` or a list `1-5,10-20` (default: all rows) |
-| `-C, --cols <range>` | Column range to process: `3`, `2-5`, `10-` or `-5` (default: all columns) |
+| `-C, --cols <ranges>` | Columns to process: `3`, `2-5`, `10-`, `-5` or a list `1,3,5-7` (default: all columns) |
 | `-F, --fields <delim>` | Treat the column ranges as fields separated by `<delim>` (requires a column range) |
+| `--output-delimiter <s>` | Join the selected fields with `<s>` instead of the input delimiter (requires `--fields`) |
 | `-s, --sort` | Sort the selected rows, using the column range as the sort key |
 | `--sort-key <range>` | Columns keying `--sort`, instead of `--cols` (requires `--sort`) |
 | `-n, --numeric` | Sort numerically instead of lexicographically (requires `--sort`) |
@@ -41,12 +42,13 @@ When `filename` is omitted (or given as `-`), `ft` reads from standard input, so
 ### Semantics
 
 - Row and column ranges are **1-based and inclusive**; columns are counted in characters, not bytes, so multi-byte UTF-8 text (including emoji) is handled correctly.
-- A range can be a single number (`3`), open-ended (`10-` to the end, `-5` from the start) or closed (`2-5`). Rows additionally accept a comma-separated list of ranges (`1-5,10-20`); overlapping parts are merged.
+- A range can be a single number (`3`), open-ended (`10-` to the end, `-5` from the start) or closed (`2-5`). Rows and columns both accept a comma-separated list of ranges (`1-5,10-20`).
+- A **column list keeps the order written**, so operations that *read* the columns — selecting them, the `--sort`/`--unique` key, `--grep` — read the parts in that order: `-F , -C 3,1,2` is an `awk`-style projection that reorders the fields, and `--output-delimiter` chooses what rejoins them. Operations that *write into* the line — `--delete`, `--upper`/`--lower`/`--trim`, find/replace — work on the same columns as a set (sorted, overlaps merged), where order carries no meaning; each part is written on its own, so a match straddling two parts is not replaced.
 - A row bound prefixed with `~` counts from the **end** of the input: `~1` is the last row, `~10-~1` the last ten, `2-~2` everything but the first and last row. Because the total line count must be known first, end-relative ranges buffer the whole input instead of streaming; columns do not accept `~`.
 - Without `--delete`, the row range **selects** lines: only rows inside the range are output (and transformed). Without a row range, the whole file is processed.
 - A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
 - `--sort-key` and `--unique-key` give those operations a column range of their own, so `--cols` is free for another one: `-C 5 -f a -r b --sort --sort-key 3` replaces inside column 5 but sorts by column 3. An operation with its own key no longer claims `--cols`, so a `--cols` left over with no other operation goes back to **selecting** columns (and the key then addresses that selected result, since keys are read from the transformed line).
-- With `--fields`, the column range counts **delimited fields** instead of characters: `-F , -C 2` addresses the second comma-separated field, per line. All column-based operations (select, delete, sort key, find/replace scope, `--grep`, `--unique`, case/trim) work on fields the same way; deleting fields also removes one adjacent delimiter, like `cut`. The delimiter may be more than one character.
+- With `--fields`, the column ranges count **delimited fields** instead of characters: `-F , -C 2` addresses the second comma-separated field, per line. All column-based operations (select, delete, sort key, find/replace scope, `--grep`, `--unique`, case/trim) work on fields the same way; deleting fields also removes one adjacent delimiter, like `cut`, and a field list is merged before that, so `-C 2,3` deletes exactly what `-C 2-3` does. Selected fields are rejoined by the delimiter (or `--output-delimiter`), and a field the line does not have is skipped rather than joining a stray delimiter. The delimiter may be more than one character.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.
 - `--find` and `--replace` may be repeated to run several substitutions: the *n*-th `--find` pairs with the *n*-th `--replace`, and the pairs apply left to right, so a later pair can rewrite what an earlier one produced. Every `--find` must have its own `--replace` and vice versa (a lone `--find` is rejected — use `--grep` to filter rows by content instead).
@@ -90,6 +92,20 @@ ft -C 10-20 -f foo -r bar input.txt
 ft -F , -C 2-3 data.csv
 ft -d -F , -C 2 data.csv
 ft -s -n -F , -C 3 data.csv
+
+# Project fields in a new order (like awk '{print $3,$1,$2}'), retabulating them
+ft -F , -C 3,1,2 data.csv
+ft -F , -C 3,1 --output-delimiter ';' data.csv
+
+# Keep characters 1, 3 and 5-7; drop fields 1 and 3 at once
+ft -C 1,3,5-7 input.txt
+ft -d -F , -C 1,3 data.csv
+
+# Sort by field 1 while replacing inside field 2 only
+ft -F , -C 2 -f x -r y -s --sort-key 1 data.csv
+
+# Deduplicate on field 1 (the whole row need not repeat), like sort -u -k1,1
+ft -s -u --unique-key 1 -F , data.csv
 
 # Regex replace: collapse every number to "N"; $1-style capture references work too
 ft -e -f '[0-9]+' -r N input.txt

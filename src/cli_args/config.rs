@@ -1,11 +1,10 @@
-use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use clap::ArgMatches;
 use regex::{Regex, RegexBuilder};
 
 use super::ConfigError;
-use crate::columns::ColumnSpan;
+use crate::columns::{ColumnList, ColumnSpan};
 use crate::ranges::RangeSpec;
 
 /// What `--find` matches: a literal substring, or a regular expression
@@ -42,14 +41,17 @@ pub enum ReorderMode {
 #[derive(Debug)]
 pub struct Config {
     pub rows: Option<RangeSpec>,
-    pub cols: Option<RangeInclusive<usize>>,
+    pub cols: Option<ColumnList>,
     //per-operation column ranges: `None` falls back to `cols`, so an
     //operation only needs its own range when it must differ from it
-    pub sort_key: Option<RangeInclusive<usize>>,
-    pub unique_key: Option<RangeInclusive<usize>>,
+    pub sort_key: Option<ColumnList>,
+    pub unique_key: Option<ColumnList>,
     //`Some` switches the column ranges from counting chars to
     //delimited fields
     pub field_delimiter: Option<String>,
+    //`Some` joins selected fields with something else than the input
+    //delimiter (`--output-delimiter`)
+    pub output_delimiter: Option<String>,
     pub reorder: Option<ReorderMode>,
     pub delete: bool,
     pub ignore_case: bool,
@@ -76,10 +78,10 @@ impl Config {
     }
 
     /// Columns to process; no range provided means every column.
-    pub fn cols_or_full(&self) -> RangeInclusive<usize> {
+    pub fn cols_or_full(&self) -> ColumnList {
         self.cols
             .clone()
-            .unwrap_or(1..=usize::MAX)
+            .unwrap_or_else(ColumnList::full)
     }
 
     /// How the column range addresses lines: char positions, or fields
@@ -100,17 +102,18 @@ impl Config {
         self.span_of(self.unique_key.clone())
     }
 
-    /// Turn a column range into a span, falling back to `--cols` (and
-    /// then to the full range) when the operation has no range of its
-    /// own. `--fields` applies to every column range alike.
-    fn span_of(&self, range: Option<RangeInclusive<usize>>) -> ColumnSpan {
-        let range = range.unwrap_or_else(|| self.cols_or_full());
+    /// Turn a column list into a span, falling back to `--cols` (and
+    /// then to every column) when the operation has no list of its own.
+    /// `--fields` applies to every column list alike.
+    fn span_of(&self, columns: Option<ColumnList>) -> ColumnSpan {
+        let columns = columns.unwrap_or_else(|| self.cols_or_full());
         match &self.field_delimiter {
             Some(delimiter) => ColumnSpan::Fields {
                 delimiter: delimiter.clone(),
-                fields: range,
+                output_delimiter: self.output_delimiter.clone(),
+                fields: columns,
             },
-            None => ColumnSpan::Chars(range),
+            None => ColumnSpan::Chars(columns),
         }
     }
 
@@ -214,16 +217,19 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<RangeSpec>("rows")
                 .cloned(),
             cols: matches
-                .get_one::<RangeInclusive<usize>>("columns")
+                .get_one::<ColumnList>("columns")
                 .cloned(),
             sort_key: matches
-                .get_one::<RangeInclusive<usize>>("sort-key")
+                .get_one::<ColumnList>("sort-key")
                 .cloned(),
             unique_key: matches
-                .get_one::<RangeInclusive<usize>>("unique-key")
+                .get_one::<ColumnList>("unique-key")
                 .cloned(),
             field_delimiter: matches
                 .get_one::<String>("fields")
+                .cloned(),
+            output_delimiter: matches
+                .get_one::<String>("output-delimiter")
                 .cloned(),
             reorder,
             delete: matches.get_flag("delete"),
@@ -276,12 +282,21 @@ impl TryFrom<ArgMatches> for Config {
 mod tests {
     use super::*;
     use crate::cli_args::cli;
+    use std::ops::RangeInclusive;
 
     fn config_from(args: &[&str]) -> Result<Config, ConfigError> {
         let matches = cli()
             .try_get_matches_from(args)
             .expect("clap parsing failed");
         Config::try_from(matches)
+    }
+
+    /// The column parts a span addresses, in the order written.
+    fn written(span: &ColumnSpan) -> Vec<RangeInclusive<usize>> {
+        match span {
+            ColumnSpan::Chars(list) => list.written().to_vec(),
+            ColumnSpan::Fields { fields, .. } => fields.written().to_vec(),
+        }
     }
 
     #[test]
@@ -317,7 +332,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.rows, Some(RangeSpec::from(2..=4)));
-        assert_eq!(config.cols, Some(1..=10));
+        assert_eq!(config.cols, Some(ColumnList::from(1..=10)));
         assert_eq!(
             config.reorder,
             Some(ReorderMode::Sort {
@@ -346,7 +361,7 @@ mod tests {
         let config = config_from(&["ft", "input.txt"]).unwrap();
 
         assert_eq!(config.rows_or_full(), RangeSpec::full());
-        assert_eq!(config.cols_or_full(), 1..=usize::MAX);
+        assert_eq!(config.cols_or_full(), ColumnList::full());
     }
 
     #[test]
@@ -376,11 +391,11 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(config.sort_key, Some(1..=2));
-        assert_eq!(config.unique_key, Some(3..=4));
-        assert!(matches!(config.sort_key_span(), ColumnSpan::Chars(r) if r == (1..=2)));
-        assert!(matches!(config.unique_key_span(), ColumnSpan::Chars(r) if r == (3..=4)));
-        assert!(matches!(config.col_span(), ColumnSpan::Chars(r) if r == (5..=6)));
+        assert_eq!(config.sort_key, Some(ColumnList::from(1..=2)));
+        assert_eq!(config.unique_key, Some(ColumnList::from(3..=4)));
+        assert_eq!(written(&config.sort_key_span()), [1..=2]);
+        assert_eq!(written(&config.unique_key_span()), [3..=4]);
+        assert_eq!(written(&config.col_span()), [5..=6]);
     }
 
     #[test]
@@ -389,8 +404,49 @@ mod tests {
 
         assert!(config.sort_key.is_none());
         assert!(config.unique_key.is_none());
-        assert!(matches!(config.sort_key_span(), ColumnSpan::Chars(r) if r == (2..=3)));
-        assert!(matches!(config.unique_key_span(), ColumnSpan::Chars(r) if r == (2..=3)));
+        assert_eq!(written(&config.sort_key_span()), [2..=3]);
+        assert_eq!(written(&config.unique_key_span()), [2..=3]);
+    }
+
+    #[test]
+    fn column_lists_reach_every_operation_key() {
+        let config =
+            config_from(&["ft", "-C", "3,1", "-s", "--sort-key", "2,4-5", "input.txt"]).unwrap();
+
+        //the parts keep the order written, so reading them permutes
+        assert_eq!(written(&config.col_span()), [3..=3, 1..=1]);
+        assert_eq!(written(&config.sort_key_span()), [2..=2, 4..=5]);
+    }
+
+    #[test]
+    fn output_delimiter_joins_selected_fields() {
+        let config = config_from(&[
+            "ft",
+            "-F",
+            ",",
+            "-C",
+            "2,1",
+            "--output-delimiter",
+            ";",
+            "input.txt",
+        ])
+        .unwrap();
+
+        assert_eq!(config.output_delimiter.as_deref(), Some(";"));
+        assert_eq!(config.col_span().joiner(), ";");
+
+        //without it, the input delimiter joins the fields back together
+        let config = config_from(&["ft", "-F", ",", "-C", "2,1", "input.txt"]).unwrap();
+        assert_eq!(config.col_span().joiner(), ",");
+    }
+
+    #[test]
+    fn output_delimiter_requires_fields() {
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "-C", "1", "--output-delimiter", ";", "input.txt"])
+                .is_err()
+        );
     }
 
     #[test]

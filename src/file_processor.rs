@@ -122,6 +122,13 @@ impl Ord for NumericKey {
     }
 }
 
+/// The sort/unique key of a line: the content of its key columns, read
+/// in the order written. A key span beyond the line yields an empty
+/// key, like `cut`.
+fn key_of(content: &str, span: &ColumnSpan) -> String {
+    text::select_ranges(content, &span.read_ranges(content), span.joiner()).into_owned()
+}
+
 /// The streaming processor, configured by its fields and assembled by
 /// the composition layer.
 pub struct FileProcessor {
@@ -254,8 +261,7 @@ impl FileProcessor {
     fn passes_unique(&self, content: &str, seen_keys: &mut HashSet<String>) -> bool {
         match &self.unique_key_span {
             None => true,
-            Some(span) => seen_keys
-                .insert(text::select_columns(content, &span.char_range(content)).to_owned()),
+            Some(span) => seen_keys.insert(key_of(content, span)),
         }
     }
 
@@ -314,10 +320,7 @@ impl FileProcessor {
     fn sort_lines(buffer: &mut [Line], spec: &SortSpec) {
         //`Reverse` keeps the sort stable in descending order too
         use std::cmp::Reverse;
-        //a key span beyond the line yields an empty key, like `cut`
-        let text_key = |line: &Line| {
-            text::select_columns(&line.content, &spec.key_span.char_range(&line.content)).to_owned()
-        };
+        let text_key = |line: &Line| key_of(&line.content, &spec.key_span);
         match (spec.numeric, spec.reverse) {
             (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
             (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),

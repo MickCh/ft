@@ -1,6 +1,7 @@
 use clap::{Arg, ArgAction, ArgGroup, Command, crate_name, crate_version};
 use std::ops::RangeInclusive;
 
+use crate::columns::ColumnList;
 use crate::ranges::{RangeBound, RangeSpec};
 
 pub fn cli() -> Command {
@@ -22,8 +23,8 @@ pub fn cli() -> Command {
                 .long("cols")
                 .required(false)
                 .allow_hyphen_values(true)
-                .value_parser(parse_column_range)
-                .help("Columns to process: e.g. 3, 2-5, 10- or -5"),
+                .value_parser(parse_column_list)
+                .help("Columns to process: e.g. 3, 2-5, 10-, -5, or a list like 1,3,5-7 (order kept: 3,1,2 permutes)"),
         )
         .arg(
             Arg::new("fields")
@@ -42,12 +43,20 @@ pub fn cli() -> Command {
                 .multiple(true),
         )
         .arg(
+            Arg::new("output-delimiter")
+                .long("output-delimiter")
+                .required(false)
+                .requires("fields")
+                .value_parser(parse_delimiter)
+                .help("Join the selected fields with this delimiter instead of the input one (requires --fields)"),
+        )
+        .arg(
             Arg::new("sort-key")
                 .long("sort-key")
                 .required(false)
                 .allow_hyphen_values(true)
                 .requires("sort")
-                .value_parser(parse_column_range)
+                .value_parser(parse_column_list)
                 .help("Columns keying --sort, instead of --cols (requires --sort)"),
         )
         .arg(
@@ -56,7 +65,7 @@ pub fn cli() -> Command {
                 .required(false)
                 .allow_hyphen_values(true)
                 .requires("unique")
-                .value_parser(parse_column_range)
+                .value_parser(parse_column_list)
                 .help("Columns keying --unique, instead of --cols (requires --unique)"),
         )
         .arg(
@@ -220,13 +229,20 @@ fn parse_row_ranges(input: &str) -> Result<RangeSpec, String> {
     Ok(RangeSpec::new(parts))
 }
 
-/// Parse a column specification: a single range part (columns address
-/// one contiguous slice of the line, so lists are not supported).
-fn parse_column_range(input: &str) -> Result<RangeInclusive<usize>, String> {
-    if input.contains(',') {
-        return Err("Columns accept a single range, not a list".to_owned());
-    }
-    match parse_range_part(input)? {
+/// Parse a column specification: a comma-separated list of range parts,
+/// kept in the order written so that reading operations can permute the
+/// columns. Columns have no end-relative (`~`) bounds: a line's length
+/// is known as it is read, but the parts must be comparable before that.
+fn parse_column_list(input: &str) -> Result<ColumnList, String> {
+    let parts = input
+        .split(',')
+        .map(parse_column_part)
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ColumnList::new(parts))
+}
+
+fn parse_column_part(part: &str) -> Result<RangeInclusive<usize>, String> {
+    match parse_range_part(part)? {
         (RangeBound::FromStart(from), RangeBound::FromStart(to)) => Ok(from..=to),
         _ => Err("Columns do not support end-relative (~) values".to_owned()),
     }
@@ -383,14 +399,31 @@ mod tests {
     }
 
     #[test]
-    fn column_range_rejects_lists() {
-        assert!(parse_column_range("1-2,4-5").is_err());
-        assert_eq!(parse_column_range("3-").unwrap(), 3..=usize::MAX);
+    fn column_list_parses_a_single_range() {
+        assert_eq!(
+            parse_column_list("3-").unwrap(),
+            ColumnList::from(3..=usize::MAX)
+        );
     }
 
     #[test]
-    fn column_range_rejects_end_relative_bounds() {
-        assert!(parse_column_range("~5").is_err());
-        assert!(parse_column_range("1-~2").is_err());
+    fn column_list_keeps_the_parts_in_the_written_order() {
+        let list = parse_column_list("3,1,2").unwrap();
+        assert_eq!(list.written(), [3..=3, 1..=1, 2..=2]);
+
+        let list = parse_column_list("1,3,5-7").unwrap();
+        assert_eq!(list.written(), [1..=1, 3..=3, 5..=7]);
+    }
+
+    #[test]
+    fn column_list_rejects_end_relative_bounds() {
+        assert!(parse_column_list("~5").is_err());
+        assert!(parse_column_list("1-~2").is_err());
+        assert!(parse_column_list("1,~2").is_err());
+    }
+
+    #[test]
+    fn column_list_rejects_an_empty_part() {
+        assert!(parse_column_list("1,").is_err());
     }
 }
