@@ -933,6 +933,28 @@ fn in_place_edits_each_file_on_its_own() {
 }
 
 #[test]
+fn in_place_edits_a_file_named_twice_only_once() {
+    //a second pass would reprocess the first's output ("xyy") and
+    //overwrite the backup with the already-edited content
+    let input = TempFile::new("batch-dup", "x\n");
+
+    run_ft_stdout(&[
+        "-i",
+        "-f",
+        "x",
+        "-r",
+        "xy",
+        input.path_str(),
+        input.path_str(),
+    ]);
+
+    assert_eq!(
+        fs::read_to_string(input.path_str()).expect("input file vanished"),
+        "xy\n"
+    );
+}
+
+#[test]
 fn in_place_numbers_rows_per_file() {
     //row 1 of each file, not row 1 of the concatenation
     let first = TempFile::new("batch-rows-a", "a1\na2\n");
@@ -1115,6 +1137,21 @@ fn grep_invert_keeps_non_matching_rows() {
     let input = TempFile::new("grep-invert", INPUT);
     let stdout = run_ft_stdout(&["-g", "^(a|b)", "--invert", input.path_str()]);
     assert_eq!(stdout, "delta foo\ncharlie foo\n");
+
+    //-v, the short form every grep user reaches for
+    let input = TempFile::new("grep-invert-short", INPUT);
+    let stdout = run_ft_stdout(&["-g", "^(a|b)", "-v", input.path_str()]);
+    assert_eq!(stdout, "delta foo\ncharlie foo\n");
+}
+
+#[test]
+fn help_explains_examples_and_exit_codes() {
+    let stdout = run_ft_stdout(&["--help"]);
+    assert!(stdout.contains("Examples:"), "help should show examples");
+    assert!(
+        stdout.contains("Exit codes"),
+        "help should explain the exit codes"
+    );
 }
 
 #[test]

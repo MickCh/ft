@@ -54,6 +54,33 @@ impl Input {
     }
 }
 
+/// The summary asked for instead of the processed rows: how many rows
+/// (`--count`) and statistics over a column, optionally per `--group-by`
+/// key. One struct rather than loose flags, so the summary options
+/// travel together.
+#[cfg_attr(test, derive(Default))]
+#[derive(Debug)]
+pub struct SummarySpec {
+    pub count: bool,
+    pub sum: Option<ColumnList>,
+    pub avg: Option<ColumnList>,
+    pub min: Option<ColumnList>,
+    pub max: Option<ColumnList>,
+    pub group_by: Option<ColumnList>,
+}
+
+/// How `--in-place` edits the input files. Present only when
+/// `--in-place` was given, so a `--backup` suffix or `--dry-run`
+/// without it is unrepresentable rather than merely rejected.
+#[derive(Debug)]
+pub struct InPlace {
+    /// `Some` keeps a copy of each edited file, named after it plus
+    /// this suffix (`--backup`).
+    pub backup: Option<String>,
+    /// Report what the edit would change instead of writing it.
+    pub dry_run: bool,
+}
+
 //the derived Default (no ranges, no operations, stdin to stdout) is a
 //test-only base configuration; real configs always come from TryFrom
 #[cfg_attr(test, derive(Default))]
@@ -90,14 +117,8 @@ pub struct Config {
     pub drop_empty: bool,
     //`Some` joins every processed row into one, separated by this
     pub join: Option<String>,
-    //the summary to write instead of the processed rows: how many rows
-    //(`--count`) and statistics over a column, optionally per group
-    pub count: bool,
-    pub sum: Option<ColumnList>,
-    pub avg: Option<ColumnList>,
-    pub min: Option<ColumnList>,
-    pub max: Option<ColumnList>,
-    pub group_by: Option<ColumnList>,
+    //the summary to write instead of the processed rows
+    pub summary: SummarySpec,
     pub grep: Option<Regex>,
     pub invert: bool,
     //answer only whether anything matched: write nothing, and say it
@@ -110,12 +131,8 @@ pub struct Config {
     //find/replace pairs are applied in the order given
     pub replacements: Vec<Replacement>,
     pub output_filename: Option<PathBuf>,
-    pub in_place: bool,
-    //`Some` keeps a copy of each edited file, named after it plus this
-    //suffix (`--backup`)
-    pub backup: Option<String>,
-    //report what `--in-place` would change instead of writing it
-    pub dry_run: bool,
+    //`Some` edits each input file in place instead of writing elsewhere
+    pub in_place: Option<InPlace>,
 }
 
 impl Config {
@@ -137,18 +154,6 @@ impl Config {
     /// separated by a delimiter when `--fields` was given.
     pub fn col_span(&self) -> ColumnSpan {
         self.span_of(None)
-    }
-
-    /// Column span keying `--sort`: `--sort-key` when given, `--cols`
-    /// otherwise.
-    pub fn sort_key_span(&self) -> ColumnSpan {
-        self.span_of(self.sort_key.clone())
-    }
-
-    /// Column span keying `--unique`: `--unique-key` when given,
-    /// `--cols` otherwise.
-    pub fn unique_key_span(&self) -> ColumnSpan {
-        self.span_of(self.unique_key.clone())
     }
 
     /// The span of an explicit column list (a `--sum` column, a
@@ -183,28 +188,6 @@ impl Config {
             }),
             None => ColumnSpan::Chars(columns),
         }
-    }
-
-    /// Whether some operation claims `--cols` as its scope or key (as
-    /// opposed to a bare `--cols`, which selects the columns). An
-    /// operation given its own key range no longer claims `--cols`, so
-    /// `--cols 2-3 --sort --sort-key 1` still cuts columns 2-3.
-    pub fn has_column_operation(&self) -> bool {
-        self.delete
-            || self.sort_keys_on_cols()
-            || !self.replacements.is_empty()
-            || self.upper
-            || self.lower
-            || self.trim
-            || self.title_case
-            || self.squeeze
-            || self.grep.is_some()
-            || (self.unique && self.unique_key.is_none())
-    }
-
-    /// Whether `--sort` takes its key from `--cols` (no `--sort-key`).
-    fn sort_keys_on_cols(&self) -> bool {
-        matches!(self.reorder, Some(ReorderMode::Sort { .. })) && self.sort_key.is_none()
     }
 
     /// The files among the inputs, in order. With `--in-place` these are
@@ -329,22 +312,24 @@ impl TryFrom<ArgMatches> for Config {
             join: matches
                 .get_one::<String>("join")
                 .cloned(),
-            count: matches.get_flag("count"),
-            sum: matches
-                .get_one::<ColumnList>("sum")
-                .cloned(),
-            avg: matches
-                .get_one::<ColumnList>("avg")
-                .cloned(),
-            min: matches
-                .get_one::<ColumnList>("min")
-                .cloned(),
-            max: matches
-                .get_one::<ColumnList>("max")
-                .cloned(),
-            group_by: matches
-                .get_one::<ColumnList>("group-by")
-                .cloned(),
+            summary: SummarySpec {
+                count: matches.get_flag("count"),
+                sum: matches
+                    .get_one::<ColumnList>("sum")
+                    .cloned(),
+                avg: matches
+                    .get_one::<ColumnList>("avg")
+                    .cloned(),
+                min: matches
+                    .get_one::<ColumnList>("min")
+                    .cloned(),
+                max: matches
+                    .get_one::<ColumnList>("max")
+                    .cloned(),
+                group_by: matches
+                    .get_one::<ColumnList>("group-by")
+                    .cloned(),
+            },
             grep,
             invert: matches.get_flag("invert"),
             quiet: matches.get_flag("quiet"),
@@ -354,11 +339,16 @@ impl TryFrom<ArgMatches> for Config {
             output_filename: matches
                 .get_one::<String>("output")
                 .map(PathBuf::from),
-            in_place: matches.get_flag("in-place"),
-            backup: matches
-                .get_one::<String>("backup")
-                .cloned(),
-            dry_run: matches.get_flag("dry-run"),
+            //clap enforces that --backup and --dry-run come with --in-place,
+            //and the struct makes the dependency structural
+            in_place: matches
+                .get_flag("in-place")
+                .then(|| InPlace {
+                    backup: matches
+                        .get_one::<String>("backup")
+                        .cloned(),
+                    dry_run: matches.get_flag("dry-run"),
+                }),
         };
 
         if !config.replacements.is_empty() && config.delete {
@@ -382,7 +372,7 @@ impl TryFrom<ArgMatches> for Config {
 
         //--in-place rewrites its inputs, and standard input cannot be
         //rewritten, so every input has to be a file
-        if config.in_place
+        if config.in_place.is_some()
             && config
                 .inputs
                 .iter()
@@ -565,19 +555,7 @@ mod tests {
 
         assert_eq!(config.sort_key, Some(ColumnList::from(1..=2)));
         assert_eq!(config.unique_key, Some(ColumnList::from(3..=4)));
-        assert_eq!(written(&config.sort_key_span()), [1..=2]);
-        assert_eq!(written(&config.unique_key_span()), [3..=4]);
         assert_eq!(written(&config.col_span()), [5..=6]);
-    }
-
-    #[test]
-    fn key_ranges_fall_back_to_cols() {
-        let config = config_from(&["ft", "-C", "2-3", "-s", "-u", "input.txt"]).unwrap();
-
-        assert!(config.sort_key.is_none());
-        assert!(config.unique_key.is_none());
-        assert_eq!(written(&config.sort_key_span()), [2..=3]);
-        assert_eq!(written(&config.unique_key_span()), [2..=3]);
     }
 
     #[test]
@@ -587,7 +565,8 @@ mod tests {
 
         //the parts keep the order written, so reading them permutes
         assert_eq!(written(&config.col_span()), [3..=3, 1..=1]);
-        assert_eq!(written(&config.sort_key_span()), [2..=2, 4..=5]);
+        let sort_key = config.sort_key.clone().unwrap();
+        assert_eq!(written(&config.span_for(sort_key)), [2..=2, 4..=5]);
     }
 
     #[test]
@@ -622,26 +601,13 @@ mod tests {
     }
 
     #[test]
-    fn an_operation_with_its_own_key_leaves_cols_to_select() {
-        //--sort keys on --cols, so --cols is not a bare selection
-        let config = config_from(&["ft", "-C", "2-3", "-s", "input.txt"]).unwrap();
-        assert!(config.has_column_operation());
-
-        //with its own key, --sort no longer claims --cols: it selects
-        let config =
-            config_from(&["ft", "-C", "2-3", "-s", "--sort-key", "1", "input.txt"]).unwrap();
-        assert!(!config.has_column_operation());
-
-        //the same holds for --unique
-        let config =
-            config_from(&["ft", "-C", "2-3", "-u", "--unique-key", "1", "input.txt"]).unwrap();
-        assert!(!config.has_column_operation());
-    }
-
-    #[test]
     fn key_ranges_use_field_mode_too() {
         let config = config_from(&["ft", "-F", ",", "-s", "--sort-key", "2", "input.txt"]).unwrap();
-        assert!(matches!(config.sort_key_span(), ColumnSpan::Fields { .. }));
+        let sort_key = config.sort_key.clone().unwrap();
+        assert!(matches!(
+            config.span_for(sort_key),
+            ColumnSpan::Fields { .. }
+        ));
     }
 
     #[test]
@@ -832,6 +798,12 @@ mod tests {
     }
 
     #[test]
+    fn invert_has_a_grep_style_short_flag() {
+        let config = config_from(&["ft", "-g", "a", "-v", "input.txt"]).unwrap();
+        assert!(config.invert);
+    }
+
+    #[test]
     fn accepts_delete_with_grep_only() {
         assert!(config_from(&["ft", "-d", "-g", "foo", "input.txt"]).is_ok());
     }
@@ -896,7 +868,22 @@ mod tests {
     #[test]
     fn in_place_flag_is_read() {
         let config = config_from(&["ft", "-i", "input.txt"]).unwrap();
-        assert!(config.in_place);
+        let in_place = config
+            .in_place
+            .expect("in-place options missing");
+        assert!(in_place.backup.is_none());
+        assert!(!in_place.dry_run);
+    }
+
+    #[test]
+    fn backup_and_dry_run_ride_along_with_in_place() {
+        let config =
+            config_from(&["ft", "-i", "--backup", ".bak", "--dry-run", "input.txt"]).unwrap();
+        let in_place = config
+            .in_place
+            .expect("in-place options missing");
+        assert_eq!(in_place.backup.as_deref(), Some(".bak"));
+        assert!(in_place.dry_run);
     }
 
     #[test]

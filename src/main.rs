@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use ft::cli_args::{Config, Input, cli};
+use ft::cli_args::{Config, InPlace, Input, cli};
 use ft::compose;
 use ft::error::AppError;
 use ft::file_processor::RunOutcome;
@@ -49,14 +50,22 @@ impl Verdict {
 fn run() -> Result<Verdict, AppError> {
     let config = Config::try_from(cli().get_matches())?;
 
-    if config.in_place {
+    if let Some(in_place) = &config.in_place {
         //validated in Config: --in-place only ever has file inputs, and
         //each is edited on its own, with its own row numbering
         let mut matched = false;
+        //a file named twice would be edited twice — the second pass
+        //reprocessing the first's output and overwriting its backup —
+        //so each distinct file is edited once
+        let mut seen = HashSet::new();
         for path in config.input_files() {
-            let outcome = match config.dry_run {
+            let identity = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            if !seen.insert(identity) {
+                continue;
+            }
+            let outcome = match in_place.dry_run {
                 true => report_changes(&config, path)?,
-                false => run_in_place(&config, path)?,
+                false => run_in_place(&config, in_place, path)?,
             };
             //one file matching is enough for the batch to count as a match
             matched |= outcome.matched;
@@ -129,7 +138,7 @@ fn run_streaming(config: &Config) -> Result<RunOutcome, AppError> {
 /// are resolved first, so the link's target is edited instead of the
 /// link being replaced by a regular file. The temporary file inherits
 /// the original's permissions and is synced to disk before the swap.
-fn run_in_place(config: &Config, path: &Path) -> Result<RunOutcome, AppError> {
+fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunOutcome, AppError> {
     let reader = open_file(path)?;
     //resolve symlinks so the rename below swaps out the link's target,
     //not the link itself (which would turn it into a regular file)
@@ -169,7 +178,7 @@ fn run_in_place(config: &Config, path: &Path) -> Result<RunOutcome, AppError> {
         //the backup is taken from the original, while it is still there,
         //and before the swap: a failure anywhere above leaves the input
         //untouched
-        if let Some(suffix) = &config.backup {
+        if let Some(suffix) = &in_place.backup {
             back_up(path, suffix)?;
         }
         Ok(outcome)

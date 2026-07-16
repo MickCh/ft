@@ -17,17 +17,64 @@ use crate::transform::{
 
 /// Assemble the streaming processor implied by the configuration.
 pub fn build_processor(config: &Config) -> FileProcessor {
+    //`--cols` is a shared scope: operations take it by claiming it, and
+    //only a `--cols` nobody claimed selects (cuts) the columns
+    let mut cols = ColumnClaims::new(config);
+    let reorder = build_reorder(config, &mut cols);
+    let predicate = build_predicate(config, &mut cols);
+    let unique_key_span = config
+        .unique
+        .then(|| cols.key_or_cols(&config.unique_key));
+    let transforms = build_pipeline(config, &mut cols);
+
     FileProcessor {
         rows: config.rows_or_full(),
         row_mode: row_mode(config),
-        reorder: build_reorder(config),
-        predicate: build_predicate(config),
-        unique_key_span: config
-            .unique
-            .then(|| config.unique_key_span()),
-        transforms: build_pipeline(config),
+        reorder,
+        predicate,
+        unique_key_span,
+        transforms,
         reducer: build_reducer(config),
         stop_when_matched: config.quiet,
+    }
+}
+
+/// Hands out the column span operations scope themselves to, and
+/// remembers whether any of them took `--cols`. Taking the span *is*
+/// what registers the claim, so a new column-scoped operation cannot
+/// forget to; a bare `--cols` — claimed by no operation — is what
+/// selects the columns, mirroring how `--rows` alone selects rows.
+struct ColumnClaims<'a> {
+    config: &'a Config,
+    claimed: bool,
+}
+
+impl<'a> ColumnClaims<'a> {
+    fn new(config: &'a Config) -> ColumnClaims<'a> {
+        ColumnClaims {
+            config,
+            claimed: false,
+        }
+    }
+
+    /// The `--cols` span, claimed as an operation's scope.
+    fn claim(&mut self) -> ColumnSpan {
+        self.claimed = true;
+        self.config.col_span()
+    }
+
+    /// The span keying an operation: its own key range when given —
+    /// which leaves `--cols` unclaimed, free to select — else `--cols`.
+    fn key_or_cols(&mut self, own_key: &Option<ColumnList>) -> ColumnSpan {
+        match own_key {
+            Some(columns) => self.config.span_for(columns.clone()),
+            None => self.claim(),
+        }
+    }
+
+    /// Whether some operation took `--cols` as its scope or key.
+    fn cols_claimed(&self) -> bool {
+        self.claimed
     }
 }
 
@@ -46,6 +93,7 @@ fn build_reducer(config: &Config) -> Option<Box<dyn LineReducer>> {
     }
 
     let key_span = config
+        .summary
         .group_by
         .clone()
         .map(|columns| config.span_for(columns));
@@ -65,14 +113,15 @@ type Statistic<'a> = (&'a Option<ColumnList>, fn(ColumnSpan) -> Aggregate);
 fn build_aggregates(config: &Config) -> Vec<Aggregate> {
     let mut aggregates = Vec::new();
 
-    if config.count {
+    let summary = &config.summary;
+    if summary.count {
         aggregates.push(Aggregate::Count);
     }
     let statistics: [Statistic; 4] = [
-        (&config.sum, Aggregate::Sum),
-        (&config.avg, Aggregate::Avg),
-        (&config.min, Aggregate::Min),
-        (&config.max, Aggregate::Max),
+        (&summary.sum, Aggregate::Sum),
+        (&summary.avg, Aggregate::Avg),
+        (&summary.min, Aggregate::Min),
+        (&summary.max, Aggregate::Max),
     ];
     for (columns, aggregate) in statistics {
         if let Some(columns) = columns {
@@ -97,10 +146,10 @@ fn row_mode(config: &Config) -> RowMode {
 }
 
 /// Attach the column key to the configured reordering, if any.
-fn build_reorder(config: &Config) -> Option<Reorder> {
+fn build_reorder(config: &Config, cols: &mut ColumnClaims) -> Option<Reorder> {
     config.reorder.map(|mode| match mode {
         ReorderMode::Sort { numeric, reverse } => Reorder::Sort(SortSpec {
-            key_span: config.sort_key_span(),
+            key_span: cols.key_or_cols(&config.sort_key),
             numeric,
             reverse,
         }),
@@ -110,28 +159,24 @@ fn build_reorder(config: &Config) -> Option<Reorder> {
 }
 
 /// Build the row filter implied by the configuration, if any.
-fn build_predicate(config: &Config) -> Option<Box<dyn LinePredicate>> {
+fn build_predicate(config: &Config, cols: &mut ColumnClaims) -> Option<Box<dyn LinePredicate>> {
     config.grep.as_ref().map(|pattern| {
         Box::new(GrepPredicate::new(
             pattern.clone(),
-            config.col_span(),
+            cols.claim(),
             config.invert,
         )) as Box<dyn LinePredicate>
     })
 }
 
 /// Build the per-line transform pipeline implied by the configuration.
-fn build_pipeline(config: &Config) -> Pipeline {
+/// Runs after the other builders, so `cols` already knows about their
+/// claims when the bare-selection decision is made at the end.
+fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
     let mut pipeline: Vec<Box<dyn LineTransform>> = Vec::new();
 
     if config.delete && config.cols.is_some() {
-        pipeline.push(Box::new(DeleteColumns::new(config.col_span())));
-    }
-
-    //with no operation claiming the column range, `--cols` alone
-    //selects the range, mirroring how `--rows` alone selects lines
-    if !config.has_column_operation() && config.cols.is_some() {
-        pipeline.push(Box::new(SelectColumns::new(config.col_span())));
+        pipeline.push(Box::new(DeleteColumns::new(cols.claim())));
     }
 
     //the find/replace pairs run in order, so a later one can rewrite
@@ -139,37 +184,37 @@ fn build_pipeline(config: &Config) -> Pipeline {
     for Replacement { find, replace } in &config.replacements {
         match find {
             FindPattern::Literal(text) if config.ignore_case => pipeline.push(Box::new(
-                ReplaceInColumnsIgnoreCase::new(text, replace.clone(), config.col_span()),
+                ReplaceInColumnsIgnoreCase::new(text, replace.clone(), cols.claim()),
             )),
             FindPattern::Literal(text) => pipeline.push(Box::new(ReplaceInColumns::new(
                 text.clone(),
                 replace.clone(),
-                config.col_span(),
+                cols.claim(),
             ))),
             FindPattern::Regex(pattern) => pipeline.push(Box::new(RegexReplaceInColumns::new(
                 pattern.clone(),
                 replace.clone(),
-                config.col_span(),
+                cols.claim(),
             ))),
         }
     }
 
     if config.upper {
-        pipeline.push(Box::new(MapColumns::uppercase(config.col_span())));
+        pipeline.push(Box::new(MapColumns::uppercase(cols.claim())));
     }
     if config.lower {
-        pipeline.push(Box::new(MapColumns::lowercase(config.col_span())));
+        pipeline.push(Box::new(MapColumns::lowercase(cols.claim())));
     }
     if config.title_case {
-        pipeline.push(Box::new(MapColumns::title_case(config.col_span())));
+        pipeline.push(Box::new(MapColumns::title_case(cols.claim())));
     }
     //squeezing runs before trimming, so a run of whitespace at the ends
     //collapses to one space and is then removed altogether
     if config.squeeze {
-        pipeline.push(Box::new(MapColumns::squeeze(config.col_span())));
+        pipeline.push(Box::new(MapColumns::squeeze(cols.claim())));
     }
     if config.trim {
-        pipeline.push(Box::new(MapColumns::trim(config.col_span())));
+        pipeline.push(Box::new(MapColumns::trim(cols.claim())));
     }
 
     //splitting comes after the rewriting transforms (they are scoped to
@@ -192,6 +237,14 @@ fn build_pipeline(config: &Config) -> Pipeline {
     //after the empties are gone — so the numbers come out contiguous
     if config.number {
         pipeline.push(Box::new(NumberLines::new(config.output_separator())));
+    }
+
+    //with no operation claiming the column range, `--cols` alone selects
+    //the range, mirroring how `--rows` alone selects lines. Everything in
+    //the pipeline at this point is line-wide (a column-scoped transform
+    //would have claimed `--cols`), so the selection goes first
+    if !cols.cols_claimed() && config.cols.is_some() {
+        pipeline.insert(0, Box::new(SelectColumns::new(config.col_span())));
     }
 
     Pipeline::new(pipeline)
@@ -768,8 +821,8 @@ mod tests {
         let mut config = Config::default();
         config.field_delimiter = Some(",".to_owned());
         config.reorder = sorted(false, false);
-        config.group_by = Some((1..=1).into());
-        config.sum = Some((2..=2).into());
+        config.summary.group_by = Some((1..=1).into());
+        config.summary.sum = Some((2..=2).into());
 
         //unsorted, "b" would be seen (and reported) first
         let result = run(config, "b,1\na,2\nb,3\n");
@@ -779,7 +832,7 @@ mod tests {
     #[test]
     fn count_replaces_the_rows_with_their_number() {
         let mut config = Config::default();
-        config.count = true;
+        config.summary.count = true;
 
         let result = run(config, "a\nb\nc\n");
         assert_eq!(result, "3\n");
@@ -788,7 +841,7 @@ mod tests {
     #[test]
     fn count_counts_only_the_rows_that_survive_the_filters() {
         let mut config = Config::default();
-        config.count = true;
+        config.summary.count = true;
         config.grep = Some(regex::Regex::new("ERROR").unwrap());
 
         //a reducer sees the rows the pipeline let through, no others
@@ -800,9 +853,9 @@ mod tests {
     fn group_by_summarizes_each_key() {
         let mut config = Config::default();
         config.field_delimiter = Some(",".to_owned());
-        config.group_by = Some((1..=1).into());
-        config.count = true;
-        config.sum = Some((2..=2).into());
+        config.summary.group_by = Some((1..=1).into());
+        config.summary.count = true;
+        config.summary.sum = Some((2..=2).into());
 
         let result = run(config, "a,1\nb,10\na,3\n");
         //one row per key, in first-seen order: key, count, sum
@@ -812,8 +865,8 @@ mod tests {
     #[test]
     fn summary_columns_are_separated_by_a_tab_in_char_mode() {
         let mut config = Config::default();
-        config.count = true;
-        config.sum = Some((1..=2).into());
+        config.summary.count = true;
+        config.summary.sum = Some((1..=2).into());
 
         //no delimiter to inherit, so the summary falls back to a tab
         let result = run(config, "10\n20\n");
@@ -824,7 +877,7 @@ mod tests {
     fn unique_and_count_together_count_the_distinct_rows() {
         let mut config = Config::default();
         config.unique = true;
-        config.count = true;
+        config.summary.count = true;
 
         //--unique drops the duplicates before the reducer sees them
         let result = run(config, "a\nb\na\nc\n");
@@ -963,16 +1016,22 @@ mod tests {
         assert!(error.to_string().contains("line 2"));
     }
 
+    /// The transform pipeline `config` implies, with every other
+    /// builder's `--cols` claims accounted for.
+    fn pipeline_of(config: &Config) -> Pipeline {
+        build_processor(config).transforms
+    }
+
     #[test]
     fn build_pipeline_is_empty_by_default() {
-        assert!(build_pipeline(&Config::default()).is_empty());
+        assert!(pipeline_of(&Config::default()).is_empty());
     }
 
     #[test]
     fn build_pipeline_selects_columns_when_no_other_operation() {
         let mut config = Config::default();
         config.cols = Some((5..=10).into());
-        assert_eq!(build_pipeline(&config).len(), 1);
+        assert_eq!(pipeline_of(&config).len(), 1);
     }
 
     #[test]
@@ -981,13 +1040,13 @@ mod tests {
         let mut sort_config = Config::default();
         sort_config.cols = Some((5..=10).into());
         sort_config.reorder = sorted(false, false);
-        assert!(build_pipeline(&sort_config).is_empty());
+        assert!(pipeline_of(&sort_config).is_empty());
 
         //find/replace is scoped by the column range
         let mut replace_config = Config::default();
         replace_config.cols = Some((5..=10).into());
         replace_config.replacements = vec![literal("a", "b")];
-        let mut pipeline = build_pipeline(&replace_config);
+        let mut pipeline = pipeline_of(&replace_config);
         assert_eq!(pipeline.len(), 1);
         assert_eq!(piped(&mut pipeline, "aaaa aaaa"), "aaaa bbbb");
     }
@@ -997,14 +1056,14 @@ mod tests {
         let mut config = Config::default();
         config.delete = true;
         config.cols = Some((5..=10).into());
-        assert_eq!(build_pipeline(&config).len(), 1);
+        assert_eq!(pipeline_of(&config).len(), 1);
     }
 
     #[test]
     fn build_pipeline_ignores_delete_without_columns() {
         let mut config = Config::default();
         config.delete = true;
-        assert!(build_pipeline(&config).is_empty());
+        assert!(pipeline_of(&config).is_empty());
     }
 
     #[test]
@@ -1013,7 +1072,7 @@ mod tests {
         config.upper = true;
         config.replacements = vec![literal("foo", "bar")];
 
-        let mut pipeline = build_pipeline(&config);
+        let mut pipeline = pipeline_of(&config);
         assert_eq!(pipeline.len(), 2);
         //replace runs first, so the replacement is uppercased too
         assert_eq!(piped(&mut pipeline, "x foo y"), "X BAR Y");
@@ -1024,9 +1083,42 @@ mod tests {
         let mut config = Config::default();
         config.replacements = vec![literal("a", "b"), literal("b", "c")];
 
-        let mut pipeline = build_pipeline(&config);
+        let mut pipeline = pipeline_of(&config);
         assert_eq!(pipeline.len(), 2);
         //pairs run in order: a->b then b->c turns "a" into "c"
         assert_eq!(piped(&mut pipeline, "a"), "c");
+    }
+
+    #[test]
+    fn unique_key_leaves_cols_to_select() {
+        //--unique keys on its own range, so the bare --cols still cuts;
+        //the unique key then addresses the cut result
+        let mut config = Config::default();
+        config.unique = true;
+        config.unique_key = Some((1..=1).into());
+        config.cols = Some((2..=3).into());
+
+        //cut to columns 2-3, then dedupe on the first char of the cut
+        let result = run(config, "xab\nxaz\nxbc\n");
+        assert_eq!(result, "ab\nbc\n");
+    }
+
+    #[test]
+    fn transform_order_holds_across_the_whole_pipeline() {
+        //the documented order: squeeze -> trim -> split -> wrap -> drop
+        //empties -> number; each step's output is the next one's input
+        let mut config = Config::default();
+        config.squeeze = true;
+        config.trim = true;
+        config.split_on = Some(",".to_owned());
+        config.wrap = Some(2);
+        config.drop_empty = true;
+        config.number = true;
+
+        //"  a   b,c  " squeezes to " a b,c ", trims to "a b,c", splits
+        //into "a b" and "c", wraps to "a "/"b"/"c"; the second line
+        //trims to nothing and is dropped, so the numbers stay contiguous
+        let result = run(config, "  a   b,c  \n   \n");
+        assert_eq!(result, "1\ta \n2\tb\n3\tc\n");
     }
 }

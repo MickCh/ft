@@ -8,6 +8,20 @@ pub fn cli() -> Command {
     Command::new(crate_name!())
         .version(crate_version!())
         .about("File Transformer")
+        .after_help(
+            "Examples:\n\
+             \x20 ft -R 1-5 -C 2-4 input.txt             keep rows 1-5, columns 2-4\n\
+             \x20 ft -R '~10-~1' input.txt               the last ten rows, like tail\n\
+             \x20 ft -F , -C 3,1 data.csv                CSV fields 3 and 1, in that order\n\
+             \x20 ft -F , --group-by 1 --sum 2 data.csv  sum field 2 per distinct field 1\n\
+             \x20 ft -g ERROR -d -i --backup .bak a.log  delete matching rows in place,\n\
+             \x20                                        keeping a backup\n\
+             \n\
+             Exit codes (like grep):\n\
+             \x20 0  rows matched (a run without --grep always matches)\n\
+             \x20 1  --grep matched nothing\n\
+             \x20 2  the run failed",
+        )
         .arg(
             Arg::new("rows")
                 .short('R')
@@ -152,6 +166,7 @@ pub fn cli() -> Command {
         )
         .arg(
             Arg::new("invert")
+                .short('v')
                 .long("invert")
                 .required(false)
                 .action(ArgAction::SetTrue)
