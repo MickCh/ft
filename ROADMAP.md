@@ -18,6 +18,10 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **`grep`-like exit codes and `--quiet`** — 0 matched / 1 nothing matched / 2 failed; `--quiet` stops at the first match and answers with the exit code alone.
 - ✅ **`--join`** — the N→1 direction, a streaming `LineReducer` (`accept` takes the writer). The inverse of `--split-on`.
 - ✅ **Reordering + reducers** — the reorder buffer drains through the same output path as streamed lines, so `--sort --join` folds sorted and `--sort --group-by` reports groups in sorted order.
+- ✅ **Exact numbers** — `Number` (`Int(i128)` exact, `Float(f64)` otherwise, compared exactly across the two) replaces the bare `f64` in the numeric sort key and the summaries, so keys beyond 2^53 sort correctly and integer sums stay exact. *(2026-11-06 comparison)*
+- ✅ **Quoted CSV values** — `ColumnSpan::select_value` reads a field's value without its quotes; numeric operations use it, so `"10"` sums and sorts as 10. Lexical ones still read the field as written, which keeps projections valid CSV. *(2026-11-06 comparison)*
+- ✅ **Multi-line CSV boundary** — under `--quoted`, a line that leaves a quoted field open fails with exit code 2 instead of returning records cut in half. *(2026-11-06 comparison)*
+- ✅ **Order of operations documented** — README section on the fixed pipeline and the shared `--cols` scope, with examples. *(2026-11-06 comparison)*
 
 ## 1. Free slots: a new `LineTransform` / `LinePredicate` (no engine changes)
 
@@ -35,7 +39,20 @@ Each is one new type plus one branch in `compose::build_pipeline`:
 - **Encodings** — non-UTF-8 input is a hard error today. Add `--encoding latin1|utf16`, or a lossy/byte-oriented mode.
 - **More reducers** — `--median`, `--distinct` (count of distinct keys), `--first`/`--last` per group. Now just implementations of an abstraction that exists.
 
-## 3. Tool maturity (cheap, highly visible)
+## 3. From the 2026-11-06 comparison with grep/sed/sort/cut/awk
+
+Open findings of an external black-box comparison (the fixed ones are under *Done*):
+
+- **Multi-line CSV records** — a newline inside quotes is now rejected; actually reading such a record needs the engine to iterate over *records* rather than lines when `--quoted` is set (a record reader in front of `process_line`, with row numbers counting records). The largest item here.
+- **`--grep-key`** — `-F , -C 2 -g ERROR` filters on field 2 but prints the whole row, because `--grep` claims `--cols`. A key option of its own (like `--sort-key`/`--unique-key`) would free `--cols` to select at the same time. Cheap: one `ColumnClaims::key_or_cols` call.
+- **Quoted `--group-by` keys** — `"a"` and `a` are different keys today. Grouping by the value (`select_value`) would merge them, but the key is also printed, so it needs a decision on how to print it back.
+- **UTF-8 BOM** — a BOM before the first field keeps `-C 1 -g '^a$'` from matching on line 1. Strip it on input (and keep it on output for `--in-place`?).
+- **Grapheme columns** — columns count code points, so `é` and ZWJ emoji sequences can be split. An opt-in `--graphemes` (`unicode-segmentation`) would count user-perceived characters; it touches every char-indexed helper in `text.rs`.
+- **Regex backreferences** — `(.)` is rejected by the `regex` crate. `fancy-regex` behind a flag would allow it, at the cost of linear-time matching guarantees.
+- **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; the *Encodings* item above (a lossy/byte mode) is the real answer.
+- **Performance** — `ft` beat `sed` on replacement and `awk`/pipelines on combined operations, but trailed `grep` on plain filtering and `sort` on whole-line sorting (300k rows, Windows). Worth a `criterion` look at the predicate path and at `sort_by_cached_key` cloning every key.
+
+## 4. Tool maturity (cheap, highly visible)
 
 - `clap_complete` — shell completions
 - `clap_mangen` — a man page
