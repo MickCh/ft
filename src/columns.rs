@@ -186,9 +186,9 @@ impl ColumnSpan {
         let ColumnSpan::Fields(spec) = self else {
             return vec![self.select(line)];
         };
-        let positions = field_positions(line, &spec.delimiter, spec.quoted);
-        spec.fields
-            .written()
+        let parts = spec.fields.written();
+        let positions = field_positions(line, spec, fields_needed(parts));
+        parts
             .iter()
             .flat_map(|part| (*part.start()).max(1)..=(*part.end()).min(positions.len()))
             .map(|field| unquote(text::select_columns(line, &positions[field - 1])))
@@ -230,13 +230,27 @@ fn resolve_fields(
     parts: &[RangeInclusive<usize>],
     swallow_delimiter: bool,
 ) -> Vec<RangeInclusive<usize>> {
-    let positions = field_positions(line, &spec.delimiter, spec.quoted);
+    let positions = field_positions(line, spec, fields_needed(parts));
     let delimiter_len = spec.delimiter.chars().count();
 
     parts
         .iter()
         .filter_map(|part| resolve_part(&positions, part, delimiter_len, swallow_delimiter))
         .collect()
+}
+
+/// How many fields a line must be split into to resolve `parts`: up to
+/// the highest one asked for, plus one more, which tells whether the
+/// last field asked for is the last of the line — what clamping a range
+/// and swallowing a trailing delimiter need to know. An open range
+/// (`3-`) needs them all.
+fn fields_needed(parts: &[RangeInclusive<usize>]) -> usize {
+    parts
+        .iter()
+        .map(|part| *part.end())
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
 }
 
 /// Map a 1-based field range onto the char range those fields occupy.
@@ -281,33 +295,56 @@ fn resolve_part(
 /// quote handles it, since the pair leaves the state where it found it.
 /// A field keeps its quotes: they are part of the text it occupies, so
 /// selected fields re-join into valid CSV.
-fn field_positions(line: &str, delimiter: &str, quoted: bool) -> Vec<RangeInclusive<usize>> {
-    let delimiter_len = delimiter.chars().count();
-    let mut positions = Vec::new();
+///
+/// The walk stops once `limit` fields are known: `-C 1` of a long line
+/// reads only as far as its first two fields.
+fn field_positions(line: &str, spec: &FieldSpan, limit: usize) -> Vec<RangeInclusive<usize>> {
+    let bytes = line.as_bytes();
+    let delimiter_bytes = spec.delimiter.as_bytes();
+    let delimiter_chars = spec.delimiter.chars().count();
+    let quoted = spec.quoted;
+    //a few fields cover most lines; an open range must not reserve
+    //`usize::MAX` of them
+    let mut positions = Vec::with_capacity(limit.min(16));
 
-    //1-based char positions: where the current field starts, and where
-    //the walk currently is
+    //walked byte by byte, which needs no decoding: a delimiter or a quote
+    //can only start on a char boundary, since no byte of a multi-byte
+    //char is a valid first byte. Columns stay 1-based char positions —
+    //a char is counted at its first byte, never at a continuation byte
     let mut start = 1usize;
     let mut column = 1usize;
     let mut inside_quotes = false;
-    //chars of a matched delimiter still to walk over
-    let mut skip = 0usize;
+    let mut offset = 0usize;
 
-    for (offset, character) in line.char_indices() {
-        if skip > 0 {
-            skip -= 1;
-        } else if quoted && character == '"' {
+    while let Some(&byte) = bytes.get(offset) {
+        if quoted && byte == b'"' {
             inside_quotes = !inside_quotes;
-        } else if !inside_quotes && line[offset..].starts_with(delimiter) {
+        } else if !inside_quotes
+            && byte == delimiter_bytes[0]
+            && bytes[offset..].starts_with(delimiter_bytes)
+        {
             positions.push(start..=column - 1);
-            start = column + delimiter_len;
-            skip = delimiter_len - 1;
+            if positions.len() == limit {
+                return positions;
+            }
+            column += delimiter_chars;
+            start = column;
+            offset += delimiter_bytes.len();
+            continue;
         }
-        column += 1;
+        if !is_continuation_byte(byte) {
+            column += 1;
+        }
+        offset += 1;
     }
     positions.push(start..=column - 1);
 
     positions
+}
+
+/// Whether `byte` continues a multi-byte UTF-8 char rather than starting one.
+fn is_continuation_byte(byte: u8) -> bool {
+    byte & 0b1100_0000 == 0b1000_0000
 }
 
 /// The value of one CSV field: its surrounding quotes removed and each
@@ -711,6 +748,23 @@ mod tests {
 
         // When / Then a ';' in a value is what needs quoting now
         assert_eq!(span.select_canonical(r#""a;b","c,d""#), r#""a;b";c,d"#);
+    }
+
+    #[test]
+    fn a_split_that_stops_early_still_sees_the_next_field() {
+        // Given a line with more fields than the span reaches
+        let line = "a,b,c,d,e";
+        let span = fields(",", &[2..=3]);
+
+        // When / Then the selection is right, and deleting it swallows
+        // the trailing delimiter — which needs to know field 4 exists
+        assert_eq!(span.select(line), "b,c");
+        assert_eq!(
+            text::remove_ranges(line, &span.delete_ranges(line)),
+            "a,d,e"
+        );
+        // while an open range still reaches the end of the line
+        assert_eq!(fields(",", &[4..=usize::MAX]).select(line), "d,e");
     }
 
     #[test]

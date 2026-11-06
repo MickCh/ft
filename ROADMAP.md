@@ -72,7 +72,20 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
   | `-s -n --sort-key 9` (fields) | 62 MiB/s |
   | `--group-by 1 --count --sum 3` | 38 MiB/s |
 
-  Suspects: `field_positions` allocates a `Vec` per call and tries `starts_with(delimiter)` at every char, and a summary splits the same line once per aggregate plus once for the key. A literal `--find` is slower than `--grep` by more than its writing explains.
+  First round of field-mode work (2026-11-06): `field_positions` walks bytes instead of decoding chars and stops once the fields asked for (plus one) are known, `byte_range` skips the char walk on ASCII lines, and `--group-by` allocates a key only for a new group. Release binaries on 1M rows, best of 7 interleaved runs, identical output:
+
+  | Case | Before | After |
+  |---|---:|---:|
+  | `-F , -C 1` | 386 ms | 267 ms |
+  | `-F , -C 3,1` | 457 ms | 365 ms |
+  | `-d -F , -C 2` | 494 ms | 345 ms |
+  | `-F , --sum 3` | 406 ms | 265 ms |
+  | `--group-by 1 --count --sum 3` | 725 ms | 395 ms |
+  | `-u --unique-key 7` | 703 ms | 327 ms |
+  | `-s -n --sort-key 9` | 1156 ms | 796 ms |
+  | `--count` (control) | 91 ms | 92 ms |
+
+  Still open: a summary splits the same line once per aggregate plus once for the key; every field selection allocates the resolved ranges and the joined result; a literal `--find` is slower than `--grep` by more than its writing explains. In-process `cargo bench` numbers swing by ±20% on this machine between runs, so compare binaries (best of several interleaved runs) before trusting a change.
 
 ## 4. Tool maturity (cheap, highly visible)
 

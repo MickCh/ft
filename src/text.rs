@@ -59,6 +59,12 @@ fn byte_range(line: &str, cols: &RangeInclusive<usize>) -> Option<(usize, usize)
         return None;
     }
 
+    //in ASCII text a column is a byte, so no walk is needed — the common
+    //case, and `is_ascii` checks a word at a time
+    if line.is_ascii() {
+        return (start <= line.len()).then(|| (start - 1, end.min(line.len())));
+    }
+
     let mut from = None;
     let mut to = line.len();
     for (position, (offset, _)) in line.char_indices().enumerate() {

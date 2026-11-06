@@ -7,6 +7,7 @@
 //! The engine writes the lines *or* hands them to a reducer, never both:
 //! a summary replaces the rows it summarizes.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Write};
 
@@ -213,15 +214,16 @@ impl LineReducer for Summarize {
         //without --group-by every row lands in the same, unnamed group;
         //the canonical form makes `"a"` and `a` one group under --quoted
         let key = match &self.key_span {
-            Some(span) => span.select_canonical(line).into_owned(),
-            None => String::new(),
+            Some(span) => span.select_canonical(line),
+            None => Cow::Borrowed(""),
         };
 
-        if !self.groups.contains_key(&key) {
-            self.start_group(key.clone());
+        //the key is looked up borrowed; only a new group owns a copy
+        if !self.groups.contains_key(key.as_ref()) {
+            self.start_group(key.as_ref().to_owned());
         }
 
-        let Some(accumulators) = self.groups.get_mut(&key) else {
+        let Some(accumulators) = self.groups.get_mut(key.as_ref()) else {
             return Ok(());
         };
         for (aggregate, accumulator) in self.aggregates.iter().zip(accumulators) {
