@@ -112,7 +112,7 @@ pub fn select_ranges<'a>(
 
 /// Return the line with the characters within the column ranges removed.
 pub fn remove_ranges(line: &str, cols: &[RangeInclusive<usize>]) -> String {
-    rewrite_ranges(line, cols, |_| String::new())
+    rewrite_ranges(line, cols, |_, _| {})
 }
 
 /// Apply `map_within` to the parts of the line inside the column ranges,
@@ -121,30 +121,41 @@ pub fn map_ranges<F>(line: &str, cols: &[RangeInclusive<usize>], map_within: F) 
 where
     F: Fn(&str) -> String,
 {
-    rewrite_ranges(line, cols, map_within)
+    rewrite_ranges(line, cols, |within, result| {
+        result.push_str(&map_within(within))
+    })
 }
 
 /// Replace every `find` occurrence with `replace`, but only within the
 /// column ranges; the rest of the line is left untouched. Each range is
 /// searched on its own, so a match straddling two of them is not
-/// replaced.
+/// replaced. The pieces go straight into the rebuilt line, with no
+/// intermediate string per range.
 pub fn replace_in_ranges(
     line: &str,
     find: &str,
     replace: &str,
     cols: &[RangeInclusive<usize>],
 ) -> String {
-    map_ranges(line, cols, |within| within.replace(find, replace))
+    rewrite_ranges(line, cols, |within, result| {
+        let mut last = 0;
+        for (at, _) in within.match_indices(find) {
+            result.push_str(&within[last..at]);
+            result.push_str(replace);
+            last = at + find.len();
+        }
+        result.push_str(&within[last..]);
+    })
 }
 
-/// Rebuild the line, replacing the content of each column range with
-/// the result of `map_within` (the empty string removes it). Walks the
+/// Rebuild the line, letting `write_within` write what replaces the
+/// content of each column range (writing nothing removes it). Walks the
 /// line once, left to right, so the ranges must ascend; one starting
 /// inside an already rewritten range is skipped rather than applied
 /// twice.
-fn rewrite_ranges<F>(line: &str, cols: &[RangeInclusive<usize>], map_within: F) -> String
+fn rewrite_ranges<F>(line: &str, cols: &[RangeInclusive<usize>], mut write_within: F) -> String
 where
-    F: Fn(&str) -> String,
+    F: FnMut(&str, &mut String),
 {
     let mut result = String::with_capacity(line.len());
     let mut cursor = 0usize;
@@ -157,7 +168,7 @@ where
             continue;
         }
         result.push_str(&line[cursor..from]);
-        result.push_str(&map_within(&line[from..to]));
+        write_within(&line[from..to], &mut result);
         cursor = to;
     }
     result.push_str(&line[cursor..]);
@@ -379,6 +390,20 @@ mod properties {
                 .chain(rest[at..].iter().copied())
                 .collect();
             prop_assert_eq!(rebuilt, line);
+        }
+
+        #[test]
+        fn replace_in_ranges_is_str_replace_within_each_range(
+            line in lines(),
+            range in ranges(),
+            find in prop::sample::select(vec!["a", " ", ",", "ż", "aa", ""]),
+            replace in prop::sample::select(vec!["", "X", "🙂🙂"]),
+        ) {
+            let expected = map_ranges(&line, std::slice::from_ref(&range), |within| {
+                within.replace(find, replace)
+            });
+            let replaced = replace_in_ranges(&line, find, replace, std::slice::from_ref(&range));
+            prop_assert_eq!(replaced, expected);
         }
 
         #[test]

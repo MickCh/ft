@@ -86,7 +86,7 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
   | `-s -n --sort-key 9` | 1156 ms | 796 ms |
   | `--count` (control) | 91 ms | 92 ms |
 
-  Still open: a summary splits the same line once per aggregate plus once for the key; every field selection allocates the resolved ranges and the joined result; a literal `--find` is slower than `--grep` by more than its writing explains. In-process `cargo bench` numbers swing by ±20% on this machine between runs, so compare binaries (best of several interleaved runs) before trusting a change.
+  Still open: a summary splits the same line once per aggregate plus once for the key; every field selection allocates the resolved ranges and the joined result; a literal `--find` was slower than `--grep` by more than its writing explained — fixed: a line without the literal is now kept uncopied, and a match is written straight into the rebuilt line (1M rows: no match 374 → 243 ms, which is pass-through's 228 ms; 1 row in 10 382 → 259 ms; every row 396 → 366 ms). What remains against `grep` is output volume: a replacement writes every row, a filter only the matches. In-process `cargo bench` numbers swing by ±20% on this machine between runs, so compare binaries (best of several interleaved runs) before trusting a change.
 
 ## 4. Tool maturity (cheap, highly visible)
 

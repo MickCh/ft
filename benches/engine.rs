@@ -85,6 +85,8 @@ fn log_benches(criterion: &mut Criterion) {
             ("pass-through", &[]),
             ("grep", &["-g", "ERROR"]),
             ("replace", &["-f", "foo", "-r", "bar"]),
+            //only every tenth row matches, as in most real files
+            ("replace-rare", &["-f", "ERROR", "-r", "E"]),
             ("regex-replace", &["-e", "-f", "worker-[0-9]+", "-r", "w"]),
             ("sort", &["-s"]),
             (

@@ -263,6 +263,11 @@ impl ReplaceInColumns {
 
 impl LineTransform for ReplaceInColumns {
     fn apply(&mut self, line: &str) -> LineOutcome {
+        //an occurrence inside the span is an occurrence in the line, so a
+        //line without one is left as it is — no copy for the common case
+        if !line.contains(self.find.as_str()) {
+            return LineOutcome::Keep;
+        }
         LineOutcome::Replace(text::replace_in_ranges(
             line,
             &self.find,
@@ -301,6 +306,13 @@ impl ReplaceInColumnsIgnoreCase {
 
 impl LineTransform for ReplaceInColumnsIgnoreCase {
     fn apply(&mut self, line: &str) -> LineOutcome {
+        //the pattern is an escaped literal — no anchors, no word
+        //boundaries — so a match inside the span is a match in the line,
+        //and a line without one needs no copy. (Not so for a user regex:
+        //`^b` matches column 2 of `ab`, but not the line.)
+        if !self.pattern.is_match(line) {
+            return LineOutcome::Keep;
+        }
         LineOutcome::Replace(text::map_ranges(
             line,
             &self.span.write_ranges(line),
@@ -720,6 +732,26 @@ mod tests {
         assert_eq!(
             transform.apply("abcdefg"),
             LineOutcome::Expand(vec!["abc".to_owned(), "def".to_owned(), "g".to_owned()])
+        );
+    }
+
+    #[test]
+    fn literal_replace_keeps_a_line_without_the_text() {
+        // Given replacements of a literal, case-sensitive and not
+        let mut exact = ReplaceInColumns::new("foo".to_owned(), "bar".to_owned(), 1..=usize::MAX);
+        let mut folded = ReplaceInColumnsIgnoreCase::new("foo", "bar".to_owned(), 1..=usize::MAX);
+
+        // When / Then a line without it is kept, uncopied
+        assert_eq!(exact.apply("nothing here"), LineOutcome::Keep);
+        assert_eq!(folded.apply("nothing here"), LineOutcome::Keep);
+        // and a line with it is still rewritten
+        assert_eq!(
+            exact.apply("a foo"),
+            LineOutcome::Replace("a bar".to_owned())
+        );
+        assert_eq!(
+            folded.apply("a FOO"),
+            LineOutcome::Replace("a bar".to_owned())
         );
     }
 
