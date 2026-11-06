@@ -150,18 +150,49 @@ impl ColumnSpan {
     pub fn select_value<'a>(&self, line: &'a str) -> Cow<'a, str> {
         match self {
             ColumnSpan::Fields(spec) if spec.quoted => {
-                let values: Vec<Cow<'_, str>> = self
-                    .read_ranges(line)
-                    .iter()
-                    .map(|part| unquote(text::select_columns(line, part)))
-                    .collect();
-                match <[_; 1]>::try_from(values) {
-                    Ok([only]) => only,
-                    Err(values) => Cow::Owned(values.join(self.joiner())),
-                }
+                join_parts(self.quoted_values(line), self.joiner())
             }
             _ => self.select(line),
         }
+    }
+
+    /// The selection in one canonical form, so that a key does not depend
+    /// on how the input happened to quote it: under `--quoted` each field
+    /// is reduced to its value and quoted again only where it has to be —
+    /// when it holds the joiner, a quote or a line break — so `"a"` and
+    /// `a` give the same key, while `"x,y"` stays one quoted field. That
+    /// minimal quoting is unambiguous, so distinct field lists never meet
+    /// in one key (`a,"b,c"` is not `"a,b",c`), and the key is valid CSV
+    /// to print. Without `--quoted` it is the selection as written.
+    pub fn select_canonical<'a>(&self, line: &'a str) -> Cow<'a, str> {
+        match self {
+            ColumnSpan::Fields(spec) if spec.quoted => {
+                let joiner = self.joiner();
+                let fields = self
+                    .quoted_values(line)
+                    .into_iter()
+                    .map(|value| quote_if_needed(value, joiner))
+                    .collect();
+                join_parts(fields, joiner)
+            }
+            _ => self.select(line),
+        }
+    }
+
+    /// The CSV value of every selected field, one by one — a part like
+    /// `1-2` spans two fields, each with quotes of its own — in the order
+    /// written, skipping fields the line does not have.
+    fn quoted_values<'a>(&self, line: &'a str) -> Vec<Cow<'a, str>> {
+        let ColumnSpan::Fields(spec) = self else {
+            return vec![self.select(line)];
+        };
+        let positions = field_positions(line, &spec.delimiter, spec.quoted);
+        spec.fields
+            .written()
+            .iter()
+            .flat_map(|part| (*part.start()).max(1)..=(*part.end()).min(positions.len()))
+            .map(|field| unquote(text::select_columns(line, &positions[field - 1])))
+            .collect()
     }
 
     /// What joins the parts of a selection: the output delimiter in
@@ -290,6 +321,26 @@ fn unquote(field: &str) -> Cow<'_, str> {
         Some(inner) if inner.contains("\"\"") => Cow::Owned(inner.replace("\"\"", "\"")),
         Some(inner) => Cow::Borrowed(inner),
         None => Cow::Borrowed(field),
+    }
+}
+
+/// A value written as a CSV field: quoted, with its quotes doubled,
+/// only when it holds the delimiter, a quote or a line break — the
+/// minimal quoting RFC 4180 needs (and Python's `csv` writes).
+fn quote_if_needed<'a>(value: Cow<'a, str>, delimiter: &str) -> Cow<'a, str> {
+    let needs_quotes = value.contains(delimiter) || value.contains(['"', '\n', '\r']);
+    if needs_quotes {
+        Cow::Owned(format!("\"{}\"", value.replace('"', "\"\"")))
+    } else {
+        value
+    }
+}
+
+/// Join selected parts, borrowing the only one rather than copying it.
+fn join_parts<'a>(parts: Vec<Cow<'a, str>>, joiner: &str) -> Cow<'a, str> {
+    match <[_; 1]>::try_from(parts) {
+        Ok([only]) => only,
+        Err(parts) => Cow::Owned(parts.join(joiner)),
     }
 }
 
@@ -608,5 +659,63 @@ mod tests {
         assert!(!leaves_quote_open(r#"1,"hello",2"#));
         assert!(!leaves_quote_open(r#"1,"say ""hi""",2"#));
         assert!(!leaves_quote_open("plain"));
+    }
+
+    #[test]
+    fn select_canonical_quotes_only_where_needed() {
+        // Given the same values, quoted and not
+        let span = quoted_fields(&[1..=1]);
+
+        // When / Then a needless quote goes, a needed one stays
+        assert_eq!(span.select_canonical(r#""a",1"#), "a");
+        assert_eq!(span.select_canonical("a,1"), "a");
+        assert_eq!(span.select_canonical(r#""x,y",1"#), r#""x,y""#);
+        assert_eq!(
+            span.select_canonical(r#""say ""hi""",1"#),
+            r#""say ""hi""""#
+        );
+        assert_eq!(span.select_canonical(r#""",1"#), "");
+    }
+
+    #[test]
+    fn select_value_unquotes_each_field_of_a_range() {
+        // Given one part spanning two quoted fields
+        let span = quoted_fields(&[1..=2]);
+
+        // When / Then each field loses its own quotes
+        assert_eq!(span.select_value(r#""1","2",3"#), "1,2");
+    }
+
+    #[test]
+    fn select_canonical_keeps_distinct_field_lists_apart() {
+        // Given two lines whose unquoted values join into the same text
+        let span = quoted_fields(&[1..=2]);
+
+        // When
+        let first = span.select_canonical(r#"a,"b,c""#);
+        let second = span.select_canonical(r#""a,b",c"#);
+
+        // Then the quoting tells them apart
+        assert_eq!(first, r#"a,"b,c""#);
+        assert_eq!(second, r#""a,b",c"#);
+    }
+
+    #[test]
+    fn select_canonical_quotes_for_the_output_delimiter() {
+        // Given fields rejoined by ';' instead of ','
+        let span = ColumnSpan::Fields(FieldSpan {
+            quoted: true,
+            output_delimiter: Some(";".to_owned()),
+            ..FieldSpan::new(",", list(&[1..=2]))
+        });
+
+        // When / Then a ';' in a value is what needs quoting now
+        assert_eq!(span.select_canonical(r#""a;b","c,d""#), r#""a;b";c,d"#);
+    }
+
+    #[test]
+    fn select_canonical_is_the_selection_without_quoted_mode() {
+        // Given / When / Then
+        assert_eq!(fields(",", &[1..=1]).select_canonical(r#""a",1"#), r#""a""#);
     }
 }

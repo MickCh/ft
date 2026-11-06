@@ -324,6 +324,40 @@ fn group_by_summarizes_per_key() {
 }
 
 #[test]
+fn quoted_group_by_keys_group_by_value() {
+    //`"a"` and `a` are one group, printed without needless quotes;
+    //`"x,y"` keeps the quotes it needs to stay one CSV field
+    let input = TempFile::new("group-by-quoted", "\"a\",1\na,2\n\"x,y\",3\nx,4\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "--group-by",
+        "1",
+        "--sum",
+        "2",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "a,3\n\"x,y\",3\nx,4\n");
+}
+
+#[test]
+fn quoted_group_by_keeps_multi_field_keys_apart() {
+    //both keys unquote to the text a,b,c, but they are different fields
+    let input = TempFile::new("group-by-quoted-multi", "a,\"b,c\",1\n\"a,b\",c,2\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "--group-by",
+        "1-2",
+        "--count",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "a,\"b,c\",1\n\"a,b\",c,1\n");
+}
+
+#[test]
 fn min_and_max_report_the_extremes() {
     let input = TempFile::new("min-max", "a,3\nb,-1.5\nc,7\n");
     let stdout = run_ft_stdout(&["-F", ",", "--min", "2", "--max", "2", input.path_str()]);

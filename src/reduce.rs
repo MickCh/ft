@@ -210,9 +210,10 @@ impl LineReducer for Summarize {
     /// A summary can say nothing until the input ends, so the writer
     /// goes unused here.
     fn accept(&mut self, line: &str, _writer: &mut dyn Write) -> io::Result<()> {
-        //without --group-by every row lands in the same, unnamed group
+        //without --group-by every row lands in the same, unnamed group;
+        //the canonical form makes `"a"` and `a` one group under --quoted
         let key = match &self.key_span {
-            Some(span) => span.select(line).into_owned(),
+            Some(span) => span.select_canonical(line).into_owned(),
             None => String::new(),
         };
 
