@@ -142,6 +142,28 @@ impl ColumnSpan {
         text::select_ranges(line, &self.read_ranges(line), self.joiner())
     }
 
+    /// What the selection *means* rather than the text it occupies: under
+    /// `--quoted` each field loses its surrounding quotes and a doubled
+    /// quote becomes one, so `"10"` reads as the number 10. Lexical
+    /// operations keep using [`ColumnSpan::select`], whose quotes make a
+    /// projection valid CSV; numeric ones read this.
+    pub fn select_value<'a>(&self, line: &'a str) -> Cow<'a, str> {
+        match self {
+            ColumnSpan::Fields(spec) if spec.quoted => {
+                let values: Vec<Cow<'_, str>> = self
+                    .read_ranges(line)
+                    .iter()
+                    .map(|part| unquote(text::select_columns(line, part)))
+                    .collect();
+                match <[_; 1]>::try_from(values) {
+                    Ok([only]) => only,
+                    Err(values) => Cow::Owned(values.join(self.joiner())),
+                }
+            }
+            _ => self.select(line),
+        }
+    }
+
     /// What joins the parts of a selection: the output delimiter in
     /// field mode (the input delimiter unless overridden), nothing in
     /// char mode, where columns are adjacent by definition.
@@ -255,6 +277,20 @@ fn field_positions(line: &str, delimiter: &str, quoted: bool) -> Vec<RangeInclus
     positions.push(start..=column - 1);
 
     positions
+}
+
+/// The value of one CSV field: its surrounding quotes removed and each
+/// doubled quote inside turned back into one. A field that is not
+/// quoted is its own value.
+fn unquote(field: &str) -> Cow<'_, str> {
+    match field
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
+        Some(inner) if inner.contains("\"\"") => Cow::Owned(inner.replace("\"\"", "\"")),
+        Some(inner) => Cow::Borrowed(inner),
+        None => Cow::Borrowed(field),
+    }
 }
 
 #[cfg(test)]
@@ -529,5 +565,26 @@ mod tests {
                 .as_ref(),
             [1..=2, 4..=5]
         );
+    }
+
+    #[test]
+    fn select_value_unquotes_quoted_fields() {
+        // Given a quoted number and a field with an escaped quote
+        let line = r#"a,"10","say ""hi""",7"#;
+
+        // When / Then each field is read as its value
+        assert_eq!(quoted_fields(&[2..=2]).select_value(line), "10");
+        assert_eq!(quoted_fields(&[3..=3]).select_value(line), r#"say "hi""#);
+        assert_eq!(quoted_fields(&[4..=4]).select_value(line), "7");
+        assert_eq!(quoted_fields(&[4..=4, 2..=2]).select_value(line), "7,10");
+    }
+
+    #[test]
+    fn select_value_keeps_quotes_without_quoted_mode() {
+        // Given a plain field split, where quotes are ordinary text
+        let span = fields(",", &[2..=2]);
+
+        // When / Then
+        assert_eq!(span.select_value(r#"a,"10""#), r#""10""#);
     }
 }

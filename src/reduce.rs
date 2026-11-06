@@ -77,7 +77,8 @@ impl Aggregate {
     /// The number this aggregate reads from a line. `None` for `Count`,
     /// which counts rows rather than values, and for a value that is not
     /// a number — those rows are skipped rather than counted as zero,
-    /// which would bend both the sum and the average.
+    /// which would bend both the sum and the average. The value is read
+    /// unquoted, so `"10"` in a `--quoted` CSV field counts as 10.
     fn number(&self, line: &str) -> Option<Number> {
         let span = match self {
             Aggregate::Count => return None,
@@ -86,7 +87,7 @@ impl Aggregate {
             | Aggregate::Min(span)
             | Aggregate::Max(span) => span,
         };
-        Number::parse(&span.select(line))
+        Number::parse(&span.select_value(line))
     }
 }
 

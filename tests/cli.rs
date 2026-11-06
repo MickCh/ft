@@ -1295,6 +1295,38 @@ fn missing_input_file_fails_with_message_on_stderr() {
 }
 
 #[test]
+fn quoted_csv_numbers_count_in_a_summary() {
+    let input = TempFile::new("csv-quoted-sum", "a,\"10\"\na,\"20\"\nb,5\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "--group-by",
+        "1",
+        "--sum",
+        "2",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "a,30\nb,5\n");
+}
+
+#[test]
+fn quoted_csv_numbers_sort_numerically() {
+    let input = TempFile::new("csv-quoted-sort", "x,\"10\"\ny,\"9\"\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "-s",
+        "-n",
+        "--sort-key",
+        "2",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "y,\"9\"\nx,\"10\"\n");
+}
+
+#[test]
 fn numeric_sort_is_exact_beyond_f64_precision() {
     //2^53 and its neighbours, which an f64 key cannot tell apart
     let input = TempFile::new(

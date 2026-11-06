@@ -368,9 +368,16 @@ impl FileProcessor {
                 .select(&line.content)
                 .into_owned()
         };
-        //a numeric key that is `None` — not a number — sorts before every
-        //number, as `Option` orders it, where a sentinel would collide with `-inf`
-        let numeric_key = |line: &Line| Number::parse(&spec.key_span.select(&line.content));
+        //a numeric key reads the field's value (unquoted under `--quoted`);
+        //`None` — not a number — sorts before every number, as `Option`
+        //orders it, where a sentinel value would collide with `-inf`
+        let numeric_key = |line: &Line| {
+            Number::parse(
+                &spec
+                    .key_span
+                    .select_value(&line.content),
+            )
+        };
         match (spec.numeric, spec.reverse) {
             (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
             (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
