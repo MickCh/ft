@@ -773,3 +773,146 @@ mod tests {
         assert_eq!(fields(",", &[1..=1]).select_canonical(r#""a",1"#), r#""a""#);
     }
 }
+
+/// Property tests: the field splitting is checked against references
+/// simple enough to be obviously right, on generated lines full of what
+/// breaks splitters — multi-byte chars, quotes, empty fields, delimiters
+/// that are several chars long or multi-byte themselves.
+#[cfg(test)]
+mod properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// The char-by-char splitter `field_positions` replaced: slow, but
+    /// a direct reading of the rules, so the byte walk must agree with it.
+    fn reference_positions(
+        line: &str,
+        delimiter: &str,
+        quoted: bool,
+    ) -> Vec<RangeInclusive<usize>> {
+        let delimiter_len = delimiter.chars().count();
+        let mut positions = Vec::new();
+        let (mut start, mut column, mut inside_quotes, mut skip) = (1, 1, false, 0);
+        for (offset, character) in line.char_indices() {
+            if skip > 0 {
+                skip -= 1;
+            } else if quoted && character == '"' {
+                inside_quotes = !inside_quotes;
+            } else if !inside_quotes && line[offset..].starts_with(delimiter) {
+                positions.push(start..=column - 1);
+                start = column + delimiter_len;
+                skip = delimiter_len - 1;
+            }
+            column += 1;
+        }
+        positions.push(start..=column - 1);
+        positions
+    }
+
+    fn delimiters() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec![",", ";", "::", "ż", "🙂"])
+    }
+
+    /// Lines built from the delimiters' own pieces and other trouble.
+    fn lines() -> impl Strategy<Value = String> {
+        let pieces = prop::sample::select(vec![
+            "a", "b", "xyz", " ", ",", ";", ":", "::", "\"", "\"\"", "ż", "🙂", "e\u{301}", "",
+        ]);
+        prop::collection::vec(pieces, 0..24).prop_map(|pieces| pieces.concat())
+    }
+
+    /// A field range: a closed one, or open towards the end.
+    fn field_ranges() -> impl Strategy<Value = RangeInclusive<usize>> {
+        (1usize..8, 0usize..6, any::<bool>()).prop_map(|(start, length, open)| {
+            start..=if open { usize::MAX } else { start + length }
+        })
+    }
+
+    fn span(delimiter: &str, quoted: bool, parts: Vec<RangeInclusive<usize>>) -> FieldSpan {
+        FieldSpan {
+            quoted,
+            ..FieldSpan::new(delimiter, ColumnList::new(parts))
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn byte_walk_matches_the_char_walk(
+            line in lines(),
+            delimiter in delimiters(),
+            quoted in any::<bool>(),
+            limit in 1usize..10,
+        ) {
+            let spec = span(delimiter, quoted, vec![1..=1]);
+            let reference = reference_positions(&line, delimiter, quoted);
+
+            // the full split agrees, and an early stop yields its prefix
+            prop_assert_eq!(field_positions(&line, &spec, usize::MAX), reference.clone());
+            let early = field_positions(&line, &spec, limit);
+            prop_assert_eq!(&early[..], &reference[..limit.min(reference.len())]);
+        }
+
+        #[test]
+        fn selecting_fields_is_split_and_join(
+            line in lines(),
+            delimiter in delimiters(),
+            range in field_ranges(),
+        ) {
+            //without --quoted a field split is exactly `str::split`
+            let pieces: Vec<&str> = line.split(delimiter).collect();
+            let first = *range.start();
+            let expected = match first <= pieces.len() {
+                true => pieces[first - 1..(*range.end()).min(pieces.len())].join(delimiter),
+                false => String::new(),
+            };
+            let span = ColumnSpan::fields(delimiter, ColumnList::new(vec![range]));
+            prop_assert_eq!(span.select(&line), expected);
+        }
+
+        #[test]
+        fn deleting_fields_keeps_the_others_joined(
+            line in lines(),
+            delimiter in delimiters(),
+            range in field_ranges(),
+        ) {
+            //like `cut --complement`: what is left is the other fields,
+            //joined by the delimiter — no stray one on either side
+            let kept: Vec<&str> = line
+                .split(delimiter)
+                .enumerate()
+                .filter(|(index, _)| !range.contains(&(index + 1)))
+                .map(|(_, field)| field)
+                .collect();
+            let span = ColumnSpan::fields(delimiter, ColumnList::new(vec![range]));
+            let deleted = text::remove_ranges(&line, &span.delete_ranges(&line));
+            prop_assert_eq!(deleted, kept.join(delimiter));
+        }
+
+        #[test]
+        fn quoted_values_round_trip(
+            values in prop::collection::vec("[a-c,\" żé🙂]{0,6}", 1..6),
+            always_quote in any::<bool>(),
+        ) {
+            // Given values written as CSV, quoted where needed (or always)
+            let line = values
+                .iter()
+                .map(|value| match always_quote {
+                    true => format!("\"{}\"", value.replace('"', "\"\"")),
+                    false => quote_if_needed(Cow::Borrowed(value), ",").into_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+
+            for (index, value) in values.iter().enumerate() {
+                let field = ColumnSpan::Fields(span(",", true, vec![index + 1..=index + 1]));
+                // When / Then each field reads back as the value written
+                prop_assert_eq!(field.select_value(&line), value.as_str());
+                // and the canonical form does not depend on the quoting
+                prop_assert_eq!(
+                    field.select_canonical(&line),
+                    quote_if_needed(Cow::Borrowed(value), ",")
+                );
+            }
+        }
+    }
+}

@@ -331,3 +331,67 @@ mod tests {
         );
     }
 }
+
+/// Property tests: the char-indexed helpers against a `Vec<char>`
+/// reference, on ASCII lines (where columns map straight to bytes) and
+/// on mixed ones (where they are walked), with ranges reaching past the
+/// line, inverted and starting at 0.
+#[cfg(test)]
+mod properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn lines() -> impl Strategy<Value = String> {
+        prop_oneof!["[a-z ,]{0,20}", "[a-zżé🙂 ,]{0,20}"]
+    }
+
+    fn ranges() -> impl Strategy<Value = RangeInclusive<usize>> {
+        (0usize..25, 0usize..25).prop_map(|(start, end)| start..=end)
+    }
+
+    /// The columns of `range` as char indices into the line, 0-based.
+    fn indices(range: &RangeInclusive<usize>, len: usize) -> std::ops::Range<usize> {
+        let start = (*range.start()).max(1) - 1;
+        let end = (*range.end()).min(len);
+        start.min(end)..end
+    }
+
+    proptest! {
+        #[test]
+        fn select_columns_matches_a_char_slice(line in lines(), range in ranges()) {
+            let chars: Vec<char> = line.chars().collect();
+            let expected: String = chars[indices(&range, chars.len())].iter().collect();
+            prop_assert_eq!(select_columns(&line, &range), expected);
+        }
+
+        #[test]
+        fn select_and_delete_rebuild_the_line(line in lines(), range in ranges()) {
+            //what a range selects, put back where it was deleted from,
+            //is the line again
+            let chars: Vec<char> = line.chars().collect();
+            let at = indices(&range, chars.len()).start;
+            let selected = select_columns(&line, &range);
+            let rest: Vec<char> = remove_ranges(&line, std::slice::from_ref(&range)).chars().collect();
+            let rebuilt: String = rest[..at]
+                .iter()
+                .copied()
+                .chain(selected.chars())
+                .chain(rest[at..].iter().copied())
+                .collect();
+            prop_assert_eq!(rebuilt, line);
+        }
+
+        #[test]
+        fn map_ranges_touches_only_the_range(line in lines(), range in ranges()) {
+            let chars: Vec<char> = line.chars().collect();
+            let inside = indices(&range, chars.len());
+            let expected: String = chars
+                .iter()
+                .enumerate()
+                .map(|(index, &c)| if inside.contains(&index) { c.to_ascii_uppercase() } else { c })
+                .collect();
+            let mapped = map_ranges(&line, std::slice::from_ref(&range), |text| text.to_ascii_uppercase());
+            prop_assert_eq!(mapped, expected);
+        }
+    }
+}

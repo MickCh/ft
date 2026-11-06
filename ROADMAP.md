@@ -27,6 +27,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Order of operations documented** — README section on the fixed pipeline and the shared `--cols` scope, with examples. *(2026-11-06 comparison)*
 - ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
 - ✅ **Quoted `--unique` keys** — `--unique` keys on `select_canonical` too, so under `--quoted` `"a"` and `a` are duplicates, as they are one `--group-by` group.
+- ✅ **Property tests** — `proptest` modules in `columns.rs` and `text.rs` check the field splitter against the char-by-char one it replaced and against `str::split`, quoted values round-tripping through CSV, and the char helpers against a `Vec<char>` reference (`select(R)` put back into `delete(R)` rebuilds the line), on lines of multi-byte chars, quotes and multi-char delimiters. Deliberately broken versions of the byte walk and of the ASCII fast path were caught at once.
 - ✅ **Benchmarks** — `benches/engine.rs` (`criterion`): the engine on 100k generated log and CSV rows, in memory, per operation; baseline under *Performance* below.
 - ✅ **Completions, man page, help examples** — `--completions <shell>` (`clap_complete`) and `--man` (`clap_mangen`) are exclusive flags of the binary itself, so they work after a plain `cargo install`; `after_help` lists examples of the newer features.
 
@@ -89,5 +90,4 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 
 ## 4. Tool maturity (cheap, highly visible)
 
-- Property tests (`proptest`), e.g. `select(R) + delete(R) == input`
 - Fuzzing the range parser
