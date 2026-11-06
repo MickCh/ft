@@ -23,6 +23,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Multi-line CSV boundary** — under `--quoted`, a line that leaves a quoted field open fails with exit code 2 instead of returning records cut in half. *(2026-11-06 comparison)*
 - ✅ **`--grep-key`** — `--grep` gets a column range of its own, so `--cols` is free to select: `-F , -C 2 --grep-key 1 -g ERROR`. Unlike the sort and unique keys it addresses the line as read, since the predicate runs before the transforms. *(2026-11-06 comparison)*
 - ✅ **Quoted `--group-by` keys** — `ColumnSpan::select_canonical` reduces each field to its value and quotes it again only where needed, so `"a"` and `a` are one group, printed as `a`, and the key stays valid CSV. Being unambiguous, it keeps `a,"b,c"` and `"a,b",c` apart. *(2026-11-06 comparison)*
+- ✅ **UTF-8 BOM** — `bom::strip_bom` takes the mark off every input before they are joined, so it no longer hides the first field; `--in-place` (and so `--dry-run`) writes it back, other output carries none. *(2026-11-06 comparison)*
 - ✅ **Order of operations documented** — README section on the fixed pipeline and the shared `--cols` scope, with examples. *(2026-11-06 comparison)*
 
 ## 1. Free slots: a new `LineTransform` / `LinePredicate` (no engine changes)
@@ -47,7 +48,6 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 
 - **Multi-line CSV records** — a newline inside quotes is now rejected; actually reading such a record needs the engine to iterate over *records* rather than lines when `--quoted` is set (a record reader in front of `process_line`, with row numbers counting records). The largest item here.
 - **Quoted `--unique`/`--sort` keys** — `--group-by` now compares field values, but `--unique` and the text sort still compare fields as written, so `"a"` and `a` are two rows to `--unique`. `select_canonical` is ready for them; it is a question of whether that surprises more than it helps.
-- **UTF-8 BOM** — a BOM before the first field keeps `-C 1 -g '^a$'` from matching on line 1. Strip it on input (and keep it on output for `--in-place`?).
 - **Grapheme columns** — columns count code points, so `e\u0301` and ZWJ emoji sequences can be split. An opt-in `--graphemes` (`unicode-segmentation`) would count user-perceived characters; it touches every char-indexed helper in `text.rs`.
 - **Regex backreferences** — `(.)\1` is rejected by the `regex` crate. `fancy-regex` behind a flag would allow it, at the cost of linear-time matching guarantees.
 - **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; the *Encodings* item above (a lossy/byte mode) is the real answer.

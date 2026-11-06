@@ -1413,3 +1413,50 @@ fn grep_key_filters_on_one_field_and_cols_selects_another() {
     ]);
     assert_eq!(stdout, "disk full\n");
 }
+
+#[test]
+fn a_bom_does_not_hide_the_first_field() {
+    //the mark is encoding, not content: field 1 of line 1 is `a`, and the
+    //output carries no BOM
+    let input = TempFile::new("bom-grep", "\u{feff}a,1\nb,2\n");
+    let stdout = run_ft_stdout(&["-F", ",", "-C", "1", "-g", "^a$", input.path_str()]);
+    assert_eq!(stdout, "a,1\n");
+}
+
+#[test]
+fn every_concatenated_input_loses_its_bom() {
+    //a second file's mark would otherwise land mid-stream
+    let first = TempFile::new("bom-cat-1", "\u{feff}1\n");
+    let second = TempFile::new("bom-cat-2", "\u{feff}2\n");
+    let stdout = run_ft_stdout(&["--sum", "1", first.path_str(), second.path_str()]);
+    assert_eq!(stdout, "3\n");
+}
+
+#[test]
+fn a_bom_on_stdin_is_taken_off() {
+    let output = run_ft_with_stdin(&["-C", "1"], "\u{feff}xy\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "x\n");
+}
+
+#[test]
+fn in_place_keeps_the_bom() {
+    let input = TempFile::new("bom-in-place", "\u{feff}a\n");
+    let output = run_ft(&["-i", "--upper", input.path_str()]);
+    assert!(output.status.success());
+    assert_eq!(fs::read_to_string(&input.path).unwrap(), "\u{feff}A\n");
+}
+
+#[test]
+fn dry_run_does_not_count_the_bom_as_a_change() {
+    let input = TempFile::new("bom-dry-run", "\u{feff}nothing here\n");
+    let stdout = run_ft_stdout(&[
+        "-i",
+        "--dry-run",
+        "-f",
+        "foo",
+        "-r",
+        "BAR",
+        input.path_str(),
+    ]);
+    assert!(stdout.contains("unchanged"), "{stdout:?}");
+}

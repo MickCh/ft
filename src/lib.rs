@@ -2,6 +2,7 @@
 //list with a single part, not a mistaken `Vec` of the range's values
 #![cfg_attr(test, allow(clippy::single_range_in_vec_init))]
 
+pub mod bom;
 pub mod cli_args;
 pub mod columns;
 pub mod compose;

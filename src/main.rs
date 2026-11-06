@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use ft::bom::{UTF8_BOM, WithoutBom, strip_bom};
 use ft::cli_args::{Config, InPlace, Input, cli};
 use ft::compose;
 use ft::error::AppError;
@@ -83,7 +84,14 @@ fn report_changes(config: &Config, path: &Path) -> Result<RunOutcome, AppError> 
     //the file is read twice: once as the input, once as what the result
     //is compared against
     let mut comparison = CompareWriter::new(open_file(path)?);
-    let outcome = process(config, open_file(path)?, &mut comparison)?;
+    let (had_bom, reader) = open_without_bom(path)?;
+    //the edit would put the mark back, so the comparison expects it too
+    if had_bom {
+        comparison
+            .write_all(UTF8_BOM)
+            .map_err(AppError::Processing)?;
+    }
+    let outcome = process(config, BufReader::new(reader), &mut comparison)?;
 
     let verdict = if comparison
         .differs()
@@ -139,7 +147,10 @@ fn run_streaming(config: &Config) -> Result<RunOutcome, AppError> {
 /// link being replaced by a regular file. The temporary file inherits
 /// the original's permissions and is synced to disk before the swap.
 fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunOutcome, AppError> {
-    let reader = open_file(path)?;
+    //the BOM is taken off for processing and put back below: the edited
+    //file stays encoded as it was
+    let (had_bom, reader) = open_without_bom(path)?;
+    let reader = BufReader::new(reader);
     //resolve symlinks so the rename below swaps out the link's target,
     //not the link itself (which would turn it into a regular file)
     let path = &std::fs::canonicalize(path).map_err(|source| replace_error(path, source))?;
@@ -162,27 +173,36 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
 
     //finish writing and match the original permissions before renaming,
     //so the temp file holds the whole output and the right mode
-    let result = process(config, reader, &mut writer).and_then(|outcome| {
+    let bom_written = if had_bom {
         writer
-            .flush()
-            .map_err(AppError::Processing)?;
-        std::fs::set_permissions(&temp_path, permissions)
-            .map_err(|source| replace_error(path, source))?;
-        //rename is atomic in the namespace but says nothing about
-        //durability: sync so a crash right after the swap cannot
-        //leave an empty or truncated file behind
-        writer
-            .get_ref()
-            .sync_all()
-            .map_err(|source| replace_error(path, source))?;
-        //the backup is taken from the original, while it is still there,
-        //and before the swap: a failure anywhere above leaves the input
-        //untouched
-        if let Some(suffix) = &in_place.backup {
-            back_up(path, suffix)?;
-        }
-        Ok(outcome)
-    });
+            .write_all(UTF8_BOM)
+            .map_err(AppError::Processing)
+    } else {
+        Ok(())
+    };
+    let result = bom_written
+        .and_then(|()| process(config, reader, &mut writer))
+        .and_then(|outcome| {
+            writer
+                .flush()
+                .map_err(AppError::Processing)?;
+            std::fs::set_permissions(&temp_path, permissions)
+                .map_err(|source| replace_error(path, source))?;
+            //rename is atomic in the namespace but says nothing about
+            //durability: sync so a crash right after the swap cannot
+            //leave an empty or truncated file behind
+            writer
+                .get_ref()
+                .sync_all()
+                .map_err(|source| replace_error(path, source))?;
+            //the backup is taken from the original, while it is still there,
+            //and before the swap: a failure anywhere above leaves the input
+            //untouched
+            if let Some(suffix) = &in_place.backup {
+                back_up(path, suffix)?;
+            }
+            Ok(outcome)
+        });
 
     let outcome = match result {
         Ok(outcome) => outcome,
@@ -234,13 +254,18 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 /// Open every input and read them as one stream, in the order given —
 /// like `cat`, so a row range addresses the concatenation rather than
-/// each file separately.
+/// each file separately. Each input loses its own BOM before the inputs
+/// are joined, or a second file's mark would land mid-stream; none is
+/// written back, since the output is a new text, not one of the files.
 fn open_inputs(config: &Config) -> Result<Box<dyn BufRead>, AppError> {
     let mut readers: Vec<Box<dyn Read>> = Vec::with_capacity(config.inputs.len());
     for input in &config.inputs {
         readers.push(match input {
-            Input::Stdin => Box::new(std::io::stdin()),
-            Input::File(path) => Box::new(open_file(path)?),
+            Input::Stdin => {
+                let (_, reader) = strip_bom(std::io::stdin()).map_err(AppError::Processing)?;
+                Box::new(reader)
+            }
+            Input::File(path) => Box::new(open_without_bom(path)?.1),
         });
     }
 
@@ -254,11 +279,23 @@ fn open_inputs(config: &Config) -> Result<Box<dyn BufRead>, AppError> {
     Ok(Box::new(BufReader::new(chained)))
 }
 
-fn open_file(path: &Path) -> Result<BufReader<File>, AppError> {
-    let file = File::open(path).map_err(|source| AppError::OpenInput {
+/// Open `path` with its BOM, if any, taken off — and say whether it had
+/// one. Unbuffered: the caller buffers whatever reader it ends up with.
+fn open_without_bom(path: &Path) -> Result<(bool, WithoutBom<File>), AppError> {
+    let file = File::open(path).map_err(|source| open_error(path, source))?;
+    strip_bom(file).map_err(|source| open_error(path, source))
+}
+
+fn open_error(path: &Path, source: std::io::Error) -> AppError {
+    AppError::OpenInput {
         path: path.to_path_buf(),
         source,
-    })?;
+    }
+}
+
+/// Open `path` as it is, BOM and all — what a dry run compares against.
+fn open_file(path: &Path) -> Result<BufReader<File>, AppError> {
+    let file = File::open(path).map_err(|source| open_error(path, source))?;
     Ok(BufReader::new(file))
 }
 
