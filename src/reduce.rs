@@ -12,6 +12,7 @@ use std::io::{self, Write};
 
 use crate::columns::ColumnSpan;
 use crate::constants::NEW_LINE;
+use crate::number::Number;
 
 /// Something computed over the processed lines as a whole.
 pub trait LineReducer {
@@ -77,7 +78,7 @@ impl Aggregate {
     /// which counts rows rather than values, and for a value that is not
     /// a number — those rows are skipped rather than counted as zero,
     /// which would bend both the sum and the average.
-    fn number(&self, line: &str) -> Option<f64> {
+    fn number(&self, line: &str) -> Option<Number> {
         let span = match self {
             Aggregate::Count => return None,
             Aggregate::Sum(span)
@@ -85,30 +86,30 @@ impl Aggregate {
             | Aggregate::Min(span)
             | Aggregate::Max(span) => span,
         };
-        span.select(line)
-            .trim()
-            .parse()
-            .ok()
-            .filter(|value: &f64| !value.is_nan())
+        Number::parse(&span.select(line))
     }
 }
 
-/// One aggregate's running value within one group.
+/// One aggregate's running value within one group. Sums stay exact
+/// integers for as long as every value is one (see [`Number`]).
 #[derive(Debug)]
 enum Accumulator {
     Count(u64),
-    Sum(f64),
-    Avg { sum: f64, count: u64 },
-    Min(Option<f64>),
-    Max(Option<f64>),
+    Sum(Number),
+    Avg { sum: Number, count: u64 },
+    Min(Option<Number>),
+    Max(Option<Number>),
 }
 
 impl Accumulator {
     fn start(aggregate: &Aggregate) -> Accumulator {
         match aggregate {
             Aggregate::Count => Accumulator::Count(0),
-            Aggregate::Sum(_) => Accumulator::Sum(0.0),
-            Aggregate::Avg(_) => Accumulator::Avg { sum: 0.0, count: 0 },
+            Aggregate::Sum(_) => Accumulator::Sum(Number::Int(0)),
+            Aggregate::Avg(_) => Accumulator::Avg {
+                sum: Number::Int(0),
+                count: 0,
+            },
             Aggregate::Min(_) => Accumulator::Min(None),
             Aggregate::Max(_) => Accumulator::Max(None),
         }
@@ -126,22 +127,16 @@ impl Accumulator {
         };
         match self {
             Accumulator::Count(_) => unreachable!("counted above"),
-            Accumulator::Sum(sum) => *sum += value,
+            Accumulator::Sum(sum) => *sum = *sum + value,
             Accumulator::Avg { sum, count } => {
-                *sum += value;
+                *sum = *sum + value;
                 *count += 1;
             }
             Accumulator::Min(least) => {
-                *least = Some(match least {
-                    Some(current) => current.min(value),
-                    None => value,
-                })
+                *least = Some(least.map_or(value, |current| current.min(value)))
             }
             Accumulator::Max(greatest) => {
-                *greatest = Some(match greatest {
-                    Some(current) => current.max(value),
-                    None => value,
-                })
+                *greatest = Some(greatest.map_or(value, |current| current.max(value)))
             }
         }
     }
@@ -153,7 +148,7 @@ impl Accumulator {
             Accumulator::Count(rows) => rows.to_string(),
             Accumulator::Sum(sum) => sum.to_string(),
             Accumulator::Avg { count: 0, .. } => String::new(),
-            Accumulator::Avg { sum, count } => (sum / *count as f64).to_string(),
+            Accumulator::Avg { sum, count } => (sum.as_f64() / *count as f64).to_string(),
             Accumulator::Min(value) | Accumulator::Max(value) => value
                 .map(|value| value.to_string())
                 .unwrap_or_default(),

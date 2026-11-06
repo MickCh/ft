@@ -1293,3 +1293,24 @@ fn missing_input_file_fails_with_message_on_stderr() {
         "unexpected stderr: {stderr}"
     );
 }
+
+#[test]
+fn numeric_sort_is_exact_beyond_f64_precision() {
+    //2^53 and its neighbours, which an f64 key cannot tell apart
+    let input = TempFile::new(
+        "bigints",
+        "9007199254740993\n9007199254740992\n9007199254740995\n9007199254740994\n",
+    );
+    let stdout = run_ft_stdout(&["-s", "-n", input.path_str()]);
+    assert_eq!(
+        stdout,
+        "9007199254740992\n9007199254740993\n9007199254740994\n9007199254740995\n"
+    );
+}
+
+#[test]
+fn integer_sums_stay_exact() {
+    let input = TempFile::new("bigint-sum", "x 9007199254740993\nx 1\n");
+    let stdout = run_ft_stdout(&["-F", " ", "--sum", "2", input.path_str()]);
+    assert_eq!(stdout, "9007199254740994\n");
+}

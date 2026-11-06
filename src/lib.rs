@@ -8,6 +8,7 @@ pub mod compose;
 pub mod constants;
 pub mod error;
 pub mod file_processor;
+pub mod number;
 pub mod predicate;
 pub mod ranges;
 pub mod reduce;

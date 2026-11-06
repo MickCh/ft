@@ -6,6 +6,7 @@
 
 use crate::columns::ColumnSpan;
 use crate::constants::NEW_LINE;
+use crate::number::Number;
 use crate::predicate::LinePredicate;
 use crate::ranges::{RangeSet, RangeSpec};
 use crate::reduce::LineReducer;
@@ -92,48 +93,6 @@ impl RowMode {
     /// Whether rows inside the row range are dropped.
     fn deletes_selected(self) -> bool {
         self == RowMode::DeleteSelected
-    }
-}
-
-/// An `Ord` wrapper around the parsed numeric sort key. Lines that do
-/// not parse as a number (`None`, including `NaN`) sort before all
-/// numbers — a sentinel value would collide with an actual `-inf` key.
-struct NumericKey(Option<f64>);
-
-impl NumericKey {
-    fn parse(text: &str) -> NumericKey {
-        NumericKey(
-            text.trim()
-                .parse()
-                .ok()
-                .filter(|value: &f64| !value.is_nan()),
-        )
-    }
-}
-
-impl PartialEq for NumericKey {
-    fn eq(&self, other: &NumericKey) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
-    }
-}
-
-impl Eq for NumericKey {}
-
-impl PartialOrd for NumericKey {
-    fn partial_cmp(&self, other: &NumericKey) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for NumericKey {
-    fn cmp(&self, other: &NumericKey) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
-        match (&self.0, &other.0) {
-            (None, None) => Ordering::Equal,
-            (None, Some(_)) => Ordering::Less,
-            (Some(_), None) => Ordering::Greater,
-            (Some(this), Some(that)) => this.total_cmp(that),
-        }
     }
 }
 
@@ -409,13 +368,14 @@ impl FileProcessor {
                 .select(&line.content)
                 .into_owned()
         };
+        //a numeric key that is `None` — not a number — sorts before every
+        //number, as `Option` orders it, where a sentinel would collide with `-inf`
+        let numeric_key = |line: &Line| Number::parse(&spec.key_span.select(&line.content));
         match (spec.numeric, spec.reverse) {
             (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
             (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
-            (true, false) => buffer.sort_by_cached_key(|line| NumericKey::parse(&text_key(line))),
-            (true, true) => {
-                buffer.sort_by_cached_key(|line| Reverse(NumericKey::parse(&text_key(line))))
-            }
+            (true, false) => buffer.sort_by_cached_key(numeric_key),
+            (true, true) => buffer.sort_by_cached_key(|line| Reverse(numeric_key(line))),
         }
     }
 }
