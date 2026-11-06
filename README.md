@@ -28,6 +28,7 @@ When no filename is given (or a filename is `-`), `ft` reads from standard input
 | `-d, --delete` | Delete the selected rows, or the column range within them |
 | `-u, --unique` | Drop duplicate rows, comparing the column range (first wins) |
 | `--unique-key <range>` | Columns keying `--unique`, instead of `--cols` (requires `--unique`) |
+| `--grep-key <range>` | Columns `--grep` matches in, instead of `--cols` (requires `--grep`) |
 | `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them) |
 | `--invert` | Invert the `--grep` match, like `grep -v` (requires `--grep`) |
 | `-q, --quiet` | Write nothing; say with the exit code whether anything matched (requires `--grep`) |
@@ -57,13 +58,13 @@ When no filename is given (or a filename is `-`), `ft` reads from standard input
 
 ### Semantics
 
-- Row and column ranges are **1-based and inclusive**; columns are counted in characters (Unicode code points), not bytes, so multi-byte UTF-8 text is never cut inside a character. They are not grapheme clusters, though: a letter followed by a combining accent (`é`) or an emoji joined with ZWJ (`👩‍💻`) counts as several columns, and a range may split it.
+- Row and column ranges are **1-based and inclusive**; columns are counted in characters (Unicode code points), not bytes, so multi-byte UTF-8 text is never cut inside a character. They are not grapheme clusters, though: a letter followed by a combining accent (`e\u0301`) or an emoji joined with ZWJ (`👩\u200d💻`) counts as several columns, and a range may split it.
 - A range can be a single number (`3`), open-ended (`10-` to the end, `-5` from the start) or closed (`2-5`). Rows and columns both accept a comma-separated list of ranges (`1-5,10-20`).
 - A **column list keeps the order written**, so operations that *read* the columns — selecting them, the `--sort`/`--unique` key, `--grep` — read the parts in that order: `-F , -C 3,1,2` is an `awk`-style projection that reorders the fields, and `--output-delimiter` chooses what rejoins them. Operations that *write into* the line — `--delete`, `--upper`/`--lower`/`--trim`, find/replace — work on the same columns as a set (sorted, overlaps merged), where order carries no meaning; each part is written on its own, so a match straddling two parts is not replaced.
 - A row bound prefixed with `~` counts from the **end** of the input: `~1` is the last row, `~10-~1` the last ten, `2-~2` everything but the first and last row. Because the total line count must be known first, end-relative ranges buffer the whole input instead of streaming; columns do not accept `~`.
 - Without `--delete`, the row range **selects** lines: only rows inside the range are output (and transformed). Without a row range, the whole file is processed.
 - A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
-- `--sort-key` and `--unique-key` give those operations a column range of their own, so `--cols` is free for another one: `-C 5 -f a -r b --sort --sort-key 3` replaces inside column 5 but sorts by column 3. An operation with its own key no longer claims `--cols`, so a `--cols` left over with no other operation goes back to **selecting** columns (and the key then addresses that selected result, since keys are read from the transformed line).
+- `--sort-key`, `--unique-key` and `--grep-key` give those operations a column range of their own, so `--cols` is free for another one: `-C 5 -f a -r b --sort --sort-key 3` replaces inside column 5 but sorts by column 3. An operation with its own key no longer claims `--cols`, so a `--cols` left over with no other operation goes back to **selecting** columns. The sort and unique keys then address that selected result, since they are read from the transformed line; the grep key addresses the line *as read*, since the filter runs before any transform — so `-F , -C 2 --grep-key 1 -g ERROR` keeps the rows whose field 1 matches and prints their field 2.
 - With `--fields`, the column ranges count **delimited fields** instead of characters: `-F , -C 2` addresses the second comma-separated field, per line. All column-based operations (select, delete, sort key, find/replace scope, `--grep`, `--unique`, case/trim) work on fields the same way; deleting fields also removes one adjacent delimiter, like `cut`, and a field list is merged before that, so `-C 2,3` deletes exactly what `-C 2-3` does. Selected fields are rejoined by the delimiter (or `--output-delimiter`), and a field the line does not have is skipped rather than joining a stray delimiter. The delimiter may be more than one character.
 - `--quoted` makes field mode read CSV rather than a plain split: a delimiter inside a `"…"` field no longer splits it, and a doubled `""` is an escaped quote (RFC 4180). A field keeps its quotes — they are part of the text it occupies — so selecting or reordering fields re-joins them into valid CSV, and deleting one takes its quotes with it. Operations that read a field as a *number* (`--sort --numeric` and the `--sum`/`--avg`/`--min`/`--max` summaries) read its value instead, without the quotes, so `"10"` counts as 10. Every record must fit on one line: a line that leaves a quoted field open (a newline inside quotes) is rejected with exit code 2 rather than read as two broken records.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
@@ -97,11 +98,17 @@ The flags describe *what* to do, not in which order: whatever order they are wri
 
 So `--upper -g error` finds nothing in a line reading `ERROR` — the filter sees the original text. Use `-i` (ignore case) or a pattern matching the input as it is.
 
-`--cols` is **one shared scope**: every operation that accepts a column range uses it, and only a `--cols` that no operation claimed selects (cuts) columns. `-F , -C 2 -g ERROR` therefore *filters* on field 2 and prints the whole row; it does not also cut field 2 out. Where an operation has a key option of its own (`--sort-key`, `--unique-key`), use it to free `--cols` for the selection; otherwise chain two runs:
+`--cols` is **one shared scope**: every operation that accepts a column range uses it, and only a `--cols` that no operation claimed selects (cuts) columns. `-F , -C 2 -g ERROR` therefore *filters* on field 2 and prints the whole row; it does not also cut field 2 out. Where an operation has a key option of its own (`--sort-key`, `--unique-key`, `--grep-key`), use it to free `--cols` for the selection; otherwise chain two runs:
 
 ```bash
-# Filter on field 2, then print only field 2
-ft -F , -C 2 -g ERROR data.csv | ft -F , -C 2
+# Filter on field 2 and print only field 2 (the grep key counts in the line as read)
+ft -F , -C 2 --grep-key 2 -g ERROR data.csv
+
+# Filter on field 1, print field 2
+ft -F , -C 2 --grep-key 1 -g ERROR data.csv
+
+# Uppercase field 2, then filter on the result: a second run sees what the first wrote
+ft -F , -C 2 --upper data.csv | ft -F , -C 2 -g ERROR
 
 # Print fields 3 and 1, sorted by field 1 — keys are read from the selected
 # result, so the original field 1 is field 2 there

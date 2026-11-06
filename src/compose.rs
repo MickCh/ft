@@ -164,7 +164,7 @@ fn build_predicate(config: &Config, cols: &mut ColumnClaims) -> Option<Box<dyn L
     config.grep.as_ref().map(|pattern| {
         Box::new(GrepPredicate::new(
             pattern.clone(),
-            cols.claim(),
+            cols.key_or_cols(&config.grep_key),
             config.invert,
         )) as Box<dyn LinePredicate>
     })
@@ -1102,6 +1102,21 @@ mod tests {
         //cut to columns 2-3, then dedupe on the first char of the cut
         let result = run(config, "xab\nxaz\nxbc\n");
         assert_eq!(result, "ab\nbc\n");
+    }
+
+    #[test]
+    fn grep_key_leaves_cols_to_select() {
+        //--grep matches in its own range, so the bare --cols still cuts;
+        //unlike a sort or unique key, the grep key addresses the line as
+        //read, since the predicate runs before any transform
+        let mut config = Config::default();
+        config.field_delimiter = Some(",".to_owned());
+        config.grep = Some(regex::Regex::new("ERROR").unwrap());
+        config.grep_key = Some((1..=1).into());
+        config.cols = Some((2..=2).into());
+
+        let result = run(config, "ERROR,ok\nINFO,ERROR\n");
+        assert_eq!(result, "ok\n");
     }
 
     #[test]

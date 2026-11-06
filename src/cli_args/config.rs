@@ -92,6 +92,7 @@ pub struct Config {
     //operation only needs its own range when it must differ from it
     pub sort_key: Option<ColumnList>,
     pub unique_key: Option<ColumnList>,
+    pub grep_key: Option<ColumnList>,
     //`Some` switches the column ranges from counting chars to
     //delimited fields
     pub field_delimiter: Option<String>,
@@ -285,6 +286,9 @@ impl TryFrom<ArgMatches> for Config {
                 .cloned(),
             unique_key: matches
                 .get_one::<ColumnList>("unique-key")
+                .cloned(),
+            grep_key: matches
+                .get_one::<ColumnList>("grep-key")
                 .cloned(),
             field_delimiter: matches
                 .get_one::<String>("fields")
@@ -549,12 +553,17 @@ mod tests {
             "-u",
             "--unique-key",
             "3-4",
+            "-g",
+            "x",
+            "--grep-key",
+            "7",
             "input.txt",
         ])
         .unwrap();
 
         assert_eq!(config.sort_key, Some(ColumnList::from(1..=2)));
         assert_eq!(config.unique_key, Some(ColumnList::from(3..=4)));
+        assert_eq!(config.grep_key, Some(ColumnList::from(7..=7)));
         assert_eq!(written(&config.col_span()), [5..=6]);
     }
 
@@ -620,6 +629,11 @@ mod tests {
         assert!(
             cli()
                 .try_get_matches_from(["ft", "--unique-key", "1", "input.txt"])
+                .is_err()
+        );
+        assert!(
+            cli()
+                .try_get_matches_from(["ft", "--grep-key", "1", "input.txt"])
                 .is_err()
         );
     }

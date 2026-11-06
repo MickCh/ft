@@ -57,6 +57,7 @@ pub fn cli() -> Command {
                     "columns",
                     "sort-key",
                     "unique-key",
+                    "grep-key",
                     "sum",
                     "avg",
                     "min",
@@ -98,6 +99,15 @@ pub fn cli() -> Command {
                 .requires("unique")
                 .value_parser(parse_column_list)
                 .help("Columns keying --unique, instead of --cols (requires --unique)"),
+        )
+        .arg(
+            Arg::new("grep-key")
+                .long("grep-key")
+                .required(false)
+                .allow_hyphen_values(true)
+                .requires("grep")
+                .value_parser(parse_column_list)
+                .help("Columns --grep matches in, instead of --cols (requires --grep)"),
         )
         .arg(
             Arg::new("sort")

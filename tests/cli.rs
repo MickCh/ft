@@ -1360,3 +1360,22 @@ fn integer_sums_stay_exact() {
     let stdout = run_ft_stdout(&["-F", " ", "--sum", "2", input.path_str()]);
     assert_eq!(stdout, "9007199254740994\n");
 }
+
+#[test]
+fn grep_key_filters_on_one_field_and_cols_selects_another() {
+    //the grep key addresses the line as read, so field 1 is matched
+    //while field 2 is what comes out
+    let input = TempFile::new("grep-key", "ERROR,disk full\nINFO,ERROR seen\n");
+    let stdout = run_ft_stdout(&[
+        "-F",
+        ",",
+        "-C",
+        "2",
+        "--grep-key",
+        "1",
+        "-g",
+        "ERROR",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "disk full\n");
+}
