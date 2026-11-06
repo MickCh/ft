@@ -4,7 +4,7 @@
 //! parts (see [`crate::compose`]), so this module stays independent of
 //! the CLI layer.
 
-use crate::columns::ColumnSpan;
+use crate::columns::{self, ColumnSpan};
 use crate::constants::NEW_LINE;
 use crate::number::Number;
 use crate::predicate::LinePredicate;
@@ -147,6 +147,10 @@ pub struct FileProcessor {
     /// Stop reading as soon as a row matches (`--quiet`, which asks only
     /// whether anything matches at all).
     pub stop_when_matched: bool,
+    /// Fail on a line that leaves a `"quoted"` CSV field open (`--quoted`):
+    /// its record continues on the next line, which line-based processing
+    /// cannot read, and cutting it in half would be silently wrong output.
+    pub reject_open_quotes: bool,
 }
 
 impl FileProcessor {
@@ -230,6 +234,16 @@ impl FileProcessor {
         })?;
 
         let (content, terminator) = text::split_line_terminator(utf8_line);
+
+        if self.reject_open_quotes && columns::leaves_quote_open(content) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "line {line_number} leaves a quoted field open: \
+                     CSV records spanning several lines are not supported"
+                ),
+            ));
+        }
 
         if let Some(predicate) = &self.predicate
             && !predicate.matches(content)

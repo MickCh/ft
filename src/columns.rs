@@ -293,6 +293,19 @@ fn unquote(field: &str) -> Cow<'_, str> {
     }
 }
 
+/// Whether a quoted field is still open at the end of the line — i.e.
+/// the CSV record goes on in the next one. `ft` works line by line, so
+/// such a record cannot be read correctly; the caller rejects it rather
+/// than return fields cut in half. Counts quotes the way
+/// `field_positions` toggles on them.
+pub fn leaves_quote_open(line: &str) -> bool {
+    line.bytes()
+        .filter(|&byte| byte == b'"')
+        .count()
+        % 2
+        == 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,5 +599,14 @@ mod tests {
 
         // When / Then
         assert_eq!(span.select_value(r#"a,"10""#), r#""10""#);
+    }
+
+    #[test]
+    fn an_odd_quote_count_leaves_a_quote_open() {
+        // Given / When / Then
+        assert!(leaves_quote_open(r#"1,"hello"#));
+        assert!(!leaves_quote_open(r#"1,"hello",2"#));
+        assert!(!leaves_quote_open(r#"1,"say ""hi""",2"#));
+        assert!(!leaves_quote_open("plain"));
     }
 }

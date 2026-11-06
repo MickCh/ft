@@ -1327,6 +1327,20 @@ fn quoted_csv_numbers_sort_numerically() {
 }
 
 #[test]
+fn quoted_csv_rejects_a_record_spanning_lines() {
+    //a quoted field running into the next line would come out cut in
+    //half, so it fails instead of answering wrongly
+    let input = TempFile::new("csv-multiline", "1,\"hello\nworld\",20\n2,\"fine\",10\n");
+    let output = run_ft(&["-F", ",", "--quoted", "-C", "2", input.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("line 1 leaves a quoted field open"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn numeric_sort_is_exact_beyond_f64_precision() {
     //2^53 and its neighbours, which an f64 key cannot tell apart
     let input = TempFile::new(

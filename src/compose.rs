@@ -36,6 +36,7 @@ pub fn build_processor(config: &Config) -> FileProcessor {
         transforms,
         reducer: build_reducer(config),
         stop_when_matched: config.quiet,
+        reject_open_quotes: config.quoted,
     }
 }
 
