@@ -262,6 +262,7 @@ cargo build --release    # binary in target/release/fxt
 cargo test               # unit + CLI integration tests
 cargo clippy --all-targets -- -D warnings
 cargo install --path .   # put fxt on the PATH (~/.cargo/bin)
+cargo bench              # engine benchmarks (criterion), reports in target/criterion
 ```
 
 ### Shell completions and man page

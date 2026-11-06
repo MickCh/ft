@@ -13,6 +13,8 @@ cargo build                     # build
 cargo test                      # run all tests
 cargo test test_line_replace    # run a single test by name
 cargo clippy --all-targets -- -D warnings   # lint (CI fails on any warning)
+cargo bench                     # criterion benchmarks of the engine (benches/engine.rs)
+cargo bench -- csv              # only the matching cases
 cargo fmt                       # format (rustfmt.toml: chain_width 40)
 cargo run -- --help             # run the CLI
 cargo run -- -R 1-5 -C 2-4 -f foo -r bar input.txt   # example invocation

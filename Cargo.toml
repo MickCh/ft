@@ -11,3 +11,10 @@ regex = "1"
 rand = "0.9"
 clap_complete = "4.6.11"
 clap_mangen = "0.3.3"
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "engine"
+harness = false

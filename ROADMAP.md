@@ -26,6 +26,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **UTF-8 BOM** — `bom::strip_bom` takes the mark off every input before they are joined, so it no longer hides the first field; `--in-place` (and so `--dry-run`) writes it back, other output carries none. *(2026-11-06 comparison)*
 - ✅ **Order of operations documented** — README section on the fixed pipeline and the shared `--cols` scope, with examples. *(2026-11-06 comparison)*
 - ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
+- ✅ **Benchmarks** — `benches/engine.rs` (`criterion`): the engine on 100k generated log and CSV rows, in memory, per operation; baseline under *Performance* below.
 - ✅ **Completions, man page, help examples** — `--completions <shell>` (`clap_complete`) and `--man` (`clap_mangen`) are exclusive flags of the binary itself, so they work after a plain `cargo install`; `after_help` lists examples of the newer features.
 
 ## 1. Free slots: a new `LineTransform` / `LinePredicate` (no engine changes)
@@ -53,10 +54,26 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 - **Grapheme columns** — columns count code points, so `e\u0301` and ZWJ emoji sequences can be split. An opt-in `--graphemes` (`unicode-segmentation`) would count user-perceived characters; it touches every char-indexed helper in `text.rs`.
 - **Regex backreferences** — `(.)\1` is rejected by the `regex` crate. `fancy-regex` behind a flag would allow it, at the cost of linear-time matching guarantees.
 - **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; the *Encodings* item above (a lossy/byte mode) is the real answer.
-- **Performance** — `fxt` beat `sed` on replacement and `awk`/pipelines on combined operations, but trailed `grep` on plain filtering and `sort` on whole-line sorting (300k rows, Windows). Worth a `criterion` look at the predicate path and at `sort_by_cached_key` cloning every key.
+- **Performance** — `fxt` beat `sed` on replacement and `awk`/pipelines on combined operations, but trailed `grep` on plain filtering and `sort` on whole-line sorting (300k rows, Windows). `cargo bench` now measures the engine in memory; the baseline (100k rows, release build, Windows, 2026-11-06) points at field mode rather than at `--grep` or the sort:
+
+  | Case | Throughput |
+  |---|---:|
+  | pass-through | 1.58 GiB/s |
+  | `-g ERROR` | 420 MiB/s |
+  | `-C 10-20` | 366 MiB/s |
+  | `-g -f -r --upper` | 279 MiB/s |
+  | `-s` | 174 MiB/s |
+  | `-f foo -r bar` | 159 MiB/s |
+  | `-e -f … -r …` | 128 MiB/s |
+  | `-F , --quoted -C 3,1` | 79 MiB/s |
+  | `-u --unique-key 7` (fields) | 76 MiB/s |
+  | `-F , -C 3,1` | 73 MiB/s |
+  | `-s -n --sort-key 9` (fields) | 62 MiB/s |
+  | `--group-by 1 --count --sum 3` | 38 MiB/s |
+
+  Suspects: `field_positions` allocates a `Vec` per call and tries `starts_with(delimiter)` at every char, and a summary splits the same line once per aggregate plus once for the key. A literal `--find` is slower than `--grep` by more than its writing explains.
 
 ## 4. Tool maturity (cheap, highly visible)
 
-- Benchmarks (`criterion`) over large files
 - Property tests (`proptest`), e.g. `select(R) + delete(R) == input`
 - Fuzzing the range parser
