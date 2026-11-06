@@ -1,4 +1,5 @@
-use clap::{Arg, ArgAction, ArgGroup, Command, crate_name, crate_version};
+use clap::{Arg, ArgAction, ArgGroup, Command, crate_name, crate_version, value_parser};
+use clap_complete::Shell;
 use std::ops::RangeInclusive;
 
 use crate::columns::ColumnList;
@@ -13,7 +14,10 @@ pub fn cli() -> Command {
              \x20 fxt -R 1-5 -C 2-4 input.txt             keep rows 1-5, columns 2-4\n\
              \x20 fxt -R '~10-~1' input.txt               the last ten rows, like tail\n\
              \x20 fxt -F , -C 3,1 data.csv                CSV fields 3 and 1, in that order\n\
+             \x20 fxt -F , --quoted -C 2 data.csv         real CSV: commas inside \"quotes\" stay\n\
+             \x20 fxt -F , -C 2 --grep-key 1 -g X a.csv   field 2 of the rows whose field 1 has X\n\
              \x20 fxt -F , --group-by 1 --sum 2 data.csv  sum field 2 per distinct field 1\n\
+             \x20 fxt -s -n --reverse -F , -C 3 data.csv  sort by field 3, largest first\n\
              \x20 fxt -g ERROR -d -i --backup .bak a.log  delete matching rows in place,\n\
              \x20                                        keeping a backup\n\
              \n\
@@ -408,6 +412,23 @@ pub fn cli() -> Command {
                     "Input files, read as one stream (--in-place edits each on its own); \
                      reads standard input when omitted or `-`",
                 ),
+        )
+        //output about the tool itself rather than a transformation, so
+        //neither combines with anything else
+        .arg(
+            Arg::new("completions")
+                .long("completions")
+                .value_name("SHELL")
+                .exclusive(true)
+                .value_parser(value_parser!(Shell))
+                .help("Print a completion script for SHELL (bash, zsh, fish, powershell, elvish) and exit"),
+        )
+        .arg(
+            Arg::new("man")
+                .long("man")
+                .exclusive(true)
+                .action(ArgAction::SetTrue)
+                .help("Print the man page (roff) and exit"),
         )
 }
 

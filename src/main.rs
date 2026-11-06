@@ -4,6 +4,8 @@ use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use clap_complete::Shell;
+
 use fxt::bom::{UTF8_BOM, WithoutBom, strip_bom};
 use fxt::cli_args::{Config, InPlace, Input, cli};
 use fxt::compose;
@@ -49,7 +51,23 @@ impl Verdict {
 }
 
 fn run() -> Result<Verdict, AppError> {
-    let config = Config::try_from(cli().get_matches())?;
+    let matches = cli().get_matches();
+    //--completions and --man describe the tool instead of running it;
+    //clap makes them exclusive, so there is no transformation to validate
+    if let Some(&shell) = matches.get_one::<Shell>("completions") {
+        let mut command = cli();
+        let name = command.get_name().to_owned();
+        clap_complete::generate(shell, &mut command, name, &mut std::io::stdout());
+        return Ok(Verdict::Matched);
+    }
+    if matches.get_flag("man") {
+        clap_mangen::Man::new(cli())
+            .render(&mut std::io::stdout())
+            .map_err(AppError::Processing)?;
+        return Ok(Verdict::Matched);
+    }
+
+    let config = Config::try_from(matches)?;
 
     if let Some(in_place) = &config.in_place {
         //validated in Config: --in-place only ever has file inputs, and

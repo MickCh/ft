@@ -261,6 +261,30 @@ Requires a stable [Rust](https://rustup.rs/) toolchain (edition 2024).
 cargo build --release    # binary in target/release/fxt
 cargo test               # unit + CLI integration tests
 cargo clippy --all-targets -- -D warnings
+cargo install --path .   # put fxt on the PATH (~/.cargo/bin)
+```
+
+### Shell completions and man page
+
+`fxt --completions <shell>` prints a completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`); `fxt --man` prints the man page.
+
+```bash
+# bash: load in ~/.bashrc
+source <(fxt --completions bash)
+
+# zsh: a file on $fpath
+fxt --completions zsh > ~/.zfunc/_fxt
+
+# fish
+fxt --completions fish > ~/.config/fish/completions/fxt.fish
+
+# man page
+fxt --man > ~/.local/share/man/man1/fxt.1
+```
+
+```powershell
+# PowerShell: add to $PROFILE
+fxt --completions powershell | Out-String | Invoke-Expression
 ```
 
 ## Project structure

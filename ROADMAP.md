@@ -25,6 +25,8 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Quoted `--group-by` keys** — `ColumnSpan::select_canonical` reduces each field to its value and quotes it again only where needed, so `"a"` and `a` are one group, printed as `a`, and the key stays valid CSV. Being unambiguous, it keeps `a,"b,c"` and `"a,b",c` apart. *(2026-11-06 comparison)*
 - ✅ **UTF-8 BOM** — `bom::strip_bom` takes the mark off every input before they are joined, so it no longer hides the first field; `--in-place` (and so `--dry-run`) writes it back, other output carries none. *(2026-11-06 comparison)*
 - ✅ **Order of operations documented** — README section on the fixed pipeline and the shared `--cols` scope, with examples. *(2026-11-06 comparison)*
+- ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
+- ✅ **Completions, man page, help examples** — `--completions <shell>` (`clap_complete`) and `--man` (`clap_mangen`) are exclusive flags of the binary itself, so they work after a plain `cargo install`; `after_help` lists examples of the newer features.
 
 ## 1. Free slots: a new `LineTransform` / `LinePredicate` (no engine changes)
 
@@ -55,9 +57,6 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 
 ## 4. Tool maturity (cheap, highly visible)
 
-- `clap_complete` — shell completions
-- `clap_mangen` — a man page
-- Examples in `after_help`
 - Benchmarks (`criterion`) over large files
 - Property tests (`proptest`), e.g. `select(R) + delete(R) == input`
 - Fuzzing the range parser

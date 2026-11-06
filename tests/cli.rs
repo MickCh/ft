@@ -1460,3 +1460,29 @@ fn dry_run_does_not_count_the_bom_as_a_change() {
     ]);
     assert!(stdout.contains("unchanged"), "{stdout:?}");
 }
+
+#[test]
+fn completions_are_generated_per_shell() {
+    let stdout = run_fxt_stdout(&["--completions", "bash"]);
+    assert!(stdout.contains("fxt"), "{stdout}");
+    assert!(stdout.contains("--grep-key"), "{stdout}");
+
+    let stdout = run_fxt_stdout(&["--completions", "powershell"]);
+    assert!(stdout.contains("Register-ArgumentCompleter"), "{stdout}");
+}
+
+#[test]
+fn man_page_is_roff() {
+    let stdout = run_fxt_stdout(&["--man"]);
+    assert!(stdout.contains(".TH fxt 1"), "{stdout}");
+    assert!(stdout.contains("Examples:"), "{stdout}");
+}
+
+#[test]
+fn completions_and_man_stand_alone() {
+    //they describe the tool rather than run it, so nothing combines
+    let output = run_fxt(&["--man", "-C", "1"]);
+    assert_eq!(output.status.code(), Some(2));
+    let output = run_fxt(&["--completions", "bash", "input.txt"]);
+    assert_eq!(output.status.code(), Some(2));
+}
