@@ -4,11 +4,11 @@ use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use ft::bom::{UTF8_BOM, WithoutBom, strip_bom};
-use ft::cli_args::{Config, InPlace, Input, cli};
-use ft::compose;
-use ft::error::AppError;
-use ft::file_processor::RunOutcome;
+use fxt::bom::{UTF8_BOM, WithoutBom, strip_bom};
+use fxt::cli_args::{Config, InPlace, Input, cli};
+use fxt::compose;
+use fxt::error::AppError;
+use fxt::file_processor::RunOutcome;
 
 /// Exit codes follow `grep`: 0 when rows matched, 1 when a filter was
 /// given and nothing matched at all, 2 when the run failed outright.
@@ -19,7 +19,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(Verdict::Matched) => ExitCode::SUCCESS,
         Ok(Verdict::NothingMatched) => ExitCode::from(NO_MATCH),
-        //a consumer closing the pipe early (`ft file | head`) ends the
+        //a consumer closing the pipe early (`fxt file | head`) ends the
         //output stream normally and is not worth reporting
         Err(AppError::Processing(error)) if error.kind() == ErrorKind::BrokenPipe => {
             ExitCode::SUCCESS
@@ -378,7 +378,7 @@ fn temporary_sibling(path: &Path) -> PathBuf {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let temp_name = format!(".{name}.ft-{}.tmp", std::process::id());
+    let temp_name = format!(".{name}.fxt-{}.tmp", std::process::id());
     match path.parent() {
         Some(dir) => dir.join(temp_name),
         None => PathBuf::from(temp_name),

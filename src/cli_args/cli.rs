@@ -10,11 +10,11 @@ pub fn cli() -> Command {
         .about("File Transformer")
         .after_help(
             "Examples:\n\
-             \x20 ft -R 1-5 -C 2-4 input.txt             keep rows 1-5, columns 2-4\n\
-             \x20 ft -R '~10-~1' input.txt               the last ten rows, like tail\n\
-             \x20 ft -F , -C 3,1 data.csv                CSV fields 3 and 1, in that order\n\
-             \x20 ft -F , --group-by 1 --sum 2 data.csv  sum field 2 per distinct field 1\n\
-             \x20 ft -g ERROR -d -i --backup .bak a.log  delete matching rows in place,\n\
+             \x20 fxt -R 1-5 -C 2-4 input.txt             keep rows 1-5, columns 2-4\n\
+             \x20 fxt -R '~10-~1' input.txt               the last ten rows, like tail\n\
+             \x20 fxt -F , -C 3,1 data.csv                CSV fields 3 and 1, in that order\n\
+             \x20 fxt -F , --group-by 1 --sum 2 data.csv  sum field 2 per distinct field 1\n\
+             \x20 fxt -g ERROR -d -i --backup .bak a.log  delete matching rows in place,\n\
              \x20                                        keeping a backup\n\
              \n\
              Exit codes (like grep):\n\

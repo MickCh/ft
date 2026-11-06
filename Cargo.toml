@@ -1,5 +1,5 @@
 [package]
-name = "ft"
+name = "fxt"
 version = "0.1.0"
 edition = "2024"
 description = "File transformer"

@@ -1,6 +1,6 @@
-# Roadmap — `ft`
+# Roadmap — `fxt`
 
-Date: 2026-07-12. Ideas for growing `ft` into a general-purpose file transformation tool, grouped by what each one costs in the current architecture.
+Date: 2026-07-12. Ideas for growing `fxt` into a general-purpose file transformation tool, grouped by what each one costs in the current architecture.
 
 ## Done
 
@@ -51,7 +51,7 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 - **Grapheme columns** — columns count code points, so `e\u0301` and ZWJ emoji sequences can be split. An opt-in `--graphemes` (`unicode-segmentation`) would count user-perceived characters; it touches every char-indexed helper in `text.rs`.
 - **Regex backreferences** — `(.)\1` is rejected by the `regex` crate. `fancy-regex` behind a flag would allow it, at the cost of linear-time matching guarantees.
 - **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; the *Encodings* item above (a lossy/byte mode) is the real answer.
-- **Performance** — `ft` beat `sed` on replacement and `awk`/pipelines on combined operations, but trailed `grep` on plain filtering and `sort` on whole-line sorting (300k rows, Windows). Worth a `criterion` look at the predicate path and at `sort_by_cached_key` cloning every key.
+- **Performance** — `fxt` beat `sed` on replacement and `awk`/pipelines on combined operations, but trailed `grep` on plain filtering and `sort` on whole-line sorting (300k rows, Windows). Worth a `criterion` look at the predicate path and at `sort_by_cached_key` cloning every key.
 
 ## 4. Tool maturity (cheap, highly visible)
 

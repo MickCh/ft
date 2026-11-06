@@ -345,7 +345,7 @@ fn join_parts<'a>(parts: Vec<Cow<'a, str>>, joiner: &str) -> Cow<'a, str> {
 }
 
 /// Whether a quoted field is still open at the end of the line — i.e.
-/// the CSV record goes on in the next one. `ft` works line by line, so
+/// the CSV record goes on in the next one. `fxt` works line by line, so
 /// such a record cannot be read correctly; the caller rejects it rather
 /// than return fields cut in half. Counts quotes the way
 /// `field_positions` toggles on them.

@@ -1,16 +1,18 @@
-# ft — File Transformer
+# fxt — File Transformer
 
 [![Rust](https://github.com/MickCh/ft/actions/workflows/rust.yml/badge.svg)](https://github.com/MickCh/ft/actions/workflows/rust.yml)
 
 A small command-line tool for transforming text files: select or delete row and column ranges, reorder columns, sort/reverse/shuffle lines, filter by content, find/replace within a column range, wrap/split/join rows, summarize them (count, sum, avg, min, max, per group), and edit files in place — with CSV support (one record per line).
 
+It was called `ft` until 2026-11; the binary was renamed because PowerShell aliases `ft` to `Format-Table`, which shadowed it.
+
 ## Usage
 
 ```
-ft [OPTIONS] [filename]...
+fxt [OPTIONS] [filename]...
 ```
 
-When no filename is given (or a filename is `-`), `ft` reads from standard input, so it works in pipelines. Several files are read as one stream, like `cat`.
+When no filename is given (or a filename is `-`), `fxt` reads from standard input, so it works in pipelines. Several files are read as one stream, like `cat`.
 
 | Option | Description |
 |---|---|
@@ -75,22 +77,22 @@ When no filename is given (or a filename is `-`), `ft` reads from standard input
 - `--number` prefixes each **output** row with its number (separated by `--output-delimiter`, else `--fields`, else a tab). It counts the rows it actually emits — after the filters, after `--split-on`/`--wrap` expanded them and after `--drop-empty` removed some — so the numbers are always contiguous. It cannot be combined with a reordering, which would shuffle the numbers along with the rows.
 - `--wrap` cuts every processed line into chunks of at most `<width>` **characters** — one row in, several rows out. It runs after the other transforms, so the chunks are cut from the finished line. If the input's last line had no terminator, neither does the last chunk.
 - `--split-on` cuts every processed line at each occurrence of the separator, turning one row into one row per piece (`tr , '\n'`, but only on the rows being processed). It runs after the column-scoped transforms and before `--wrap`.
-- `--join` folds every processed row into a single row — the inverse of `--split-on`, and the two compose: `ft --split-on , --join ,` returns what it was given. Like a summary, it consumes the rows, so it cannot be combined with one (or with `--delete` or `--number`).
-- **Summaries** (`--count`, `--sum`, `--avg`, `--min`, `--max`) *replace* the rows they summarize: the rows are consumed and only the summary is printed. They see exactly the rows that survive `--rows`, `--grep` and `--unique`, so `--unique --count` counts the distinct rows. Add `--group-by <cols>` for one summary row per distinct key, printed in the order the keys first appear. Under `--quoted` the key is each field's *value*, quoted again only where CSV needs it (the value holds the delimiter, a quote or a line break), so `"a"` and `a` are one group, printed as `a`, while `"x,y"` stays `"x,y"`. The output columns are the key (if any), then the count, sum, avg, min and max that were asked for, separated by `--output-delimiter`, else `--fields`, else a tab. A value that is not a number takes no part in the statistics (it is not a zero), so a group with no numbers at all shows an empty average, minimum and maximum. Without `--group-by` the summary always appears, even over no rows at all — `ft --count -g X` prints `0` when nothing matches, like `grep -c` (and still exits 1); with `--group-by`, no rows means no groups and no output. Summaries cannot be combined with `--delete` or `--number`, which would have nothing left to act on; a reordering is fine — the reducer takes the rows in the order they come out, so `--sort --group-by` reports the groups in sorted order and `--sort --join` folds them sorted.
-- `--drop-empty` removes lines that are empty *after* the transforms ran — which `--grep --invert` cannot do, since a predicate sees the line as it was read. `ft -C 3 --drop-empty` drops the rows too short to reach column 3, and `--trim --drop-empty` drops whitespace-only lines.
+- `--join` folds every processed row into a single row — the inverse of `--split-on`, and the two compose: `fxt --split-on , --join ,` returns what it was given. Like a summary, it consumes the rows, so it cannot be combined with one (or with `--delete` or `--number`).
+- **Summaries** (`--count`, `--sum`, `--avg`, `--min`, `--max`) *replace* the rows they summarize: the rows are consumed and only the summary is printed. They see exactly the rows that survive `--rows`, `--grep` and `--unique`, so `--unique --count` counts the distinct rows. Add `--group-by <cols>` for one summary row per distinct key, printed in the order the keys first appear. Under `--quoted` the key is each field's *value*, quoted again only where CSV needs it (the value holds the delimiter, a quote or a line break), so `"a"` and `a` are one group, printed as `a`, while `"x,y"` stays `"x,y"`. The output columns are the key (if any), then the count, sum, avg, min and max that were asked for, separated by `--output-delimiter`, else `--fields`, else a tab. A value that is not a number takes no part in the statistics (it is not a zero), so a group with no numbers at all shows an empty average, minimum and maximum. Without `--group-by` the summary always appears, even over no rows at all — `fxt --count -g X` prints `0` when nothing matches, like `grep -c` (and still exits 1); with `--group-by`, no rows means no groups and no output. Summaries cannot be combined with `--delete` or `--number`, which would have nothing left to act on; a reordering is fine — the reducer takes the rows in the order they come out, so `--sort --group-by` reports the groups in sorted order and `--sort --join` folds them sorted.
+- `--drop-empty` removes lines that are empty *after* the transforms ran — which `--grep --invert` cannot do, since a predicate sees the line as it was read. `fxt -C 3 --drop-empty` drops the rows too short to reach column 3, and `--trim --drop-empty` drops whitespace-only lines.
 - Numeric sort parses the sort key as a number (integer or decimal); lines whose key is not a number sort before all numeric lines. Integers compare exactly at any size up to 128 bits, so keys beyond 2^53 — where a floating-point key would round neighbours together — still sort correctly, and so do integers against decimals. Sums stay exact integers too, for as long as every value is one.
 - `--unique` keeps the first row per key (the column range, or the whole line without one) and drops later duplicates; combined with `--sort`, "first" means first in sorted order, like `sort -u`.
 - `--sort`, `--tac` and `--shuffle` are mutually exclusive reordering operations; each buffers the selected rows before writing them out. They cannot be combined with `--delete` on whole rows (the rows would be removed, not reordered); combining them with `--delete --cols` is fine, since there `--delete` removes columns.
 - Original line endings (LF or CRLF) are preserved.
 - A UTF-8 byte order mark (BOM) at the start of an input is taken off before processing — of every input file, not just the first — so it does not count as a column or keep the first field from matching. The output carries none, except with `--in-place`, which writes it back: the edited file stays encoded as it was, and `--dry-run` does not report the mark as a change.
-- Several input files are read **as one stream**, in the order given (like `cat a b | ft`), so a row range addresses the concatenation. `--in-place` is the exception: it edits each file on its own, so row 1 means row 1 *of each file* — which is what makes `ft -i -f foo -r bar *.txt` a batch edit.
+- Several input files are read **as one stream**, in the order given (like `cat a b | fxt`), so a row range addresses the concatenation. `--in-place` is the exception: it edits each file on its own, so row 1 means row 1 *of each file* — which is what makes `fxt -i -f foo -r bar *.txt` a batch edit.
 - `--in-place` rewrites the input file itself: the result is written to a temporary file in the same directory and then atomically renamed over the original, so an interrupted run never truncates the input. The original file's permissions are preserved. It needs real input files (not stdin) and cannot be combined with `--output`.
 - `--backup .bak` keeps the original as `<file>.bak` before the swap; `--dry-run` writes nothing at all and instead reports, per file, whether the edit *would* change it — so a batch edit can be checked before it happens.
 - `--replace` cannot be combined with `--delete`, and `--delete` requires a row or column range.
 
 ### Order of operations
 
-The flags describe *what* to do, not in which order: whatever order they are written in, `ft` always runs the same pipeline.
+The flags describe *what* to do, not in which order: whatever order they are written in, `fxt` always runs the same pipeline.
 
 1. **Row range** (`--rows`), then the **content filter** (`--grep`/`--invert`) — on the line *as it was read*, before any transform.
 2. **Transforms**, in this fixed order: column delete → find/replace pairs → `--upper` → `--lower` → `--title-case` → `--squeeze` → `--trim` → `--split-on` → `--wrap` → `--drop-empty` → `--number`.
@@ -103,17 +105,17 @@ So `--upper -g error` finds nothing in a line reading `ERROR` — the filter see
 
 ```bash
 # Filter on field 2 and print only field 2 (the grep key counts in the line as read)
-ft -F , -C 2 --grep-key 2 -g ERROR data.csv
+fxt -F , -C 2 --grep-key 2 -g ERROR data.csv
 
 # Filter on field 1, print field 2
-ft -F , -C 2 --grep-key 1 -g ERROR data.csv
+fxt -F , -C 2 --grep-key 1 -g ERROR data.csv
 
 # Uppercase field 2, then filter on the result: a second run sees what the first wrote
-ft -F , -C 2 --upper data.csv | ft -F , -C 2 -g ERROR
+fxt -F , -C 2 --upper data.csv | fxt -F , -C 2 -g ERROR
 
 # Print fields 3 and 1, sorted by field 1 — keys are read from the selected
 # result, so the original field 1 is field 2 there
-ft -F , -C 3,1 --sort --sort-key 2 data.csv
+fxt -F , -C 3,1 --sort --sort-key 2 data.csv
 ```
 
 ### Exit codes
@@ -126,129 +128,129 @@ Like `grep`:
 | `1` | `--grep` was given and no row matched |
 | `2` | The run failed (bad arguments, unreadable file, …) |
 
-A row counts as matched when it lies inside `--rows` *and* satisfies the filter — including the rows a `--delete` removed, since matching is why they went. `--quiet` writes nothing at all and leaves only the exit code, stopping at the first match (`grep -q`), which makes `ft` usable as a condition:
+A row counts as matched when it lies inside `--rows` *and* satisfies the filter — including the rows a `--delete` removed, since matching is why they went. `--quiet` writes nothing at all and leaves only the exit code, stopping at the first match (`grep -q`), which makes `fxt` usable as a condition:
 
 ```bash
-if ft -q -g ERROR app.log; then echo "there were errors"; fi
+if fxt -q -g ERROR app.log; then echo "there were errors"; fi
 ```
 
 ### Examples
 
 ```bash
 # Print rows 10-20
-ft -R 10-20 input.txt
+fxt -R 10-20 input.txt
 
 # Print the first 5 rows, rows 1, 3 and 10-20, or everything from row 100 on
-ft -R -5 input.txt
-ft -R 1,3,10-20 input.txt
-ft -R 100- input.txt
+fxt -R -5 input.txt
+fxt -R 1,3,10-20 input.txt
+fxt -R 100- input.txt
 
 # Print the last 10 rows (like tail); drop the last row
-ft -R '~10-~1' input.txt
-ft -d -R '~1' input.txt
+fxt -R '~10-~1' input.txt
+fxt -d -R '~1' input.txt
 
 # Delete rows 2-5, keep everything else
-ft -d -R 2-5 input.txt
+fxt -d -R 2-5 input.txt
 
 # Delete columns 1-8 in every line (e.g. strip a fixed-width prefix)
-ft -d -C 1-8 input.txt
+fxt -d -C 1-8 input.txt
 
 # Keep only columns 1-8 of every line (like cut)
-ft -C 1-8 input.txt
+fxt -C 1-8 input.txt
 
 # Replace "foo" with "bar", but only in columns 10-20
-ft -C 10-20 -f foo -r bar input.txt
+fxt -C 10-20 -f foo -r bar input.txt
 
 # CSV fields: keep fields 2-3, drop field 2, sort numerically by field 3
-ft -F , -C 2-3 data.csv
-ft -d -F , -C 2 data.csv
-ft -s -n -F , -C 3 data.csv
+fxt -F , -C 2-3 data.csv
+fxt -d -F , -C 2 data.csv
+fxt -s -n -F , -C 3 data.csv
 
 # Project fields in a new order (like awk '{print $3,$1,$2}'), retabulating them
-ft -F , -C 3,1,2 data.csv
-ft -F , -C 3,1 --output-delimiter ';' data.csv
+fxt -F , -C 3,1,2 data.csv
+fxt -F , -C 3,1 --output-delimiter ';' data.csv
 
 # Real CSV: a comma inside "quoted, fields" no longer splits them
-ft -F , --quoted -C 2 data.csv
-ft -F , --quoted -C 3,1 data.csv
+fxt -F , --quoted -C 2 data.csv
+fxt -F , --quoted -C 3,1 data.csv
 
 # Keep characters 1, 3 and 5-7; drop fields 1 and 3 at once
-ft -C 1,3,5-7 input.txt
-ft -d -F , -C 1,3 data.csv
+fxt -C 1,3,5-7 input.txt
+fxt -d -F , -C 1,3 data.csv
 
 # Sort by field 1 while replacing inside field 2 only
-ft -F , -C 2 -f x -r y -s --sort-key 1 data.csv
+fxt -F , -C 2 -f x -r y -s --sort-key 1 data.csv
 
 # Deduplicate on field 1 (the whole row need not repeat), like sort -u -k1,1
-ft -s -u --unique-key 1 -F , data.csv
+fxt -s -u --unique-key 1 -F , data.csv
 
 # Regex replace: collapse every number to "N"; $1-style capture references work too
-ft -e -f '[0-9]+' -r N input.txt
-ft -e -f '(\w+)@(\w+)' -r '$2.$1' input.txt
+fxt -e -f '[0-9]+' -r N input.txt
+fxt -e -f '(\w+)@(\w+)' -r '$2.$1' input.txt
 
 # Case-insensitive replace: rewrites foo, FOO, Foo, ...
-ft --ignore-case -f foo -r bar input.txt
+fxt --ignore-case -f foo -r bar input.txt
 
 # Several substitutions in one pass (applied left to right)
-ft -f cat -r dog -f red -r blue input.txt
+fxt -f cat -r dog -f red -r blue input.txt
 
 # Uppercase columns 1-3, trim whitespace around every line
-ft --upper -C 1-3 input.txt
-ft --trim input.txt
+fxt --upper -C 1-3 input.txt
+fxt --trim input.txt
 
 # Hard-wrap every line at 80 characters (like fold -w 80)
-ft --wrap 80 input.txt
+fxt --wrap 80 input.txt
 
 # Explode a comma-separated row into one row per value, and fold rows back into one
-ft --split-on , input.txt
-ft --join , input.txt
+fxt --split-on , input.txt
+fxt --join , input.txt
 
 # Summaries: count the rows, count only the errors, count the distinct ones
-ft --count input.txt
-ft --count -g ERROR app.log
-ft --unique --count input.txt
+fxt --count input.txt
+fxt --count -g ERROR app.log
+fxt --unique --count input.txt
 
 # Per-key statistics (like a small datamash): total and mean of field 2 per field 1
-ft -F , --group-by 1 --count --sum 2 --avg 2 data.csv
+fxt -F , --group-by 1 --count --sum 2 --avg 2 data.csv
 
 # Drop blank lines; drop rows left empty by cutting a column
-ft --trim --drop-empty input.txt
-ft -C 3 --drop-empty input.txt
+fxt --trim --drop-empty input.txt
+fxt -C 3 --drop-empty input.txt
 
 # Keep only rows containing ERROR; delete rows that match a pattern
-ft -g ERROR app.log
-ft -d -g '^#' config.txt
+fxt -g ERROR app.log
+fxt -d -g '^#' config.txt
 
 # Sort and deduplicate by the key in columns 1-8 (like sort -u)
-ft -s -u -C 1-8 input.txt
+fxt -s -u -C 1-8 input.txt
 
 # Reverse the file; shuffle rows 2-100
-ft --tac input.txt
-ft --shuffle -R 2-100 input.txt
+fxt --tac input.txt
+fxt --shuffle -R 2-100 input.txt
 
 # Sort the whole file by columns 5-12, write the result to out.txt
-ft -s -C 5-12 -o out.txt input.txt
+fxt -s -C 5-12 -o out.txt input.txt
 
 # Edit a file in place (atomic replace)
-ft -i -f foo -r bar input.txt
+fxt -i -f foo -r bar input.txt
 
 # Batch edit: every .txt at once, keeping a .bak of each
-ft -i --backup .bak -f foo -r bar *.txt
+fxt -i --backup .bak -f foo -r bar *.txt
 
 # Check first what that batch edit would touch, without writing anything
-ft -i --dry-run -f foo -r bar *.txt
+fxt -i --dry-run -f foo -r bar *.txt
 
 # Concatenate several files and process them as one stream
-ft -s a.txt b.txt c.txt
+fxt -s a.txt b.txt c.txt
 
 # Use in a pipeline: sort the output of another command
-grep ERROR app.log | ft -s -C 1-19
+grep ERROR app.log | fxt -s -C 1-19
 
 # Numeric, descending sort by the value in columns 20-26
-ft -s -n --reverse -C 20-26 input.txt
+fxt -s -n --reverse -C 20-26 input.txt
 
 # Sort only rows 2-100 (e.g. keep a header line first... and select just that block)
-ft -s -R 2-100 input.txt
+fxt -s -R 2-100 input.txt
 ```
 
 ## Building
@@ -256,7 +258,7 @@ ft -s -R 2-100 input.txt
 Requires a stable [Rust](https://rustup.rs/) toolchain (edition 2024).
 
 ```bash
-cargo build --release    # binary in target/release/ft
+cargo build --release    # binary in target/release/fxt
 cargo test               # unit + CLI integration tests
 cargo clippy --all-targets -- -D warnings
 ```

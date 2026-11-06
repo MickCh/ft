@@ -164,7 +164,7 @@ impl Config {
         self.span_of(Some(columns))
     }
 
-    /// What separates the columns `ft` writes of its own (a summary
+    /// What separates the columns `fxt` writes of its own (a summary
     /// row's, or the row number `--number` prefixes): the output
     /// delimiter, then the input one, and a tab when neither says
     /// otherwise (in char mode there is no delimiter to inherit).
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn defaults_when_only_filename_given() {
-        let config = config_from(&["ft", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "input.txt"]).unwrap();
 
         assert_eq!(config.inputs, [Input::File(PathBuf::from("input.txt"))]);
         assert!(config.rows.is_none());
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn reads_all_arguments() {
         let config = config_from(&[
-            "ft",
+            "fxt",
             "-R",
             "2-4",
             "-C",
@@ -480,16 +480,16 @@ mod tests {
 
     #[test]
     fn omitted_or_dash_filename_means_stdin() {
-        let config = config_from(&["ft"]).unwrap();
+        let config = config_from(&["fxt"]).unwrap();
         assert_eq!(config.inputs, [Input::Stdin]);
 
-        let config = config_from(&["ft", "-"]).unwrap();
+        let config = config_from(&["fxt", "-"]).unwrap();
         assert_eq!(config.inputs, [Input::Stdin]);
     }
 
     #[test]
     fn several_filenames_become_several_inputs() {
-        let config = config_from(&["ft", "a.txt", "b.txt"]).unwrap();
+        let config = config_from(&["fxt", "a.txt", "b.txt"]).unwrap();
         assert_eq!(
             config.inputs,
             [
@@ -503,7 +503,7 @@ mod tests {
         );
 
         //stdin may sit among the files, and is not one of them
-        let config = config_from(&["ft", "a.txt", "-"]).unwrap();
+        let config = config_from(&["fxt", "a.txt", "-"]).unwrap();
         assert_eq!(
             config.inputs,
             [Input::File(PathBuf::from("a.txt")), Input::Stdin]
@@ -516,15 +516,15 @@ mod tests {
 
     #[test]
     fn in_place_rejects_stdin_among_the_inputs() {
-        let error = config_from(&["ft", "-i", "a.txt", "-"]).unwrap_err();
+        let error = config_from(&["fxt", "-i", "a.txt", "-"]).unwrap_err();
         assert!(matches!(error, ConfigError::InPlaceWithoutFile));
 
-        assert!(config_from(&["ft", "-i", "a.txt", "b.txt"]).is_ok());
+        assert!(config_from(&["fxt", "-i", "a.txt", "b.txt"]).is_ok());
     }
 
     #[test]
     fn missing_ranges_fall_back_to_full_range() {
-        let config = config_from(&["ft", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "input.txt"]).unwrap();
 
         assert_eq!(config.rows_or_full(), RangeSpec::full());
         assert_eq!(config.cols_or_full(), ColumnList::full());
@@ -532,19 +532,19 @@ mod tests {
 
     #[test]
     fn fields_delimiter_switches_the_span_to_field_mode() {
-        let config = config_from(&["ft", "-F", ",", "-C", "2-3", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "-F", ",", "-C", "2-3", "input.txt"]).unwrap();
 
         assert_eq!(config.field_delimiter.as_deref(), Some(","));
         assert!(matches!(config.col_span(), ColumnSpan::Fields { .. }));
 
-        let config = config_from(&["ft", "-C", "2-3", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "-C", "2-3", "input.txt"]).unwrap();
         assert!(matches!(config.col_span(), ColumnSpan::Chars(_)));
     }
 
     #[test]
     fn key_ranges_override_cols_per_operation() {
         let config = config_from(&[
-            "ft",
+            "fxt",
             "-C",
             "5-6",
             "-s",
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn column_lists_reach_every_operation_key() {
         let config =
-            config_from(&["ft", "-C", "3,1", "-s", "--sort-key", "2,4-5", "input.txt"]).unwrap();
+            config_from(&["fxt", "-C", "3,1", "-s", "--sort-key", "2,4-5", "input.txt"]).unwrap();
 
         //the parts keep the order written, so reading them permutes
         assert_eq!(written(&config.col_span()), [3..=3, 1..=1]);
@@ -581,7 +581,7 @@ mod tests {
     #[test]
     fn output_delimiter_joins_selected_fields() {
         let config = config_from(&[
-            "ft",
+            "fxt",
             "-F",
             ",",
             "-C",
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(config.col_span().joiner(), ";");
 
         //without it, the input delimiter joins the fields back together
-        let config = config_from(&["ft", "-F", ",", "-C", "2,1", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "-F", ",", "-C", "2,1", "input.txt"]).unwrap();
         assert_eq!(config.col_span().joiner(), ",");
     }
 
@@ -604,14 +604,15 @@ mod tests {
     fn output_delimiter_requires_fields() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "-C", "1", "--output-delimiter", ";", "input.txt"])
+                .try_get_matches_from(["fxt", "-C", "1", "--output-delimiter", ";", "input.txt"])
                 .is_err()
         );
     }
 
     #[test]
     fn key_ranges_use_field_mode_too() {
-        let config = config_from(&["ft", "-F", ",", "-s", "--sort-key", "2", "input.txt"]).unwrap();
+        let config =
+            config_from(&["fxt", "-F", ",", "-s", "--sort-key", "2", "input.txt"]).unwrap();
         let sort_key = config.sort_key.clone().unwrap();
         assert!(matches!(
             config.span_for(sort_key),
@@ -623,17 +624,17 @@ mod tests {
     fn key_ranges_require_their_operation() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "--sort-key", "1", "input.txt"])
+                .try_get_matches_from(["fxt", "--sort-key", "1", "input.txt"])
                 .is_err()
         );
         assert!(
             cli()
-                .try_get_matches_from(["ft", "--unique-key", "1", "input.txt"])
+                .try_get_matches_from(["fxt", "--unique-key", "1", "input.txt"])
                 .is_err()
         );
         assert!(
             cli()
-                .try_get_matches_from(["ft", "--grep-key", "1", "input.txt"])
+                .try_get_matches_from(["fxt", "--grep-key", "1", "input.txt"])
                 .is_err()
         );
     }
@@ -642,7 +643,7 @@ mod tests {
     fn fields_requires_columns() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "-F", ",", "input.txt"])
+                .try_get_matches_from(["fxt", "-F", ",", "input.txt"])
                 .is_err()
         );
     }
@@ -651,7 +652,7 @@ mod tests {
     fn fields_rejects_an_empty_delimiter() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "-F", "", "-C", "2", "input.txt"])
+                .try_get_matches_from(["fxt", "-F", "", "-C", "2", "input.txt"])
                 .is_err()
         );
     }
@@ -660,16 +661,16 @@ mod tests {
     fn numeric_and_reverse_require_sort() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "-n", "input.txt"])
+                .try_get_matches_from(["fxt", "-n", "input.txt"])
                 .is_err()
         );
         assert!(
             cli()
-                .try_get_matches_from(["ft", "--reverse", "input.txt"])
+                .try_get_matches_from(["fxt", "--reverse", "input.txt"])
                 .is_err()
         );
 
-        let config = config_from(&["ft", "-s", "-n", "--reverse", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "-s", "-n", "--reverse", "input.txt"]).unwrap();
         assert_eq!(
             config.reorder,
             Some(ReorderMode::Sort {
@@ -681,16 +682,16 @@ mod tests {
 
     #[test]
     fn tac_and_shuffle_map_to_reorder_modes() {
-        let config = config_from(&["ft", "--tac", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "--tac", "input.txt"]).unwrap();
         assert_eq!(config.reorder, Some(ReorderMode::Tac));
 
-        let config = config_from(&["ft", "--shuffle", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "--shuffle", "input.txt"]).unwrap();
         assert_eq!(config.reorder, Some(ReorderMode::Shuffle));
     }
 
     #[test]
     fn regex_flag_compiles_find_as_regex() {
-        let config = config_from(&["ft", "-e", "-f", r"\d+", "-r", "N", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "-e", "-f", r"\d+", "-r", "N", "input.txt"]).unwrap();
         assert!(matches!(
             config.replacements.as_slice(),
             [Replacement {
@@ -703,7 +704,7 @@ mod tests {
     #[test]
     fn collects_multiple_find_replace_pairs_in_order() {
         let config = config_from(&[
-            "ft",
+            "fxt",
             "-f",
             "a",
             "-r",
@@ -727,7 +728,8 @@ mod tests {
 
     #[test]
     fn rejects_more_finds_than_replaces() {
-        let error = config_from(&["ft", "-f", "a", "-r", "1", "-f", "b", "input.txt"]).unwrap_err();
+        let error =
+            config_from(&["fxt", "-f", "a", "-r", "1", "-f", "b", "input.txt"]).unwrap_err();
         assert!(matches!(
             error,
             ConfigError::FindReplaceCountMismatch {
@@ -740,21 +742,21 @@ mod tests {
     #[test]
     fn rejects_find_without_replace() {
         //a lone --find does nothing on its own; --grep is for filtering
-        let error = config_from(&["ft", "-f", "a", "input.txt"]).unwrap_err();
+        let error = config_from(&["fxt", "-f", "a", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::MissingReplaceForFind));
     }
 
     #[test]
     fn ignore_case_flag_is_read() {
         let config =
-            config_from(&["ft", "--ignore-case", "-f", "a", "-r", "b", "input.txt"]).unwrap();
+            config_from(&["fxt", "--ignore-case", "-f", "a", "-r", "b", "input.txt"]).unwrap();
         assert!(config.ignore_case);
     }
 
     #[test]
     fn ignore_case_makes_regex_case_insensitive() {
         let config = config_from(&[
-            "ft",
+            "fxt",
             "-e",
             "--ignore-case",
             "-f",
@@ -778,27 +780,27 @@ mod tests {
 
     #[test]
     fn ignore_case_requires_find_or_grep() {
-        let error = config_from(&["ft", "--ignore-case", "input.txt"]).unwrap_err();
+        let error = config_from(&["fxt", "--ignore-case", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::IgnoreCaseWithoutPattern));
 
-        assert!(config_from(&["ft", "--ignore-case", "-g", "a", "input.txt"]).is_ok());
+        assert!(config_from(&["fxt", "--ignore-case", "-g", "a", "input.txt"]).is_ok());
     }
 
     #[test]
     fn grep_compiles_as_regex() {
-        let config = config_from(&["ft", "-g", "a+b", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "-g", "a+b", "input.txt"]).unwrap();
         assert!(config.grep.unwrap().is_match("aaab"));
     }
 
     #[test]
     fn grep_honors_ignore_case() {
-        let config = config_from(&["ft", "--ignore-case", "-g", "abc", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "--ignore-case", "-g", "abc", "input.txt"]).unwrap();
         assert!(config.grep.unwrap().is_match("ABC"));
     }
 
     #[test]
     fn rejects_invalid_grep_regex() {
-        let error = config_from(&["ft", "-g", "[unclosed", "input.txt"]).unwrap_err();
+        let error = config_from(&["fxt", "-g", "[unclosed", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::InvalidRegex(_)));
     }
 
@@ -806,26 +808,26 @@ mod tests {
     fn invert_requires_grep() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "--invert", "input.txt"])
+                .try_get_matches_from(["fxt", "--invert", "input.txt"])
                 .is_err()
         );
     }
 
     #[test]
     fn invert_has_a_grep_style_short_flag() {
-        let config = config_from(&["ft", "-g", "a", "-v", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "-g", "a", "-v", "input.txt"]).unwrap();
         assert!(config.invert);
     }
 
     #[test]
     fn accepts_delete_with_grep_only() {
-        assert!(config_from(&["ft", "-d", "-g", "foo", "input.txt"]).is_ok());
+        assert!(config_from(&["fxt", "-d", "-g", "foo", "input.txt"]).is_ok());
     }
 
     #[test]
     fn rejects_invalid_regex() {
         let error =
-            config_from(&["ft", "-e", "-f", "[unclosed", "-r", "N", "input.txt"]).unwrap_err();
+            config_from(&["fxt", "-e", "-f", "[unclosed", "-r", "N", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::InvalidRegex(_)));
     }
 
@@ -833,33 +835,33 @@ mod tests {
     fn regex_flag_requires_find() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "-e", "input.txt"])
+                .try_get_matches_from(["fxt", "-e", "input.txt"])
                 .is_err()
         );
     }
 
     #[test]
     fn rejects_replace_without_find() {
-        let error = config_from(&["ft", "-r", "b", "input.txt"]).unwrap_err();
+        let error = config_from(&["fxt", "-r", "b", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::MissingFindForReplace));
     }
 
     #[test]
     fn rejects_replace_with_delete() {
-        let error = config_from(&["ft", "-d", "-f", "a", "-r", "b", "input.txt"]).unwrap_err();
+        let error = config_from(&["fxt", "-d", "-f", "a", "-r", "b", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::ReplaceWithDelete));
     }
 
     #[test]
     fn rejects_delete_without_any_range() {
-        let error = config_from(&["ft", "-d", "input.txt"]).unwrap_err();
+        let error = config_from(&["fxt", "-d", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::DeleteWithoutRange));
     }
 
     #[test]
     fn rejects_delete_combined_with_reorder() {
         for reorder in ["-s", "--tac", "--shuffle"] {
-            let error = config_from(&["ft", "-d", reorder, "-R", "2", "input.txt"]).unwrap_err();
+            let error = config_from(&["fxt", "-d", reorder, "-R", "2", "input.txt"]).unwrap_err();
             assert!(
                 matches!(error, ConfigError::DeleteWithReorder),
                 "expected DeleteWithReorder for {reorder}, got {error:?}"
@@ -870,18 +872,18 @@ mod tests {
     #[test]
     fn allows_delete_with_reorder_when_deleting_columns() {
         //with --cols, --delete removes columns, so sorting the rows is fine
-        assert!(config_from(&["ft", "-d", "-s", "-C", "1", "-R", "2", "input.txt"]).is_ok());
+        assert!(config_from(&["fxt", "-d", "-s", "-C", "1", "-R", "2", "input.txt"]).is_ok());
     }
 
     #[test]
     fn accepts_delete_with_row_or_column_range() {
-        assert!(config_from(&["ft", "-d", "-R", "2-3", "input.txt"]).is_ok());
-        assert!(config_from(&["ft", "-d", "-C", "2-3", "input.txt"]).is_ok());
+        assert!(config_from(&["fxt", "-d", "-R", "2-3", "input.txt"]).is_ok());
+        assert!(config_from(&["fxt", "-d", "-C", "2-3", "input.txt"]).is_ok());
     }
 
     #[test]
     fn in_place_flag_is_read() {
-        let config = config_from(&["ft", "-i", "input.txt"]).unwrap();
+        let config = config_from(&["fxt", "-i", "input.txt"]).unwrap();
         let in_place = config
             .in_place
             .expect("in-place options missing");
@@ -892,7 +894,7 @@ mod tests {
     #[test]
     fn backup_and_dry_run_ride_along_with_in_place() {
         let config =
-            config_from(&["ft", "-i", "--backup", ".bak", "--dry-run", "input.txt"]).unwrap();
+            config_from(&["fxt", "-i", "--backup", ".bak", "--dry-run", "input.txt"]).unwrap();
         let in_place = config
             .in_place
             .expect("in-place options missing");
@@ -902,7 +904,7 @@ mod tests {
 
     #[test]
     fn in_place_requires_a_file() {
-        let error = config_from(&["ft", "-i"]).unwrap_err();
+        let error = config_from(&["fxt", "-i"]).unwrap_err();
         assert!(matches!(error, ConfigError::InPlaceWithoutFile));
     }
 
@@ -910,7 +912,7 @@ mod tests {
     fn in_place_conflicts_with_output() {
         assert!(
             cli()
-                .try_get_matches_from(["ft", "-i", "-o", "out.txt", "input.txt"])
+                .try_get_matches_from(["fxt", "-i", "-o", "out.txt", "input.txt"])
                 .is_err()
         );
     }

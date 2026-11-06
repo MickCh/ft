@@ -12,7 +12,7 @@ struct TempFile {
 
 impl TempFile {
     fn new(name: &str, content: &str) -> TempFile {
-        let path = std::env::temp_dir().join(format!("ft-test-{}-{}", std::process::id(), name));
+        let path = std::env::temp_dir().join(format!("fxt-test-{}-{}", std::process::id(), name));
         fs::write(&path, content).expect("failed to write test input file");
         TempFile { path }
     }
@@ -28,39 +28,39 @@ impl Drop for TempFile {
     }
 }
 
-fn run_ft(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ft"))
+fn run_fxt(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_fxt"))
         .args(args)
         .output()
-        .expect("failed to run ft binary")
+        .expect("failed to run fxt binary")
 }
 
-fn run_ft_with_stdin(args: &[&str], input: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ft"))
+fn run_fxt_with_stdin(args: &[&str], input: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fxt"))
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn ft binary");
+        .expect("failed to spawn fxt binary");
 
     child
         .stdin
         .take()
         .expect("stdin not captured")
         .write_all(input.as_bytes())
-        .expect("failed to write to ft stdin");
+        .expect("failed to write to fxt stdin");
 
     child
         .wait_with_output()
-        .expect("failed to wait for ft binary")
+        .expect("failed to wait for fxt binary")
 }
 
-fn run_ft_stdout(args: &[&str]) -> String {
-    let output = run_ft(args);
+fn run_fxt_stdout(args: &[&str]) -> String {
+    let output = run_fxt(args);
     assert!(
         output.status.success(),
-        "ft failed: {}",
+        "fxt failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).expect("stdout is not valid UTF-8")
@@ -69,13 +69,13 @@ fn run_ft_stdout(args: &[&str]) -> String {
 #[test]
 fn no_flags_passes_file_through() {
     let input = TempFile::new("passthrough", INPUT);
-    assert_eq!(run_ft_stdout(&[input.path_str()]), INPUT);
+    assert_eq!(run_fxt_stdout(&[input.path_str()]), INPUT);
 }
 
 #[test]
 fn replace_works_without_delete() {
     let input = TempFile::new("replace", INPUT);
-    let stdout = run_ft_stdout(&["-f", "foo", "-r", "BAR", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-f", "foo", "-r", "BAR", input.path_str()]);
     assert_eq!(stdout, "delta BAR\nalpha BAR\ncharlie BAR\nbravo BAR\n");
 }
 
@@ -83,7 +83,7 @@ fn replace_works_without_delete() {
 fn multiple_find_replace_pairs_apply_in_order() {
     let input = TempFile::new("replace-pairs", "cat dog\n");
     //cat->dog runs first, then dog->wolf rewrites both occurrences
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-f",
         "cat",
         "-r",
@@ -99,7 +99,7 @@ fn multiple_find_replace_pairs_apply_in_order() {
 
 #[test]
 fn unbalanced_find_replace_pairs_are_rejected() {
-    let output = run_ft(&["-f", "a", "-r", "1", "-f", "b", "input.txt"]);
+    let output = run_fxt(&["-f", "a", "-r", "1", "-f", "b", "input.txt"]);
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("--replace"),
@@ -110,7 +110,7 @@ fn unbalanced_find_replace_pairs_are_rejected() {
 #[test]
 fn find_without_replace_is_rejected() {
     //a lone --find would otherwise do nothing at all
-    let output = run_ft(&["-f", "foo", "input.txt"]);
+    let output = run_fxt(&["-f", "foo", "input.txt"]);
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("--replace"),
@@ -121,14 +121,14 @@ fn find_without_replace_is_rejected() {
 #[test]
 fn replace_applies_only_to_selected_rows() {
     let input = TempFile::new("replace-rows", INPUT);
-    let stdout = run_ft_stdout(&["-R", "2-3", "-f", "foo", "-r", "BAR", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-R", "2-3", "-f", "foo", "-r", "BAR", input.path_str()]);
     assert_eq!(stdout, "alpha BAR\ncharlie BAR\n");
 }
 
 #[test]
 fn replace_applies_only_inside_column_range() {
     let input = TempFile::new("replace-cols", INPUT);
-    let stdout = run_ft_stdout(&["-C", "7-9", "-f", "foo", "-r", "BAR", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-C", "7-9", "-f", "foo", "-r", "BAR", input.path_str()]);
     //"foo" occupies columns 7-9 in every line except "charlie foo" (columns 9-11)
     assert_eq!(stdout, "delta BAR\nalpha BAR\ncharlie foo\nbravo BAR\n");
 }
@@ -136,28 +136,28 @@ fn replace_applies_only_inside_column_range() {
 #[test]
 fn sort_works_without_delete() {
     let input = TempFile::new("sort", INPUT);
-    let stdout = run_ft_stdout(&["-s", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", input.path_str()]);
     assert_eq!(stdout, "alpha foo\nbravo foo\ncharlie foo\ndelta foo\n");
 }
 
 #[test]
 fn sort_uses_column_range_as_key() {
     let input = TempFile::new("sort-cols", "b 2\nc 1\na 3\n");
-    let stdout = run_ft_stdout(&["-s", "-C", "3-3", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "-C", "3-3", input.path_str()]);
     assert_eq!(stdout, "c 1\nb 2\na 3\n");
 }
 
 #[test]
 fn wrap_expands_lines_into_chunks() {
     let input = TempFile::new("wrap", "abcdefg\nhi\n");
-    let stdout = run_ft_stdout(&["--wrap", "3", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--wrap", "3", input.path_str()]);
     assert_eq!(stdout, "abc\ndef\ng\nhi\n");
 }
 
 #[test]
 fn wrap_rejects_a_zero_width() {
     let input = TempFile::new("wrap-zero", "abc\n");
-    let output = run_ft(&["--wrap", "0", input.path_str()]);
+    let output = run_fxt(&["--wrap", "0", input.path_str()]);
     assert!(!output.status.success());
 }
 
@@ -166,14 +166,14 @@ fn drop_empty_removes_lines_emptied_by_a_transform() {
     //cutting column 3 leaves the short row empty, and --drop-empty
     //removes it — a predicate could not, it runs before the cut
     let input = TempFile::new("drop-empty", "abc\nx\ndef\n");
-    let stdout = run_ft_stdout(&["-C", "3", "--drop-empty", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-C", "3", "--drop-empty", input.path_str()]);
     assert_eq!(stdout, "c\nf\n");
 }
 
 #[test]
 fn trim_and_drop_empty_remove_whitespace_only_lines() {
     let input = TempFile::new("drop-blank", "a\n   \nb\n\n");
-    let stdout = run_ft_stdout(&["--trim", "--drop-empty", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--trim", "--drop-empty", input.path_str()]);
     assert_eq!(stdout, "a\nb\n");
 }
 
@@ -182,10 +182,10 @@ fn grep_reports_a_match_through_the_exit_code() {
     let input = TempFile::new("exit-grep", "a ERROR\nb INFO\n");
 
     //0 when something matched, 1 when nothing did — like grep
-    let output = run_ft(&["-g", "ERROR", input.path_str()]);
+    let output = run_fxt(&["-g", "ERROR", input.path_str()]);
     assert_eq!(output.status.code(), Some(0));
 
-    let output = run_ft(&["-g", "NOTHING", input.path_str()]);
+    let output = run_fxt(&["-g", "NOTHING", input.path_str()]);
     assert_eq!(output.status.code(), Some(1));
     //the rows are still written (there just are none)
     assert!(output.stdout.is_empty());
@@ -195,14 +195,14 @@ fn grep_reports_a_match_through_the_exit_code() {
 fn a_transformation_without_a_filter_always_succeeds() {
     //nothing to fail to match, so an empty input is not a failure
     let input = TempFile::new("exit-plain", "");
-    let output = run_ft(&["--upper", input.path_str()]);
+    let output = run_fxt(&["--upper", input.path_str()]);
     assert_eq!(output.status.code(), Some(0));
 }
 
 #[test]
 fn a_failure_exits_with_two() {
     //an error is distinguishable from "nothing matched"
-    let output = run_ft(&["-g", "x", "no-such-file.txt"]);
+    let output = run_fxt(&["-g", "x", "no-such-file.txt"]);
     assert_eq!(output.status.code(), Some(2));
 }
 
@@ -210,11 +210,11 @@ fn a_failure_exits_with_two() {
 fn quiet_answers_with_the_exit_code_alone() {
     let input = TempFile::new("quiet", "a ERROR\nb INFO\n");
 
-    let output = run_ft(&["-q", "-g", "ERROR", input.path_str()]);
+    let output = run_fxt(&["-q", "-g", "ERROR", input.path_str()]);
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty(), "--quiet must write nothing");
 
-    let output = run_ft(&["-q", "-g", "NOTHING", input.path_str()]);
+    let output = run_fxt(&["-q", "-g", "NOTHING", input.path_str()]);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
 }
@@ -222,7 +222,7 @@ fn quiet_answers_with_the_exit_code_alone() {
 #[test]
 fn quiet_requires_grep() {
     let input = TempFile::new("quiet-alone", "a\n");
-    let output = run_ft(&["-q", input.path_str()]);
+    let output = run_fxt(&["-q", input.path_str()]);
     assert!(!output.status.success());
 }
 
@@ -230,7 +230,7 @@ fn quiet_requires_grep() {
 fn delete_counts_the_rows_it_removed_as_matches() {
     //the rows matched — that is why they went
     let input = TempFile::new("exit-delete", "a ERROR\nb INFO\n");
-    let output = run_ft(&["-d", "-g", "ERROR", input.path_str()]);
+    let output = run_fxt(&["-d", "-g", "ERROR", input.path_str()]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "b INFO\n");
 }
@@ -238,39 +238,39 @@ fn delete_counts_the_rows_it_removed_as_matches() {
 #[test]
 fn number_numbers_the_output_rows() {
     let input = TempFile::new("number", "a\nb\nc\n");
-    let stdout = run_ft_stdout(&["--number", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--number", input.path_str()]);
     assert_eq!(stdout, "1\ta\n2\tb\n3\tc\n");
 
     //the numbers count the rows that survive the filters, contiguously
-    let stdout = run_ft_stdout(&["--number", "-g", "[ac]", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--number", "-g", "[ac]", input.path_str()]);
     assert_eq!(stdout, "1\ta\n2\tc\n");
 }
 
 #[test]
 fn title_case_and_squeeze_clean_up_text() {
     let input = TempFile::new("tidy", "  hello   WIDE world  \n");
-    let stdout = run_ft_stdout(&["--title-case", "--squeeze", "--trim", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--title-case", "--squeeze", "--trim", input.path_str()]);
     assert_eq!(stdout, "Hello Wide World\n");
 }
 
 #[test]
 fn split_on_makes_one_row_per_piece() {
     let input = TempFile::new("split-on", "a,b,c\nd\n");
-    let stdout = run_ft_stdout(&["--split-on", ",", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--split-on", ",", input.path_str()]);
     assert_eq!(stdout, "a\nb\nc\nd\n");
 }
 
 #[test]
 fn join_folds_the_rows_into_one() {
     let input = TempFile::new("join", "a\nb\nc\n");
-    let stdout = run_ft_stdout(&["--join", ",", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--join", ",", input.path_str()]);
     assert_eq!(stdout.trim_end(), "a,b,c");
 }
 
 #[test]
 fn join_and_split_on_are_inverses() {
     let input = TempFile::new("join-split", "a,b\nc\n");
-    let stdout = run_ft_stdout(&["--split-on", ",", "--join", ",", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--split-on", ",", "--join", ",", input.path_str()]);
     assert_eq!(stdout.trim_end(), "a,b,c");
 }
 
@@ -278,7 +278,7 @@ fn join_and_split_on_are_inverses() {
 fn join_conflicts_with_a_summary() {
     //both consume the rows, and there is only one set of them
     let input = TempFile::new("join-count", "a\n");
-    let output = run_ft(&["--join", ",", "--count", input.path_str()]);
+    let output = run_fxt(&["--join", ",", "--count", input.path_str()]);
     assert!(!output.status.success());
 }
 
@@ -286,11 +286,11 @@ fn join_conflicts_with_a_summary() {
 fn count_summarizes_the_rows() {
     let input = TempFile::new("count", "a ERROR\nb INFO\nc ERROR\n");
 
-    let stdout = run_ft_stdout(&["--count", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--count", input.path_str()]);
     assert_eq!(stdout, "3\n");
 
     //the summary counts what the filters let through
-    let stdout = run_ft_stdout(&["--count", "-g", "ERROR", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--count", "-g", "ERROR", input.path_str()]);
     assert_eq!(stdout, "2\n");
 }
 
@@ -299,7 +299,7 @@ fn count_reports_zero_when_nothing_matches() {
     //like `grep -c`: the count is 0 and the exit code still says
     //"nothing matched"
     let input = TempFile::new("count-zero", "a\nb\n");
-    let output = run_ft(&["--count", "-g", "NOTHING", input.path_str()]);
+    let output = run_fxt(&["--count", "-g", "NOTHING", input.path_str()]);
     assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n");
     assert_eq!(output.status.code(), Some(1));
 }
@@ -307,7 +307,7 @@ fn count_reports_zero_when_nothing_matches() {
 #[test]
 fn group_by_summarizes_per_key() {
     let input = TempFile::new("group-by", "fruit,3\nveg,10\nfruit,4\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "--group-by",
@@ -328,7 +328,7 @@ fn quoted_group_by_keys_group_by_value() {
     //`"a"` and `a` are one group, printed without needless quotes;
     //`"x,y"` keeps the quotes it needs to stay one CSV field
     let input = TempFile::new("group-by-quoted", "\"a\",1\na,2\n\"x,y\",3\nx,4\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "--quoted",
@@ -345,7 +345,7 @@ fn quoted_group_by_keys_group_by_value() {
 fn quoted_group_by_keeps_multi_field_keys_apart() {
     //both keys unquote to the text a,b,c, but they are different fields
     let input = TempFile::new("group-by-quoted-multi", "a,\"b,c\",1\n\"a,b\",c,2\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "--quoted",
@@ -360,14 +360,14 @@ fn quoted_group_by_keeps_multi_field_keys_apart() {
 #[test]
 fn min_and_max_report_the_extremes() {
     let input = TempFile::new("min-max", "a,3\nb,-1.5\nc,7\n");
-    let stdout = run_ft_stdout(&["-F", ",", "--min", "2", "--max", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-F", ",", "--min", "2", "--max", "2", input.path_str()]);
     assert_eq!(stdout, "-1.5,7\n");
 }
 
 #[test]
 fn group_by_requires_a_summary() {
     let input = TempFile::new("group-alone", "a,1\n");
-    let output = run_ft(&["-F", ",", "--group-by", "1", input.path_str()]);
+    let output = run_fxt(&["-F", ",", "--group-by", "1", input.path_str()]);
     assert!(!output.status.success());
 }
 
@@ -376,7 +376,7 @@ fn sort_feeds_the_reducer_in_sorted_order() {
     //a reducer takes the rows in the order they come out, so sorting
     //first reports the groups in sorted order
     let input = TempFile::new("sort-group", "b,1\na,2\nb,3\na,4\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "-s",
@@ -392,7 +392,7 @@ fn sort_feeds_the_reducer_in_sorted_order() {
 #[test]
 fn sort_and_join_fold_the_rows_in_sorted_order() {
     let input = TempFile::new("sort-join", "c\na\nb\n");
-    let stdout = run_ft_stdout(&["-s", "--join", ",", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "--join", ",", input.path_str()]);
     assert_eq!(stdout.trim_end(), "a,b,c");
 }
 
@@ -400,7 +400,7 @@ fn sort_and_join_fold_the_rows_in_sorted_order() {
 fn a_summary_conflicts_with_number() {
     //a summary consumes the rows, so there is nothing left to number
     let input = TempFile::new("count-number", "a\n");
-    let output = run_ft(&["--count", "--number", input.path_str()]);
+    let output = run_fxt(&["--count", "--number", input.path_str()]);
     assert!(!output.status.success());
 }
 
@@ -409,25 +409,25 @@ fn quoted_csv_does_not_split_inside_quotes() {
     let input = TempFile::new("csv-quoted", "a,\"b,c\",d\nx,\"y,z\",w\n");
 
     //without --quoted the comma inside the quotes splits the field
-    let stdout = run_ft_stdout(&["-F", ",", "-C", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-F", ",", "-C", "2", input.path_str()]);
     assert_eq!(stdout, "\"b\n\"y\n");
 
     //with it, field 2 is the quoted one, comma and all
-    let stdout = run_ft_stdout(&["-F", ",", "--quoted", "-C", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-F", ",", "--quoted", "-C", "2", input.path_str()]);
     assert_eq!(stdout, "\"b,c\"\n\"y,z\"\n");
 }
 
 #[test]
 fn quoted_csv_projection_stays_valid_csv() {
     let input = TempFile::new("csv-project", "a,\"b,c\",d\n");
-    let stdout = run_ft_stdout(&["-F", ",", "--quoted", "-C", "2,1", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-F", ",", "--quoted", "-C", "2,1", input.path_str()]);
     assert_eq!(stdout, "\"b,c\",a\n");
 }
 
 #[test]
 fn quoted_requires_fields() {
     let input = TempFile::new("csv-quoted-alone", "a\n");
-    let output = run_ft(&["--quoted", input.path_str()]);
+    let output = run_fxt(&["--quoted", input.path_str()]);
     assert!(!output.status.success());
 }
 
@@ -435,21 +435,21 @@ fn quoted_requires_fields() {
 fn column_list_permutes_fields() {
     //an awk-style projection: -F , -C 3,1,2 reorders the fields
     let input = TempFile::new("cols-permute", "a,b,c\nx,y,z\n");
-    let stdout = run_ft_stdout(&["-F", ",", "-C", "3,1,2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-F", ",", "-C", "3,1,2", input.path_str()]);
     assert_eq!(stdout, "c,a,b\nz,x,y\n");
 }
 
 #[test]
 fn column_list_selects_disjoint_char_ranges() {
     let input = TempFile::new("cols-list", "abcdef\n");
-    let stdout = run_ft_stdout(&["-C", "1,3,5-6", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-C", "1,3,5-6", input.path_str()]);
     assert_eq!(stdout, "acef\n");
 }
 
 #[test]
 fn column_list_with_output_delimiter() {
     let input = TempFile::new("cols-outdelim", "a,b,c\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "-C",
@@ -464,14 +464,14 @@ fn column_list_with_output_delimiter() {
 #[test]
 fn column_list_deletes_disjoint_fields() {
     let input = TempFile::new("cols-del-list", "a,b,c,d\n");
-    let stdout = run_ft_stdout(&["-d", "-F", ",", "-C", "1,3", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-F", ",", "-C", "1,3", input.path_str()]);
     assert_eq!(stdout, "b,d\n");
 }
 
 #[test]
 fn column_list_scopes_a_replacement_to_every_part() {
     let input = TempFile::new("cols-replace-list", "x,x,x\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "-C",
@@ -489,7 +489,7 @@ fn column_list_scopes_a_replacement_to_every_part() {
 fn sort_key_leaves_cols_to_another_operation() {
     //sort by field 1, while --cols scopes the replacement to field 2
     let input = TempFile::new("sort-key", "b,x\na,x\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-s",
         "--sort-key",
         "1",
@@ -510,7 +510,7 @@ fn sort_key_leaves_cols_to_another_operation() {
 fn unique_key_is_independent_of_cols() {
     //dedupe on field 1, uppercase field 2
     let input = TempFile::new("unique-key", "a,x\na,y\nb,z\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-u",
         "--unique-key",
         "1",
@@ -527,35 +527,35 @@ fn unique_key_is_independent_of_cols() {
 #[test]
 fn sort_key_requires_sort() {
     let input = TempFile::new("sort-key-alone", "a\n");
-    let output = run_ft(&["--sort-key", "1", input.path_str()]);
+    let output = run_fxt(&["--sort-key", "1", input.path_str()]);
     assert!(!output.status.success());
 }
 
 #[test]
 fn numeric_sort_works() {
     let input = TempFile::new("sort-numeric", "10\n9\n2\n");
-    let stdout = run_ft_stdout(&["-s", "-n", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "-n", input.path_str()]);
     assert_eq!(stdout, "2\n9\n10\n");
 }
 
 #[test]
 fn reverse_sort_works() {
     let input = TempFile::new("sort-reverse", INPUT);
-    let stdout = run_ft_stdout(&["-s", "--reverse", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "--reverse", input.path_str()]);
     assert_eq!(stdout, "delta foo\ncharlie foo\nbravo foo\nalpha foo\n");
 }
 
 #[test]
 fn numeric_without_sort_is_rejected() {
     let input = TempFile::new("numeric-no-sort", INPUT);
-    let output = run_ft(&["-n", input.path_str()]);
+    let output = run_fxt(&["-n", input.path_str()]);
     assert!(!output.status.success());
 }
 
 #[test]
 fn sort_applies_only_to_selected_rows() {
     let input = TempFile::new("sort-rows", INPUT);
-    let stdout = run_ft_stdout(&["-s", "-R", "2-4", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "-R", "2-4", input.path_str()]);
     assert_eq!(stdout, "alpha foo\nbravo foo\ncharlie foo\n");
 }
 
@@ -564,7 +564,7 @@ fn sort_key_beyond_short_lines_is_empty() {
     //no line reaches column 5, so all keys compare equal and the
     //stable sort keeps the input order (like `sort -k` on missing fields)
     let input = TempFile::new("sort-short-lines", "zz\nabc\nxy\n");
-    let stdout = run_ft_stdout(&["-s", "-C", "5-6", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "-C", "5-6", input.path_str()]);
     assert_eq!(stdout, "zz\nabc\nxy\n");
 }
 
@@ -573,21 +573,21 @@ fn reorder_keeps_noncontiguous_row_segments_in_place() {
     //deleting a column keeps rows outside the range, so each selected
     //segment reverses in place instead of drifting past the kept rows
     let input = TempFile::new("tac-segments", "Xa\nXb\nXc\nXd\nXe\nXf\nXg\n");
-    let stdout = run_ft_stdout(&["-d", "-C", "1", "--tac", "-R", "2-3,6-7", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-C", "1", "--tac", "-R", "2-3,6-7", input.path_str()]);
     assert_eq!(stdout, "Xa\nc\nb\nXd\nXe\ng\nf\n");
 }
 
 #[test]
 fn rows_range_selects_lines() {
     let input = TempFile::new("select-rows", INPUT);
-    let stdout = run_ft_stdout(&["-R", "1-2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-R", "1-2", input.path_str()]);
     assert_eq!(stdout, "delta foo\nalpha foo\n");
 }
 
 #[test]
 fn rows_accept_a_list_of_ranges() {
     let input = TempFile::new("rows-list", INPUT);
-    let stdout = run_ft_stdout(&["-R", "1,3-4", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-R", "1,3-4", input.path_str()]);
     assert_eq!(stdout, "delta foo\ncharlie foo\nbravo foo\n");
 }
 
@@ -595,11 +595,11 @@ fn rows_accept_a_list_of_ranges() {
 fn rows_accept_open_ended_ranges() {
     let input = TempFile::new("rows-open", INPUT);
     assert_eq!(
-        run_ft_stdout(&["-R", "3-", input.path_str()]),
+        run_fxt_stdout(&["-R", "3-", input.path_str()]),
         "charlie foo\nbravo foo\n"
     );
     assert_eq!(
-        run_ft_stdout(&["-R", "-1", input.path_str()]),
+        run_fxt_stdout(&["-R", "-1", input.path_str()]),
         "delta foo\n"
     );
 }
@@ -608,18 +608,18 @@ fn rows_accept_open_ended_ranges() {
 fn rows_accept_end_relative_ranges() {
     let input = TempFile::new("rows-end-relative", INPUT);
     assert_eq!(
-        run_ft_stdout(&["-R", "~2-~1", input.path_str()]),
+        run_fxt_stdout(&["-R", "~2-~1", input.path_str()]),
         "charlie foo\nbravo foo\n"
     );
     assert_eq!(
-        run_ft_stdout(&["-R", "2-~2", input.path_str()]),
+        run_fxt_stdout(&["-R", "2-~2", input.path_str()]),
         "alpha foo\ncharlie foo\n"
     );
 }
 
 #[test]
 fn end_relative_rows_work_on_stdin() {
-    let output = run_ft_with_stdin(&["-R", "~1"], INPUT);
+    let output = run_fxt_with_stdin(&["-R", "~1"], INPUT);
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "bravo foo\n");
 }
@@ -627,13 +627,13 @@ fn end_relative_rows_work_on_stdin() {
 #[test]
 fn delete_removes_end_relative_rows() {
     let input = TempFile::new("delete-rows-end-relative", INPUT);
-    let stdout = run_ft_stdout(&["-d", "-R", "~1", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-R", "~1", input.path_str()]);
     assert_eq!(stdout, "delta foo\nalpha foo\ncharlie foo\n");
 }
 
 #[test]
 fn columns_reject_end_relative_ranges() {
-    let output = run_ft(&["-C", "~2-~1", "input.txt"]);
+    let output = run_fxt(&["-C", "~2-~1", "input.txt"]);
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("end-relative"),
@@ -644,14 +644,14 @@ fn columns_reject_end_relative_ranges() {
 #[test]
 fn delete_removes_a_list_of_row_ranges() {
     let input = TempFile::new("delete-rows-list", INPUT);
-    let stdout = run_ft_stdout(&["-d", "-R", "1,4", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-R", "1,4", input.path_str()]);
     assert_eq!(stdout, "alpha foo\ncharlie foo\n");
 }
 
 #[test]
 fn columns_accept_open_ended_range() {
     let input = TempFile::new("cols-open", INPUT);
-    let stdout = run_ft_stdout(&["-C", "7-", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-C", "7-", input.path_str()]);
     //"charlie foo" has its 7th character at "e"
     assert_eq!(stdout, "foo\nfoo\ne foo\nfoo\n");
 }
@@ -659,14 +659,14 @@ fn columns_accept_open_ended_range() {
 #[test]
 fn cols_range_alone_selects_columns() {
     let input = TempFile::new("select-cols", INPUT);
-    let stdout = run_ft_stdout(&["-C", "1-5", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-C", "1-5", input.path_str()]);
     assert_eq!(stdout, "delta\nalpha\ncharl\nbravo\n");
 }
 
 #[test]
 fn cols_selection_combines_with_row_selection() {
     let input = TempFile::new("select-rows-cols", INPUT);
-    let stdout = run_ft_stdout(&["-R", "2-3", "-C", "7-9", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-R", "2-3", "-C", "7-9", input.path_str()]);
     //"alpha foo" has "foo" at columns 7-9; "charlie foo" has "e f" there
     assert_eq!(stdout, "foo\ne f\n");
 }
@@ -674,41 +674,41 @@ fn cols_selection_combines_with_row_selection() {
 #[test]
 fn fields_mode_selects_delimited_fields() {
     let input = TempFile::new("fields-select", "one,two,three\nuno,dos,tres\n");
-    let stdout = run_ft_stdout(&["-F", ",", "-C", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-F", ",", "-C", "2", input.path_str()]);
     assert_eq!(stdout, "two\ndos\n");
 }
 
 #[test]
 fn fields_mode_delete_removes_field_and_delimiter() {
     let input = TempFile::new("fields-delete", "one,two,three\nuno,dos,tres\n");
-    let stdout = run_ft_stdout(&["-d", "-F", ",", "-C", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-F", ",", "-C", "2", input.path_str()]);
     assert_eq!(stdout, "one,three\nuno,tres\n");
 }
 
 #[test]
 fn fields_mode_sorts_by_field_key() {
     let input = TempFile::new("fields-sort", "x;30\ny;4\nz;19\n");
-    let stdout = run_ft_stdout(&["-s", "-n", "-F", ";", "-C", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "-n", "-F", ";", "-C", "2", input.path_str()]);
     assert_eq!(stdout, "y;4\nz;19\nx;30\n");
 }
 
 #[test]
 fn fields_flag_requires_columns() {
-    let output = run_ft(&["-F", ",", "input.txt"]);
+    let output = run_fxt(&["-F", ",", "input.txt"]);
     assert!(!output.status.success());
 }
 
 #[test]
 fn delete_removes_rows_in_range() {
     let input = TempFile::new("delete-rows", INPUT);
-    let stdout = run_ft_stdout(&["-d", "-R", "2-3", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-R", "2-3", input.path_str()]);
     assert_eq!(stdout, "delta foo\nbravo foo\n");
 }
 
 #[test]
 fn delete_removes_columns_in_every_line() {
     let input = TempFile::new("delete-cols", INPUT);
-    let stdout = run_ft_stdout(&["-d", "-C", "7-9", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-C", "7-9", input.path_str()]);
     //in "charlie foo" columns 7-9 are "e f", leaving "charli" + "oo"
     assert_eq!(stdout, "delta \nalpha \ncharlioo\nbravo \n");
 }
@@ -716,16 +716,16 @@ fn delete_removes_columns_in_every_line() {
 #[test]
 fn delete_removes_columns_only_in_selected_rows() {
     let input = TempFile::new("delete-rows-cols", INPUT);
-    let stdout = run_ft_stdout(&["-d", "-R", "1-1", "-C", "1-6", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-R", "1-1", "-C", "1-6", input.path_str()]);
     assert_eq!(stdout, "foo\nalpha foo\ncharlie foo\nbravo foo\n");
 }
 
 #[test]
 fn output_flag_writes_to_file_instead_of_stdout() {
     let input = TempFile::new("output-in", INPUT);
-    let out_path = std::env::temp_dir().join(format!("ft-test-{}-output-out", std::process::id()));
+    let out_path = std::env::temp_dir().join(format!("fxt-test-{}-output-out", std::process::id()));
 
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-f",
         "foo",
         "-r",
@@ -745,7 +745,7 @@ fn output_flag_writes_to_file_instead_of_stdout() {
 fn output_aliasing_the_input_file_is_rejected() {
     //`File::create` would truncate the input before the first read
     let input = TempFile::new("output-is-input", INPUT);
-    let output = run_ft(&["-R", "1-2", "-o", input.path_str(), input.path_str()]);
+    let output = run_fxt(&["-R", "1-2", "-o", input.path_str(), input.path_str()]);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -761,10 +761,10 @@ fn output_aliasing_the_input_file_is_rejected() {
 #[test]
 fn output_symlink_aliasing_the_input_is_rejected() {
     let input = TempFile::new("output-is-input-target", INPUT);
-    let link = std::env::temp_dir().join(format!("ft-test-{}-output-link", std::process::id()));
+    let link = std::env::temp_dir().join(format!("fxt-test-{}-output-link", std::process::id()));
     std::os::unix::fs::symlink(&input.path, &link).unwrap();
 
-    let output = run_ft(&["-o", link.to_str().unwrap(), input.path_str()]);
+    let output = run_fxt(&["-o", link.to_str().unwrap(), input.path_str()]);
     let _ = fs::remove_file(&link);
 
     assert!(!output.status.success());
@@ -779,18 +779,18 @@ fn broken_pipe_from_a_closed_consumer_is_not_an_error() {
     let content = "0123456789abcdef\n".repeat(100_000);
     let input = TempFile::new("broken-pipe", &content);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ft"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fxt"))
         .arg(input.path_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn ft binary");
+        .expect("failed to spawn fxt binary");
     //close the reading end without consuming anything, like `head -0`
     drop(child.stdout.take());
 
     let output = child
         .wait_with_output()
-        .expect("failed to wait for ft binary");
+        .expect("failed to wait for fxt binary");
     assert!(
         output.status.success(),
         "expected a quiet exit, stderr: {}",
@@ -802,7 +802,7 @@ fn broken_pipe_from_a_closed_consumer_is_not_an_error() {
 #[test]
 fn in_place_rewrites_the_input_file() {
     let input = TempFile::new("in-place", INPUT);
-    let stdout = run_ft_stdout(&["-i", "-f", "foo", "-r", "BAR", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-i", "-f", "foo", "-r", "BAR", input.path_str()]);
 
     //nothing goes to stdout; the file itself is updated
     assert_eq!(stdout, "");
@@ -815,7 +815,7 @@ fn backup_keeps_a_copy_of_the_original() {
     let input = TempFile::new("backup", "foo one\n");
     let backup = format!("{}.bak", input.path_str());
 
-    run_ft_stdout(&[
+    run_fxt_stdout(&[
         "-i",
         "--backup",
         ".bak",
@@ -840,7 +840,7 @@ fn backup_keeps_a_copy_of_the_original() {
 #[test]
 fn backup_requires_in_place() {
     let input = TempFile::new("backup-alone", "a\n");
-    let output = run_ft(&["--backup", ".bak", input.path_str()]);
+    let output = run_fxt(&["--backup", ".bak", input.path_str()]);
     assert!(!output.status.success());
 }
 
@@ -848,7 +848,7 @@ fn backup_requires_in_place() {
 fn dry_run_reports_changes_without_writing() {
     let input = TempFile::new("dry-run", "foo one\n");
 
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-i",
         "--dry-run",
         "-f",
@@ -873,7 +873,7 @@ fn dry_run_reports_changes_without_writing() {
 fn dry_run_reports_an_unchanged_file() {
     let input = TempFile::new("dry-run-same", "nothing to find here\n");
 
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-i",
         "--dry-run",
         "-f",
@@ -894,7 +894,7 @@ fn dry_run_reports_a_shorter_result_as_changed() {
     //not enough, the leftover input has to count as a difference
     let input = TempFile::new("dry-run-shorter", "one\ntwo\n");
 
-    let stdout = run_ft_stdout(&["-i", "--dry-run", "-d", "-R", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-i", "--dry-run", "-d", "-R", "2", input.path_str()]);
     assert!(
         stdout.contains("would change"),
         "expected a change report, got {stdout:?}"
@@ -906,7 +906,7 @@ fn dry_run_reports_every_file() {
     let first = TempFile::new("dry-run-multi-a", "foo\n");
     let second = TempFile::new("dry-run-multi-b", "bar\n");
 
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-i",
         "--dry-run",
         "-f",
@@ -932,11 +932,11 @@ fn several_files_are_read_as_one_stream() {
     let first = TempFile::new("multi-a", "a1\na2\n");
     let second = TempFile::new("multi-b", "b1\nb2\n");
 
-    let stdout = run_ft_stdout(&[first.path_str(), second.path_str()]);
+    let stdout = run_fxt_stdout(&[first.path_str(), second.path_str()]);
     assert_eq!(stdout, "a1\na2\nb1\nb2\n");
 
-    //row numbers address the concatenation, like `cat a b | ft`
-    let stdout = run_ft_stdout(&["-R", "2-3", first.path_str(), second.path_str()]);
+    //row numbers address the concatenation, like `cat a b | fxt`
+    let stdout = run_fxt_stdout(&["-R", "2-3", first.path_str(), second.path_str()]);
     assert_eq!(stdout, "a2\nb1\n");
 }
 
@@ -945,7 +945,7 @@ fn in_place_edits_each_file_on_its_own() {
     let first = TempFile::new("batch-a", "foo one\nfoo two\n");
     let second = TempFile::new("batch-b", "foo three\n");
 
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-i",
         "-f",
         "foo",
@@ -972,7 +972,7 @@ fn in_place_edits_a_file_named_twice_only_once() {
     //overwrite the backup with the already-edited content
     let input = TempFile::new("batch-dup", "x\n");
 
-    run_ft_stdout(&[
+    run_fxt_stdout(&[
         "-i",
         "-f",
         "x",
@@ -994,7 +994,7 @@ fn in_place_numbers_rows_per_file() {
     let first = TempFile::new("batch-rows-a", "a1\na2\n");
     let second = TempFile::new("batch-rows-b", "b1\nb2\n");
 
-    run_ft_stdout(&["-i", "-d", "-R", "1", first.path_str(), second.path_str()]);
+    run_fxt_stdout(&["-i", "-d", "-R", "1", first.path_str(), second.path_str()]);
 
     assert_eq!(
         fs::read_to_string(first.path_str()).expect("first file vanished"),
@@ -1012,7 +1012,7 @@ fn output_aliasing_any_input_is_rejected() {
     let second = TempFile::new("alias-b", "b\n");
 
     //the output aliases the *second* input, which would be truncated
-    let output = run_ft(&["-o", second.path_str(), first.path_str(), second.path_str()]);
+    let output = run_fxt(&["-o", second.path_str(), first.path_str(), second.path_str()]);
     assert!(!output.status.success());
     assert_eq!(
         fs::read_to_string(second.path_str()).expect("input file vanished"),
@@ -1029,7 +1029,7 @@ fn in_place_preserves_file_permissions() {
     //a non-default mode the umask would not produce on its own
     fs::set_permissions(input.path_str(), fs::Permissions::from_mode(0o640)).unwrap();
 
-    run_ft_stdout(&["-i", "-f", "foo", "-r", "BAR", input.path_str()]);
+    run_fxt_stdout(&["-i", "-f", "foo", "-r", "BAR", input.path_str()]);
 
     let mode = fs::metadata(input.path_str())
         .unwrap()
@@ -1042,12 +1042,12 @@ fn in_place_preserves_file_permissions() {
 fn in_place_leaves_no_temporary_file_behind() {
     //an isolated directory so a concurrent in-place test can't be
     //mistaken for a leftover temp file
-    let dir = std::env::temp_dir().join(format!("ft-test-{}-in-place-clean", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("fxt-test-{}-in-place-clean", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let input = dir.join("data.txt");
     fs::write(&input, INPUT).unwrap();
 
-    run_ft_stdout(&["-i", "-d", "-R", "1", input.to_str().unwrap()]);
+    run_fxt_stdout(&["-i", "-d", "-R", "1", input.to_str().unwrap()]);
 
     let entries: Vec<_> = fs::read_dir(&dir)
         .unwrap()
@@ -1055,7 +1055,7 @@ fn in_place_leaves_no_temporary_file_behind() {
         .map(|entry| entry.file_name())
         .collect();
     let _ = fs::remove_dir_all(&dir);
-    //only the rewritten input remains, no `.ft-*.tmp` sibling
+    //only the rewritten input remains, no `.fxt-*.tmp` sibling
     assert_eq!(entries, [std::ffi::OsString::from("data.txt")]);
 }
 
@@ -1063,10 +1063,10 @@ fn in_place_leaves_no_temporary_file_behind() {
 #[test]
 fn in_place_edits_the_symlink_target_and_keeps_the_link() {
     let target = TempFile::new("in-place-link-target", INPUT);
-    let link = std::env::temp_dir().join(format!("ft-test-{}-in-place-link", std::process::id()));
+    let link = std::env::temp_dir().join(format!("fxt-test-{}-in-place-link", std::process::id()));
     std::os::unix::fs::symlink(&target.path, &link).unwrap();
 
-    let stdout = run_ft_stdout(&["-i", "-f", "foo", "-r", "BAR", link.to_str().unwrap()]);
+    let stdout = run_fxt_stdout(&["-i", "-f", "foo", "-r", "BAR", link.to_str().unwrap()]);
     assert_eq!(stdout, "");
 
     let still_symlink = fs::symlink_metadata(&link)
@@ -1081,35 +1081,35 @@ fn in_place_edits_the_symlink_target_and_keeps_the_link() {
 
 #[test]
 fn in_place_requires_a_file_not_stdin() {
-    let output = run_ft_with_stdin(&["-i", "-f", "a", "-r", "b"], INPUT);
+    let output = run_fxt_with_stdin(&["-i", "-f", "a", "-r", "b"], INPUT);
     assert!(!output.status.success());
 }
 
 #[test]
 fn regex_replace_works() {
     let input = TempFile::new("regex-replace", "a1 bb22\nccc333 d\n");
-    let stdout = run_ft_stdout(&["-e", "-f", r"\d+", "-r", "N", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-e", "-f", r"\d+", "-r", "N", input.path_str()]);
     assert_eq!(stdout, "aN bbN\ncccN d\n");
 }
 
 #[test]
 fn regex_replace_supports_captures() {
     let input = TempFile::new("regex-captures", "user@host\n");
-    let stdout = run_ft_stdout(&["-e", "-f", r"(\w+)@(\w+)", "-r", "$2.$1", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-e", "-f", r"(\w+)@(\w+)", "-r", "$2.$1", input.path_str()]);
     assert_eq!(stdout, "host.user\n");
 }
 
 #[test]
 fn tac_reverses_row_order() {
     let input = TempFile::new("tac", INPUT);
-    let stdout = run_ft_stdout(&["--tac", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--tac", input.path_str()]);
     assert_eq!(stdout, "bravo foo\ncharlie foo\nalpha foo\ndelta foo\n");
 }
 
 #[test]
 fn shuffle_keeps_all_rows() {
     let input = TempFile::new("shuffle", INPUT);
-    let stdout = run_ft_stdout(&["--shuffle", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--shuffle", input.path_str()]);
     let mut lines: Vec<&str> = stdout.lines().collect();
     lines.sort_unstable();
     assert_eq!(
@@ -1121,7 +1121,7 @@ fn shuffle_keeps_all_rows() {
 #[test]
 fn tac_conflicts_with_sort() {
     let input = TempFile::new("tac-sort", INPUT);
-    let output = run_ft(&["--tac", "-s", input.path_str()]);
+    let output = run_fxt(&["--tac", "-s", input.path_str()]);
     assert!(!output.status.success());
 }
 
@@ -1129,7 +1129,7 @@ fn tac_conflicts_with_sort() {
 fn delete_conflicts_with_reorder() {
     let input = TempFile::new("delete-reorder", INPUT);
     //deleting whole rows leaves nothing to sort
-    let output = run_ft(&["-d", "-s", "-R", "2-3", input.path_str()]);
+    let output = run_fxt(&["-d", "-s", "-R", "2-3", input.path_str()]);
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("reorder"),
@@ -1140,14 +1140,14 @@ fn delete_conflicts_with_reorder() {
 #[test]
 fn unique_drops_duplicate_rows() {
     let input = TempFile::new("unique", "one\ntwo\none\nthree\n");
-    let stdout = run_ft_stdout(&["-u", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-u", input.path_str()]);
     assert_eq!(stdout, "one\ntwo\nthree\n");
 }
 
 #[test]
 fn unique_with_sort_and_column_key() {
     let input = TempFile::new("unique-sort", "b 2\na 1\nb 9\n");
-    let stdout = run_ft_stdout(&["-s", "-u", "-C", "1-1", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "-u", "-C", "1-1", input.path_str()]);
     assert_eq!(stdout, "a 1\nb 2\n");
 }
 
@@ -1155,32 +1155,32 @@ fn unique_with_sort_and_column_key() {
 fn unique_dedupes_empty_fields() {
     //"b," and "c," share the empty field 2 as their key
     let input = TempFile::new("unique-empty-field", "a,1\nb,\nc,\nd,1\n");
-    let stdout = run_ft_stdout(&["-u", "-F", ",", "-C", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-u", "-F", ",", "-C", "2", input.path_str()]);
     assert_eq!(stdout, "a,1\nb,\n");
 }
 
 #[test]
 fn grep_keeps_matching_rows() {
     let input = TempFile::new("grep", INPUT);
-    let stdout = run_ft_stdout(&["-g", "^(a|b)", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-g", "^(a|b)", input.path_str()]);
     assert_eq!(stdout, "alpha foo\nbravo foo\n");
 }
 
 #[test]
 fn grep_invert_keeps_non_matching_rows() {
     let input = TempFile::new("grep-invert", INPUT);
-    let stdout = run_ft_stdout(&["-g", "^(a|b)", "--invert", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-g", "^(a|b)", "--invert", input.path_str()]);
     assert_eq!(stdout, "delta foo\ncharlie foo\n");
 
     //-v, the short form every grep user reaches for
     let input = TempFile::new("grep-invert-short", INPUT);
-    let stdout = run_ft_stdout(&["-g", "^(a|b)", "-v", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-g", "^(a|b)", "-v", input.path_str()]);
     assert_eq!(stdout, "delta foo\ncharlie foo\n");
 }
 
 #[test]
 fn help_explains_examples_and_exit_codes() {
-    let stdout = run_ft_stdout(&["--help"]);
+    let stdout = run_fxt_stdout(&["--help"]);
     assert!(stdout.contains("Examples:"), "help should show examples");
     assert!(
         stdout.contains("Exit codes"),
@@ -1191,49 +1191,49 @@ fn help_explains_examples_and_exit_codes() {
 #[test]
 fn grep_with_delete_removes_matching_rows() {
     let input = TempFile::new("grep-delete", INPUT);
-    let stdout = run_ft_stdout(&["-d", "-g", "charlie", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-d", "-g", "charlie", input.path_str()]);
     assert_eq!(stdout, "delta foo\nalpha foo\nbravo foo\n");
 }
 
 #[test]
 fn upper_transforms_column_range() {
     let input = TempFile::new("upper", INPUT);
-    let stdout = run_ft_stdout(&["--upper", "-C", "1-3", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--upper", "-C", "1-3", input.path_str()]);
     assert_eq!(stdout, "DELta foo\nALPha foo\nCHArlie foo\nBRAvo foo\n");
 }
 
 #[test]
 fn lower_transforms_whole_line_without_columns() {
     let input = TempFile::new("lower", "AbC dEf\n");
-    let stdout = run_ft_stdout(&["--lower", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--lower", input.path_str()]);
     assert_eq!(stdout, "abc def\n");
 }
 
 #[test]
 fn trim_removes_surrounding_whitespace() {
     let input = TempFile::new("trim", "  a  \n\tb\t\n");
-    let stdout = run_ft_stdout(&["--trim", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--trim", input.path_str()]);
     assert_eq!(stdout, "a\nb\n");
 }
 
 #[test]
 fn upper_conflicts_with_lower() {
     let input = TempFile::new("upper-lower", INPUT);
-    let output = run_ft(&["--upper", "--lower", input.path_str()]);
+    let output = run_fxt(&["--upper", "--lower", input.path_str()]);
     assert!(!output.status.success());
 }
 
 #[test]
 fn ignore_case_replaces_literal_in_any_case() {
     let input = TempFile::new("ignore-case", "Foo bar FOO\n");
-    let stdout = run_ft_stdout(&["--ignore-case", "-f", "foo", "-r", "X", input.path_str()]);
+    let stdout = run_fxt_stdout(&["--ignore-case", "-f", "foo", "-r", "X", input.path_str()]);
     assert_eq!(stdout, "X bar X\n");
 }
 
 #[test]
 fn ignore_case_applies_to_regex_patterns() {
     let input = TempFile::new("ignore-case-regex", "abc DEF\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-e",
         "--ignore-case",
         "-f",
@@ -1248,7 +1248,7 @@ fn ignore_case_applies_to_regex_patterns() {
 #[test]
 fn invalid_regex_is_rejected() {
     let input = TempFile::new("regex-invalid", INPUT);
-    let output = run_ft(&["-e", "-f", "[unclosed", "-r", "N", input.path_str()]);
+    let output = run_fxt(&["-e", "-f", "[unclosed", "-r", "N", input.path_str()]);
     assert!(!output.status.success());
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1261,20 +1261,20 @@ fn invalid_regex_is_rejected() {
 #[test]
 fn replace_without_find_is_rejected() {
     let input = TempFile::new("replace-no-find", INPUT);
-    let output = run_ft(&["-r", "BAR", input.path_str()]);
+    let output = run_fxt(&["-r", "BAR", input.path_str()]);
     assert!(!output.status.success());
 }
 
 #[test]
 fn replace_with_delete_is_rejected() {
     let input = TempFile::new("replace-with-delete", INPUT);
-    let output = run_ft(&["-d", "-f", "foo", "-r", "BAR", input.path_str()]);
+    let output = run_fxt(&["-d", "-f", "foo", "-r", "BAR", input.path_str()]);
     assert!(!output.status.success());
 }
 
 #[test]
 fn reads_stdin_when_no_filename_given() {
-    let output = run_ft_with_stdin(&["-s"], INPUT);
+    let output = run_fxt_with_stdin(&["-s"], INPUT);
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -1284,7 +1284,7 @@ fn reads_stdin_when_no_filename_given() {
 
 #[test]
 fn dash_filename_reads_stdin() {
-    let output = run_ft_with_stdin(&["-f", "foo", "-r", "BAR", "-"], "one foo\n");
+    let output = run_fxt_with_stdin(&["-f", "foo", "-r", "BAR", "-"], "one foo\n");
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "one BAR\n");
 }
@@ -1292,7 +1292,7 @@ fn dash_filename_reads_stdin() {
 #[test]
 fn delete_without_any_range_is_rejected() {
     let input = TempFile::new("delete-no-range", INPUT);
-    let output = run_ft(&["-d", input.path_str()]);
+    let output = run_fxt(&["-d", input.path_str()]);
     assert!(!output.status.success());
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1305,20 +1305,20 @@ fn delete_without_any_range_is_rejected() {
 #[test]
 fn inverted_range_is_rejected() {
     let input = TempFile::new("inverted-range", INPUT);
-    let output = run_ft(&["-R", "5-2", input.path_str()]);
+    let output = run_fxt(&["-R", "5-2", input.path_str()]);
     assert!(!output.status.success());
 }
 
 #[test]
 fn zero_based_range_is_rejected() {
     let input = TempFile::new("zero-range", INPUT);
-    let output = run_ft(&["-C", "0-5", input.path_str()]);
+    let output = run_fxt(&["-C", "0-5", input.path_str()]);
     assert!(!output.status.success());
 }
 
 #[test]
 fn missing_input_file_fails_with_message_on_stderr() {
-    let output = run_ft(&["/nonexistent/ft-test-missing.txt"]);
+    let output = run_fxt(&["/nonexistent/fxt-test-missing.txt"]);
     assert!(!output.status.success());
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1331,7 +1331,7 @@ fn missing_input_file_fails_with_message_on_stderr() {
 #[test]
 fn quoted_csv_numbers_count_in_a_summary() {
     let input = TempFile::new("csv-quoted-sum", "a,\"10\"\na,\"20\"\nb,5\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "--quoted",
@@ -1347,7 +1347,7 @@ fn quoted_csv_numbers_count_in_a_summary() {
 #[test]
 fn quoted_csv_numbers_sort_numerically() {
     let input = TempFile::new("csv-quoted-sort", "x,\"10\"\ny,\"9\"\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "--quoted",
@@ -1365,7 +1365,7 @@ fn quoted_csv_rejects_a_record_spanning_lines() {
     //a quoted field running into the next line would come out cut in
     //half, so it fails instead of answering wrongly
     let input = TempFile::new("csv-multiline", "1,\"hello\nworld\",20\n2,\"fine\",10\n");
-    let output = run_ft(&["-F", ",", "--quoted", "-C", "2", input.path_str()]);
+    let output = run_fxt(&["-F", ",", "--quoted", "-C", "2", input.path_str()]);
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -1381,7 +1381,7 @@ fn numeric_sort_is_exact_beyond_f64_precision() {
         "bigints",
         "9007199254740993\n9007199254740992\n9007199254740995\n9007199254740994\n",
     );
-    let stdout = run_ft_stdout(&["-s", "-n", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-s", "-n", input.path_str()]);
     assert_eq!(
         stdout,
         "9007199254740992\n9007199254740993\n9007199254740994\n9007199254740995\n"
@@ -1391,7 +1391,7 @@ fn numeric_sort_is_exact_beyond_f64_precision() {
 #[test]
 fn integer_sums_stay_exact() {
     let input = TempFile::new("bigint-sum", "x 9007199254740993\nx 1\n");
-    let stdout = run_ft_stdout(&["-F", " ", "--sum", "2", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-F", " ", "--sum", "2", input.path_str()]);
     assert_eq!(stdout, "9007199254740994\n");
 }
 
@@ -1400,7 +1400,7 @@ fn grep_key_filters_on_one_field_and_cols_selects_another() {
     //the grep key addresses the line as read, so field 1 is matched
     //while field 2 is what comes out
     let input = TempFile::new("grep-key", "ERROR,disk full\nINFO,ERROR seen\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-F",
         ",",
         "-C",
@@ -1419,7 +1419,7 @@ fn a_bom_does_not_hide_the_first_field() {
     //the mark is encoding, not content: field 1 of line 1 is `a`, and the
     //output carries no BOM
     let input = TempFile::new("bom-grep", "\u{feff}a,1\nb,2\n");
-    let stdout = run_ft_stdout(&["-F", ",", "-C", "1", "-g", "^a$", input.path_str()]);
+    let stdout = run_fxt_stdout(&["-F", ",", "-C", "1", "-g", "^a$", input.path_str()]);
     assert_eq!(stdout, "a,1\n");
 }
 
@@ -1428,20 +1428,20 @@ fn every_concatenated_input_loses_its_bom() {
     //a second file's mark would otherwise land mid-stream
     let first = TempFile::new("bom-cat-1", "\u{feff}1\n");
     let second = TempFile::new("bom-cat-2", "\u{feff}2\n");
-    let stdout = run_ft_stdout(&["--sum", "1", first.path_str(), second.path_str()]);
+    let stdout = run_fxt_stdout(&["--sum", "1", first.path_str(), second.path_str()]);
     assert_eq!(stdout, "3\n");
 }
 
 #[test]
 fn a_bom_on_stdin_is_taken_off() {
-    let output = run_ft_with_stdin(&["-C", "1"], "\u{feff}xy\n");
+    let output = run_fxt_with_stdin(&["-C", "1"], "\u{feff}xy\n");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "x\n");
 }
 
 #[test]
 fn in_place_keeps_the_bom() {
     let input = TempFile::new("bom-in-place", "\u{feff}a\n");
-    let output = run_ft(&["-i", "--upper", input.path_str()]);
+    let output = run_fxt(&["-i", "--upper", input.path_str()]);
     assert!(output.status.success());
     assert_eq!(fs::read_to_string(&input.path).unwrap(), "\u{feff}A\n");
 }
@@ -1449,7 +1449,7 @@ fn in_place_keeps_the_bom() {
 #[test]
 fn dry_run_does_not_count_the_bom_as_a_change() {
     let input = TempFile::new("bom-dry-run", "\u{feff}nothing here\n");
-    let stdout = run_ft_stdout(&[
+    let stdout = run_fxt_stdout(&[
         "-i",
         "--dry-run",
         "-f",
