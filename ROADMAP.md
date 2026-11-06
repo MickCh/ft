@@ -26,6 +26,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **UTF-8 BOM** — `bom::strip_bom` takes the mark off every input before they are joined, so it no longer hides the first field; `--in-place` (and so `--dry-run`) writes it back, other output carries none. *(2026-11-06 comparison)*
 - ✅ **Order of operations documented** — README section on the fixed pipeline and the shared `--cols` scope, with examples. *(2026-11-06 comparison)*
 - ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
+- ✅ **Quoted `--unique` keys** — `--unique` keys on `select_canonical` too, so under `--quoted` `"a"` and `a` are duplicates, as they are one `--group-by` group.
 - ✅ **Benchmarks** — `benches/engine.rs` (`criterion`): the engine on 100k generated log and CSV rows, in memory, per operation; baseline under *Performance* below.
 - ✅ **Completions, man page, help examples** — `--completions <shell>` (`clap_complete`) and `--man` (`clap_mangen`) are exclusive flags of the binary itself, so they work after a plain `cargo install`; `after_help` lists examples of the newer features.
 
@@ -50,7 +51,7 @@ Each is one new type plus one branch in `compose::build_pipeline`:
 Open findings of an external black-box comparison (the fixed ones are under *Done*):
 
 - **Multi-line CSV records** — a newline inside quotes is now rejected; actually reading such a record needs the engine to iterate over *records* rather than lines when `--quoted` is set (a record reader in front of `process_line`, with row numbers counting records). The largest item here.
-- **Quoted `--unique`/`--sort` keys** — `--group-by` now compares field values, but `--unique` and the text sort still compare fields as written, so `"a"` and `a` are two rows to `--unique`. `select_canonical` is ready for them; it is a question of whether that surprises more than it helps.
+- **Quoted text-sort keys** — `--group-by` and `--unique` compare field values, but the text sort still compares fields as written, so `"b"` sorts before `a` (the quote comes first). Sorting by `select_canonical` would not fix that either — `"x,y"` keeps its quotes there — so it needs the plain values (`select_value`) as the key.
 - **Grapheme columns** — columns count code points, so `e\u0301` and ZWJ emoji sequences can be split. An opt-in `--graphemes` (`unicode-segmentation`) would count user-perceived characters; it touches every char-indexed helper in `text.rs`.
 - **Regex backreferences** — `(.)\1` is rejected by the `regex` crate. `fancy-regex` behind a flag would allow it, at the cost of linear-time matching guarantees.
 - **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; the *Encodings* item above (a lossy/byte mode) is the real answer.

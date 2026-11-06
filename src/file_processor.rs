@@ -333,11 +333,16 @@ impl FileProcessor {
 
     /// Whether the line survives `--unique`: its key columns have not
     /// been written yet. Without `--unique` every line passes.
-    /// A key span beyond the line yields an empty key, like `cut`.
+    /// A key span beyond the line yields an empty key, like `cut`. Under
+    /// `--quoted` the key is the fields' values in canonical form, so
+    /// `"a"` and `a` are duplicates, as they are one `--group-by` group.
     fn passes_unique(&self, content: &str, seen_keys: &mut HashSet<String>) -> bool {
         match &self.unique_key_span {
             None => true,
-            Some(span) => seen_keys.insert(span.select(content).into_owned()),
+            Some(span) => seen_keys.insert(
+                span.select_canonical(content)
+                    .into_owned(),
+            ),
         }
     }
 

@@ -324,6 +324,27 @@ fn group_by_summarizes_per_key() {
 }
 
 #[test]
+fn quoted_unique_keys_compare_by_value() {
+    //`"a"` and `a` are one value, so the second row is a duplicate; the
+    //row that survives is written as it was read
+    let input = TempFile::new("unique-quoted", "\"a\",1\na,2\nb,3\n");
+    let args = [
+        "-F",
+        ",",
+        "--quoted",
+        "-u",
+        "--unique-key",
+        "1",
+        input.path_str(),
+    ];
+    assert_eq!(run_fxt_stdout(&args), "\"a\",1\nb,3\n");
+
+    //without --quoted a quote is just a character, and the keys differ
+    let stdout = run_fxt_stdout(&["-F", ",", "-u", "--unique-key", "1", input.path_str()]);
+    assert_eq!(stdout, "\"a\",1\na,2\nb,3\n");
+}
+
+#[test]
 fn quoted_group_by_keys_group_by_value() {
     //`"a"` and `a` are one group, printed without needless quotes;
     //`"x,y"` keeps the quotes it needs to stay one CSV field
