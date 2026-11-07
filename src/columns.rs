@@ -73,6 +73,15 @@ pub struct FieldSpan {
 }
 
 impl FieldSpan {
+    /// Whether selected fields are joined by a delimiter other than the
+    /// input's (`--output-delimiter`), so a stretch of fields cannot be
+    /// read in one piece, with the input delimiters inside it.
+    fn rejoins(&self) -> bool {
+        self.output_delimiter
+            .as_ref()
+            .is_some_and(|output| *output != self.delimiter)
+    }
+
     /// How many fields `line` has, split as this span splits it — counting
     /// no further than `limit`, which is all a lower bound needs to know.
     pub fn count_fields(&self, line: &str, limit: usize) -> usize {
@@ -142,7 +151,9 @@ impl ColumnSpan {
             ColumnSpan::Chars(list) => SpanRanges::Borrowed(list.written()),
             ColumnSpan::Graphemes(list) => resolve_graphemes(line, list.written()),
             ColumnSpan::Fields(spec) => {
-                SpanRanges::Resolved(resolve_fields(line, spec, spec.fields.written(), false))
+                let parts = spec.fields.written();
+                let positions = field_positions(line, spec, fields_needed(parts));
+                SpanRanges::Resolved(read_parts(&positions, spec, parts))
             }
         }
     }
@@ -174,14 +185,7 @@ impl ColumnSpan {
         let positions = field_positions(line, spec, fields_needed(parts));
         let cells = parts
             .iter()
-            .flat_map(|part| {
-                //fields are 1-based, the positions are indexed from 0
-                let first = (*part.start()).max(1) - 1;
-                let last = (*part.end()).min(positions.len());
-                positions
-                    .get(first..last)
-                    .unwrap_or_default()
-            })
+            .flat_map(|part| each_field(&positions, part))
             .cloned()
             .collect();
         SpanRanges::Resolved(cells)
@@ -236,7 +240,7 @@ impl ColumnSpan {
             ColumnSpan::Fields(spec) => {
                 let parts = spec.fields.written();
                 let positions = split.positions_for(spec, parts);
-                let ranges = resolve_parts(&positions, spec, parts, false);
+                let ranges = read_parts(&positions, spec, parts);
                 text::select_ranges(split.line, &ranges, self.joiner())
             }
         }
@@ -351,6 +355,40 @@ fn resolve_fields(
 ) -> Ranges {
     let positions = field_positions(line, spec, fields_needed(parts));
     resolve_parts(&positions, spec, parts, swallow_delimiter)
+}
+
+/// The char ranges to read for `parts`, from fields already split out of
+/// the line. Normally a part is one stretch of the line, delimiters
+/// inside it included; when the selection is rejoined with a delimiter
+/// of its own, every field of a part is read on its own instead, so each
+/// boundary gets the new delimiter — not only those between parts.
+fn read_parts(
+    positions: &[RangeInclusive<usize>],
+    spec: &FieldSpan,
+    parts: &[RangeInclusive<usize>],
+) -> Ranges {
+    match spec.rejoins() {
+        true => parts
+            .iter()
+            .flat_map(|part| each_field(positions, part))
+            .cloned()
+            .collect(),
+        false => resolve_parts(positions, spec, parts, false),
+    }
+}
+
+/// The positions of the fields of `part` the line has, each on its own
+/// (an empty one as the inverted range its position is).
+fn each_field<'a>(
+    positions: &'a [RangeInclusive<usize>],
+    part: &RangeInclusive<usize>,
+) -> &'a [RangeInclusive<usize>] {
+    //fields are 1-based, the positions are indexed from 0
+    let first = (*part.start()).max(1) - 1;
+    let last = (*part.end()).min(positions.len());
+    positions
+        .get(first..last)
+        .unwrap_or_default()
 }
 
 /// Resolve every part against fields already split out of the line.
@@ -582,6 +620,24 @@ fn join_parts<'a>(parts: Vec<Cow<'a, str>>, joiner: &str) -> Cow<'a, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_output_delimiter_rejoins_every_field_of_a_range() {
+        // Given a range of fields, rejoined with ";"
+        let mut spec = FieldSpan::new(",", ColumnList::from(1..=usize::MAX));
+        spec.output_delimiter = Some(";".to_owned());
+        let span = ColumnSpan::Fields(spec.clone());
+
+        // When / Then every boundary gets it, an empty field's included
+        assert_eq!(span.select("a,b,c"), "a;b;c");
+        assert_eq!(span.select("a,,c"), "a;;c");
+        spec.fields = ColumnList::new(vec![2..=3, 1..=1]);
+        assert_eq!(ColumnSpan::Fields(spec.clone()).select("a,b,c"), "b;c;a");
+
+        // And the input delimiter given again changes nothing
+        spec.output_delimiter = Some(",".to_owned());
+        assert_eq!(ColumnSpan::Fields(spec).select("a,b,c"), "b,c,a");
+    }
 
     fn list(parts: &[RangeInclusive<usize>]) -> ColumnList {
         ColumnList::new(parts.to_vec())
@@ -1068,6 +1124,32 @@ mod properties {
             prop_assert_eq!(field_positions(&line, &spec, usize::MAX).to_vec(), reference.clone());
             let early = field_positions(&line, &spec, limit);
             prop_assert_eq!(&early[..], &reference[..limit.min(reference.len())]);
+        }
+
+        #[test]
+        fn an_output_delimiter_rejoins_each_field_read(
+            line in lines(),
+            delimiter in delimiters(),
+            quoted in any::<bool>(),
+            parts in prop::collection::vec(field_ranges(), 1..4),
+        ) {
+            //with "|" (in no line) rejoining, the selection is the fields
+            //each part names, one by one, joined with it
+            let mut spec = span(delimiter, quoted, parts.clone());
+            spec.output_delimiter = Some("|".to_owned());
+            let fields: Vec<String> = reference_positions(&line, delimiter, quoted)
+                .iter()
+                .map(|field| text::select_columns(&line, field).to_owned())
+                .collect();
+            let expected: Vec<&str> = parts
+                .iter()
+                .flat_map(|part| {
+                    let last = (*part.end()).min(fields.len());
+                    fields.get(part.start() - 1..last).unwrap_or_default()
+                })
+                .map(String::as_str)
+                .collect();
+            prop_assert_eq!(ColumnSpan::Fields(spec).select(&line), expected.join("|"));
         }
 
         #[test]

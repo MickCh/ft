@@ -19,6 +19,10 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 - `--in-place` no longer writes a file back empty when a filter matched nothing in it: the file is left as it was (exit code 1, with a note on stderr), and `--dry-run` reports it unchanged.
 
+### Fixed
+
+- `--output-delimiter` stood only between the parts of a column list, not between the fields of one range: `-F , -C 1-3 --output-delimiter ;` printed `a,b,c`. It now rejoins every field.
+
 ### Performance
 
 - Rows held back for reordering, and the input buffered for `~N` row bounds, are stored back to back in one allocation instead of one per row; reordering moves small records, not the text. `-R ~1000-~1` 1.4× faster, `--shuffle` 1.2×, `--tac`, `--sort` and a sort by a CSV field 1.1×.

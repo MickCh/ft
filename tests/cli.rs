@@ -1127,6 +1127,45 @@ fn dry_run_reports_changes_without_writing() {
 }
 
 #[test]
+fn output_delimiter_rejoins_the_fields_inside_a_range() {
+    let input = TempFile::new("output-delimiter-range", "a,b,c\n");
+    for (cols, expected) in [
+        ("1-3", "a;b;c\n"),
+        ("1-", "a;b;c\n"),
+        ("2-3", "b;c\n"),
+        ("1-2,3", "a;b;c\n"),
+    ] {
+        assert_eq!(
+            run_fxt_stdout(&[
+                "-F",
+                ",",
+                "-C",
+                cols,
+                "--output-delimiter",
+                ";",
+                input.path_str()
+            ]),
+            expected,
+            "{cols}"
+        );
+    }
+    let quoted = TempFile::new("output-delimiter-quoted", "a,\"x,y\",c\n");
+    assert_eq!(
+        run_fxt_stdout(&[
+            "-F",
+            ",",
+            "--quoted",
+            "-C",
+            "1-2",
+            "--output-delimiter",
+            ";",
+            quoted.path_str()
+        ]),
+        "a;\"x,y\"\n"
+    );
+}
+
+#[test]
 fn keep_others_edits_the_selection_and_keeps_the_rest() {
     let input = TempFile::new("keep-others", "h\nb\na\nb\n");
     //rows outside -R pass through, the selected ones are edited
