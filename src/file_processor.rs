@@ -22,11 +22,56 @@ use std::io;
 use std::io::{BufRead, Write};
 use std::str::from_utf8;
 
-/// A buffered line split into content and its original terminator.
+/// Lines held back for reordering, stored back to back in one string:
+/// a single allocation grows for all of them (and is kept for the next
+/// run of rows) instead of one per line, and reordering moves only their
+/// small [`Line`] records, never the text.
 #[derive(Default)]
+struct LineBuffer {
+    text: String,
+    lines: Vec<Line>,
+}
+
+/// Where a buffered line lies in its buffer's text, and the terminator
+/// it came with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Line {
-    content: String,
+    start: usize,
+    end: usize,
     terminator: &'static str,
+}
+
+impl LineBuffer {
+    fn push(&mut self, content: &str, terminator: &'static str) {
+        let start = self.text.len();
+        self.text.push_str(content);
+        self.lines.push(Line {
+            start,
+            end: self.text.len(),
+            terminator,
+        });
+    }
+
+    fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    fn content(&self, line: Line) -> &str {
+        &self.text[line.start..line.end]
+    }
+
+    /// The buffered lines' contents, in their current order.
+    fn contents(&self) -> impl Iterator<Item = &str> {
+        self.lines
+            .iter()
+            .map(|&line| self.content(line))
+    }
+
+    /// Empty the buffer, keeping its allocations for what comes next.
+    fn clear(&mut self) {
+        self.text.clear();
+        self.lines.clear();
+    }
 }
 
 /// The first eight bytes of `key` as a big-endian number, zero-padded:
@@ -45,7 +90,7 @@ fn byte_prefix(key: &str) -> u64 {
 #[derive(Default)]
 struct RunState {
     //lines held back for reordering
-    reorder_buffer: Vec<Line>,
+    reorder_buffer: LineBuffer,
     //unique keys already written (`--unique`)
     seen_keys: HashSet<String>,
     //the line just written carried no terminator (it was the input's
@@ -209,19 +254,26 @@ impl FileProcessor {
             }
         } else {
             //end-relative bounds (`~N`) only resolve once the total
-            //line count is known: the whole input must be buffered
+            //line count is known: the whole input must be buffered, back
+            //to back in one allocation, each row remembered by its end
             let mut records = Records::new(self.quoted_records);
-            let mut lines: Vec<Vec<u8>> = Vec::new();
+            let mut bytes = Vec::new();
+            let mut ends = Vec::new();
             reader.for_byte_line_with_terminator(|raw_line| {
                 if let Some(row) = records.push(raw_line) {
-                    lines.push(row.into_owned());
+                    bytes.extend_from_slice(&row);
+                    ends.push(bytes.len());
                 }
                 Ok(true)
             })?;
             records.finish()?;
-            let rows = self.rows.resolve(lines.len());
-            for (index, raw_line) in lines.iter().enumerate() {
-                self.process_line(raw_line, index + 1, &rows, &mut state, writer)?;
+            let rows = self.rows.resolve(ends.len());
+            let starts = std::iter::once(0).chain(ends.iter().copied());
+            for (index, (start, end)) in starts
+                .zip(ends.iter().copied())
+                .enumerate()
+            {
+                self.process_line(&bytes[start..end], index + 1, &rows, &mut state, writer)?;
                 if self.stop_when_matched && state.matched {
                     break;
                 }
@@ -349,10 +401,9 @@ impl FileProcessor {
         writer: &mut W,
     ) -> io::Result<()> {
         if self.reorder.is_some() {
-            state.reorder_buffer.push(Line {
-                content: content.to_owned(),
-                terminator,
-            });
+            state
+                .reorder_buffer
+                .push(content, terminator);
             return Ok(());
         }
         self.output(content, terminator, state, writer)
@@ -427,56 +478,56 @@ impl FileProcessor {
         let mut buffer = std::mem::take(&mut state.reorder_buffer);
         match reorder {
             Reorder::Sort(spec) => Self::sort_lines(&mut buffer, spec),
-            Reorder::Tac => buffer.reverse(),
+            Reorder::Tac => buffer.lines.reverse(),
             Reorder::Shuffle => {
                 use rand::seq::SliceRandom;
-                buffer.shuffle(&mut rand::rng());
+                buffer.lines.shuffle(&mut rand::rng());
             }
         }
 
         //the order is settled: the lines now take the same way out as the
         //ones that never needed reordering, so `--unique` keeps the first
         //per key in reordered order and a reducer sees them in that order
-        for line in &buffer {
-            self.output(&line.content, line.terminator, state, writer)?;
+        for &line in &buffer.lines {
+            self.output(buffer.content(line), line.terminator, state, writer)?;
         }
 
+        //the next run of rows reuses the room
+        buffer.clear();
+        state.reorder_buffer = buffer;
         Ok(())
     }
 
-    fn sort_lines(buffer: &mut Vec<Line>, spec: &SortSpec) {
+    fn sort_lines(buffer: &mut LineBuffer, spec: &SortSpec) {
         //a numeric key reads the field's value (unquoted under `--quoted`);
         //`None` — not a number — sorts before every number, as `Option`
         //orders it, where a sentinel value would collide with `-inf`
-        if spec.numeric {
-            let keys = buffer.iter().map(|line| {
-                Number::parse(
-                    &spec
-                        .key_span
-                        .select_value(&line.content),
-                )
+        let order = if spec.numeric {
+            let keys = buffer
+                .contents()
+                .map(|content| Number::parse(&spec.key_span.select_value(content)));
+            Self::sorted_order(keys, spec.reverse)
+        } else {
+            //a key span beyond the line yields an empty key, like `cut`; under
+            //`--quoted` the key is the fields' values, so `"b"` sorts after
+            //`a` rather than first, on its quote. A key that is one piece of
+            //the line — the whole line by default — is borrowed from it, not
+            //copied. Its first bytes go in front, as a number: most
+            //comparisons are settled by them, without a trip to the line
+            let keys = buffer.contents().map(|content| {
+                let key = spec.key_span.select_value(content);
+                (byte_prefix(&key), key)
             });
-            let order = Self::sorted_order(keys, spec.reverse);
-            return Self::permute(buffer, &order);
-        }
-        //a key span beyond the line yields an empty key, like `cut`; under
-        //`--quoted` the key is the fields' values, so `"b"` sorts after
-        //`a` rather than first, on its quote. A key that is one piece of
-        //the line — the whole line by default — is borrowed from it, not
-        //copied. Its first bytes go in front, as a number: most
-        //comparisons are settled by them, without a trip to the line
-        let keys = buffer.iter().map(|line| {
-            let key = spec
-                .key_span
-                .select_value(&line.content);
-            (byte_prefix(&key), key)
-        });
-        let order = Self::sorted_order(keys, spec.reverse);
-        Self::permute(buffer, &order);
+            Self::sorted_order(keys, spec.reverse)
+        };
+        buffer.lines = order
+            .iter()
+            .map(|&position| buffer.lines[position])
+            .collect();
     }
 
     /// The positions of `keys` in stable sorted order. Each key is computed
-    /// once, and the sort moves only keys and positions, never the lines.
+    /// once, and the sort moves only keys and positions.
     /// Equal keys are ordered by position — in input order under
     /// `--reverse` too — which makes the sort stable, so the faster
     /// unstable one can do it.
@@ -490,16 +541,6 @@ impl FileProcessor {
             .into_iter()
             .map(|(_, position)| position)
             .collect()
-    }
-
-    /// Rearrange `buffer` so that its `i`-th line is the one that was at
-    /// `order[i]`; `order` is a permutation of its positions.
-    fn permute(buffer: &mut Vec<Line>, order: &[usize]) {
-        let mut lines = std::mem::take(buffer);
-        *buffer = order
-            .iter()
-            .map(|&position| std::mem::take(&mut lines[position]))
-            .collect();
     }
 }
 
@@ -546,24 +587,24 @@ mod tests {
     }
 
     #[test]
-    fn permute_moves_each_line_to_its_place() {
-        // Given three lines and an order for them
-        let mut buffer: Vec<Line> = ["x", "y", "z"]
-            .into_iter()
-            .map(|content| Line {
-                content: content.to_owned(),
-                terminator: "\n",
-            })
-            .collect();
+    fn a_line_buffer_keeps_its_lines_back_to_back() {
+        // Given three lines, pushed
+        let mut buffer = LineBuffer::default();
+        buffer.push("xy", "\n");
+        buffer.push("", "\r\n");
+        buffer.push("ż", "");
 
-        // When permuted
-        FileProcessor::permute(&mut buffer, &[2, 0, 1]);
+        // When reordered by their records alone
+        buffer.lines.reverse();
 
-        // Then the lines follow the order
-        let contents: Vec<&str> = buffer
-            .iter()
-            .map(|line| line.content.as_str())
-            .collect();
-        assert_eq!(contents, ["z", "x", "y"]);
+        // Then the text follows them, terminators included
+        assert_eq!(buffer.contents().collect::<Vec<_>>(), ["ż", "", "xy"]);
+        assert_eq!(buffer.lines[1].terminator, "\r\n");
+        assert_eq!(buffer.text, "xyż");
+
+        // And a cleared buffer is empty again
+        buffer.clear();
+        assert!(buffer.is_empty());
+        assert!(buffer.text.is_empty());
     }
 }
