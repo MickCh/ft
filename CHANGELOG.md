@@ -25,6 +25,7 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 - In field mode, the transforms that rewrite text worked on a range of fields as one stretch, delimiters included: `-F , -C 1- --reverse-chars` turned `ab,cd` into `dc,ba`, `--trim` trimmed only the ends of the stretch, `--expand` counted tab stops from its start, and `--find` could match across a delimiter. Each field is now rewritten on its own (deleting fields still takes a stretch).
 
 - On Windows, a terminator `fxt` adds of its own was always `\r\n`, whatever the input used: `--join` ended in `\r\n` and an unterminated last line moved by `--tac` put a `\r\n` among `\n`s, while summaries wrote `\n` even into a CRLF file. The terminator now follows the input's lines, on every platform, and a `--join`ed row ends the way the input did (unterminated, if its last line was).
+- `--number --unique` kept every duplicate: the number was added before `--unique` compared the rows, so it made every row distinct. Rows are now numbered on their way out, after `--unique`.
 
 ### Performance
 

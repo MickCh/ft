@@ -209,6 +209,9 @@ pub struct FileProcessor {
     pub unique_key_span: Option<ColumnSpan>,
     /// Per-line transforms, applied in order.
     pub transforms: Pipeline,
+    /// Transforms for each line on its way out, after `--unique` let it
+    /// pass (`--number`, which counts the rows actually written).
+    pub outgoing: Pipeline,
     /// `Some` summarizes the processed lines instead of writing them
     /// (`--count`, `--sum`, …): the summary replaces the rows.
     pub reducer: Option<Box<dyn LineReducer>>,
@@ -377,7 +380,8 @@ impl FileProcessor {
                 if matches!(utf8_line, Cow::Owned(_))
                     && kept.len() == content.len()
                     && self.reorder.is_none()
-                    && self.reducer.is_none() =>
+                    && self.reducer.is_none()
+                    && self.outgoing.is_empty() =>
             {
                 if self.passes_unique(kept, &mut state.seen_keys) {
                     self.write_kept_line(raw_line, state, writer)?;
@@ -435,6 +439,25 @@ impl FileProcessor {
         if !self.passes_unique(content, &mut state.seen_keys) {
             return Ok(());
         }
+        if self.outgoing.is_empty() {
+            return self.deliver(content, terminator, state, writer);
+        }
+        match self.outgoing.apply(content)? {
+            Lines::One(content) => self.deliver(&content, terminator, state, writer),
+            Lines::Several(contents) => contents
+                .iter()
+                .try_for_each(|content| self.deliver(content, terminator, state, writer)),
+        }
+    }
+
+    /// Hand a finished line to the reducer, or else to the writer.
+    fn deliver<W: Write>(
+        &mut self,
+        content: &str,
+        terminator: &str,
+        state: &mut RunState,
+        writer: &mut W,
+    ) -> io::Result<()> {
         if let Some(reducer) = &mut self.reducer {
             return reducer.accept(content, writer);
         }

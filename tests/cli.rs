@@ -453,6 +453,11 @@ fn number_numbers_the_output_rows() {
     //the numbers count the rows that survive the filters, contiguously
     let stdout = run_fxt_stdout(&["--number", "-g", "[ac]", input.path_str()]);
     assert_eq!(stdout, "1\ta\n2\tc\n");
+
+    //and those --unique lets through: the number is no part of the key
+    let duplicates = TempFile::new("number-unique", "a\na\nb\n");
+    let stdout = run_fxt_stdout(&["--number", "-u", duplicates.path_str()]);
+    assert_eq!(stdout, "1\ta\n2\tb\n");
 }
 
 #[test]

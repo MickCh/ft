@@ -27,6 +27,7 @@ pub fn build_processor(config: &Config) -> FileProcessor {
         .unique
         .then(|| cols.key_or_cols(&config.unique_key));
     let transforms = build_pipeline(config, &mut cols);
+    let outgoing = build_outgoing(config);
 
     FileProcessor {
         rows: config.rows_or_full(),
@@ -37,6 +38,7 @@ pub fn build_processor(config: &Config) -> FileProcessor {
         predicate,
         unique_key_span,
         transforms,
+        outgoing,
         reducer: build_reducer(config),
         stop_when_matched: config.quiet,
         quoted_records: config.quoted,
@@ -200,6 +202,18 @@ fn build_predicate(config: &Config, cols: &mut ColumnClaims) -> Option<Box<dyn L
 /// Build the per-line transform pipeline implied by the configuration.
 /// Runs after the other builders, so `cols` already knows about their
 /// claims when the bare-selection decision is made at the end.
+/// The transforms a line goes through on its way out, once `--unique`
+/// has let it pass: numbering, which comes after every row is settled —
+/// after expansion, after the empties and the duplicates are gone — so
+/// the numbers count what is written and come out contiguous.
+fn build_outgoing(config: &Config) -> Pipeline {
+    let mut outgoing: Vec<Box<dyn LineTransform>> = Vec::new();
+    if config.number {
+        outgoing.push(Box::new(NumberLines::new(config.output_separator())));
+    }
+    Pipeline::new(outgoing)
+}
+
 fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
     let mut pipeline: Vec<Box<dyn LineTransform>> = Vec::new();
 
@@ -306,12 +320,6 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
     if config.drop_empty {
         pipeline.push(Box::new(DropEmpty));
     }
-    //numbering comes after every row is settled — after expansion and
-    //after the empties are gone — so the numbers come out contiguous
-    if config.number {
-        pipeline.push(Box::new(NumberLines::new(config.output_separator())));
-    }
-
     //with no operation claiming the column range, `--cols` alone selects
     //the range, mirroring how `--rows` alone selects lines. Everything in
     //the pipeline at this point is line-wide (a column-scoped transform
