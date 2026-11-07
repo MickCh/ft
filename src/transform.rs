@@ -218,6 +218,23 @@ impl MapColumns {
         }
     }
 
+    /// Reverses the characters within the span, like `rev`.
+    pub fn reverse_chars(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns {
+            span: span.into(),
+            map: |within| within.chars().rev().collect(),
+        }
+    }
+
+    /// Reverses the grapheme clusters within the span (`--graphemes`), so
+    /// an accent stays on its letter and an emoji sequence stays whole.
+    pub fn reverse_graphemes(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns {
+            span: span.into(),
+            map: |within| within.graphemes(true).rev().collect(),
+        }
+    }
+
     /// Collapses every run of whitespace within the span into a single
     /// space (the ends are left to `--trim`).
     pub fn squeeze(span: impl Into<ColumnSpan>) -> MapColumns {

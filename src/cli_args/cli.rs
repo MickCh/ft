@@ -267,6 +267,14 @@ pub fn cli() -> Command {
                 .help("Collapse runs of whitespace in the column range into single spaces"),
         )
         .arg(
+            Arg::new("reverse-chars")
+                .long("reverse-chars")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("delete")
+                .help("Reverse the characters in the column range, like rev"),
+        )
+        .arg(
             Arg::new("pad-left")
                 .long("pad-left")
                 .required(false)

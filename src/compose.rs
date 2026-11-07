@@ -225,6 +225,12 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
     if config.trim {
         pipeline.push(Box::new(MapColumns::trim(cols.claim())));
     }
+    if config.reverse_chars {
+        pipeline.push(Box::new(match config.graphemes {
+            true => MapColumns::reverse_graphemes(cols.claim()),
+            false => MapColumns::reverse_chars(cols.claim()),
+        }));
+    }
     //padding comes after trimming, so `--trim --pad-left 8` aligns the
     //trimmed text rather than whatever whitespace surrounded it
     let padding = [

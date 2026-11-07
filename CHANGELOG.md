@@ -7,6 +7,7 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 ### Added
 
 - `--lossy`: input that is not valid in its encoding no longer fails the run; each malformed sequence becomes U+FFFD. Invalid UTF-8 is repaired only in the rows `fxt` actually rewrites — a row passed through, filtered in, or left as it was by every transform keeps its bytes, so `--lossy -i` changes no more of a file than the edit itself.
+- `--reverse-chars`: reverse the column range, like `rev` (grapheme clusters under `--graphemes`).
 - `--pad-left <width>` / `--pad-right <width>`: pad the column range with spaces to a width, right- or left-aligning it; in field mode each field on its own, empty ones too.
 
 ### Performance

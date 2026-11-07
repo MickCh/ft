@@ -162,6 +162,30 @@ fn wrap_rejects_a_zero_width() {
 }
 
 #[test]
+fn reverse_chars_reverses_the_column_range() {
+    let input = TempFile::new("reverse-chars", "abc,żółw\ne\u{301}x\n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "-C", "2", "--reverse-chars", input.path_str()]),
+        "abc,włóż\ne\u{301}x\n"
+    );
+    //by chars the accent comes off its letter; by graphemes it stays on
+    assert_eq!(
+        run_fxt_stdout(&["-R", "2", "--reverse-chars", input.path_str()]),
+        "x\u{301}e\n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&[
+            "-R",
+            "2",
+            "--graphemes",
+            "--reverse-chars",
+            input.path_str()
+        ]),
+        "xe\u{301}\n"
+    );
+}
+
+#[test]
 fn pad_left_right_aligns_each_field_on_its_own() {
     let input = TempFile::new("pad-left", "a,10,x\nlonger,2,\n,,z\n");
     let stdout = run_fxt_stdout(&["-F", ",", "-C", "1-2", "--pad-left", "4", input.path_str()]);
