@@ -251,6 +251,12 @@ fxt --encode url paths.txt
 # Right-align the numbers in fields 2-3 to a width of 8
 fxt -F , -C 2-3 --pad-left 8 data.csv
 
+# Print the header row with each title centered in 12 columns
+fxt -R 1 -F , --center 12 data.csv
+
+# Rot13 the second field (run it again to undo)
+fxt -F , -C 2 --rot13 data.csv
+
 # Hard-wrap every line at 80 characters (like fold -w 80)
 fxt --wrap 80 input.txt
 
@@ -278,6 +284,10 @@ fxt -F , --quoted --min-fields 5 data.csv
 
 # Lines longer than 100 characters (delete the ones that fit)
 fxt -d --max-len 100 notes.md
+
+# Rows between 10 and 80 characters long; CSV rows with 2 to 4 fields
+fxt --min-len 10 --max-len 80 notes.md
+fxt -F , --min-fields 2 --max-fields 4 data.csv
 
 # Keep only rows containing ERROR; delete rows that match a pattern
 fxt -g ERROR app.log
