@@ -112,7 +112,9 @@ fn report_changes(config: &Config, path: &Path) -> Result<RunOutcome, AppError> 
     let mut writer = encoded(target, comparison);
     let outcome = process(config, BufReader::new(reader), &mut writer)?;
 
-    let verdict = if writer
+    let verdict = if leaves_nothing(config, outcome) {
+        "unchanged (nothing matched)"
+    } else if writer
         .get_mut()
         .differs()
         .map_err(AppError::Processing)?
@@ -232,12 +234,27 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
         }
     };
 
+    //a selection that matched nothing would write the file back empty:
+    //that is never what an edit means, so the file is left as it was
+    if leaves_nothing(config, outcome) {
+        let _ = std::fs::remove_file(&temp_path);
+        eprintln!("{}: nothing matched, left unchanged", path.display());
+        return Ok(outcome);
+    }
+
     std::fs::rename(&temp_path, path).map_err(|source| {
         let _ = std::fs::remove_file(&temp_path);
         replace_error(path, source)
     })?;
 
     Ok(outcome)
+}
+
+/// Whether an in-place edit came out with nothing left of the file: a
+/// filter matched no row, and the selection drops the rows it leaves out.
+/// Such a file is not written back (and `--dry-run` reports it unchanged).
+fn leaves_nothing(config: &Config, outcome: RunOutcome) -> bool {
+    config.filters_by_content() && !outcome.matched && config.drops_unselected()
 }
 
 /// Copy the file about to be edited to a sibling named after it plus

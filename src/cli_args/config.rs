@@ -154,6 +154,9 @@ pub struct Config {
     //one with `--all`
     pub grep: Vec<Pattern>,
     pub grep_all: bool,
+    //`--keep-others`: rows outside the selection pass through unchanged
+    //instead of being dropped
+    pub keep_others: bool,
     //`--min-fields`: rows with fewer fields are filtered out
     pub min_fields: Option<usize>,
     //`--max-len`: rows longer than this are filtered out
@@ -252,6 +255,13 @@ impl Config {
     /// the exit code reports, like grep's.
     pub fn filters_by_content(&self) -> bool {
         self.has_patterns() || self.min_fields.is_some() || self.max_len.is_some()
+    }
+
+    /// Whether rows outside the selection are dropped from the output —
+    /// the plain selection, without `--delete` or `--keep-others` — so a
+    /// filter that matches nothing leaves no output at all.
+    pub fn drops_unselected(&self) -> bool {
+        !self.delete && !self.keep_others
     }
 
     /// Whether any pattern matches rows (`--grep`, `--from`, `--to`),
@@ -444,6 +454,7 @@ impl TryFrom<ArgMatches> for Config {
             },
             grep,
             grep_all: matches.get_flag("all"),
+            keep_others: matches.get_flag("keep-others"),
             min_fields: matches
                 .get_one::<usize>("min-fields")
                 .copied(),

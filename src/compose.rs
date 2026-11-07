@@ -143,7 +143,10 @@ fn build_aggregates(config: &Config) -> Vec<Aggregate> {
 
 /// How rows inside vs outside the row range are treated.
 fn row_mode(config: &Config) -> RowMode {
-    if !config.delete {
+    if config.keep_others {
+        //the selected rows are processed, the others pass as they are
+        RowMode::EditSelected
+    } else if !config.delete {
         RowMode::Select
     } else if config.cols.is_none() {
         RowMode::DeleteSelected
@@ -381,6 +384,10 @@ mod tests {
         delete_cols.delete = true;
         delete_cols.cols = Some((1..=2).into());
         assert_eq!(row_mode(&delete_cols), RowMode::EditSelected);
+
+        let mut keep_others = Config::default();
+        keep_others.keep_others = true;
+        assert_eq!(row_mode(&keep_others), RowMode::EditSelected);
     }
 
     #[test]

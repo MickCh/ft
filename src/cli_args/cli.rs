@@ -201,6 +201,14 @@ pub fn cli() -> Command {
                 .help("Keep only rows matching this regex (with --delete: delete them); repeatable, any matches unless --all"),
         )
         .arg(
+            Arg::new("keep-others")
+                .long("keep-others")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(["delete", "number", "join", "summary"])
+                .help("Keep the rows the selection leaves out, unchanged, instead of dropping them (like sed '2,5s/a/b/')"),
+        )
+        .arg(
             Arg::new("all")
                 .long("all")
                 .required(false)

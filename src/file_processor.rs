@@ -139,9 +139,9 @@ pub enum RowMode {
     /// Delete the selected rows (those matching the predicate, if any)
     /// and keep the rest verbatim.
     DeleteSelected,
-    /// Process the selected rows and keep the rest verbatim (delete
-    /// mode with a column range: a transform removes the columns, the
-    /// rows themselves survive).
+    /// Process the selected rows and keep the rest verbatim
+    /// (`--keep-others`, and delete mode with a column range: a
+    /// transform removes the columns, the rows themselves survive).
     EditSelected,
 }
 

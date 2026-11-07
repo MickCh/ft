@@ -1127,6 +1127,82 @@ fn dry_run_reports_changes_without_writing() {
 }
 
 #[test]
+fn keep_others_edits_the_selection_and_keeps_the_rest() {
+    let input = TempFile::new("keep-others", "h\nb\na\nb\n");
+    //rows outside -R pass through, the selected ones are edited
+    assert_eq!(
+        run_fxt_stdout(&[
+            "--keep-others",
+            "-R",
+            "2-3",
+            "-f",
+            "b",
+            "-r",
+            "X",
+            input.path_str()
+        ]),
+        "h\nX\na\nb\n"
+    );
+    //rows --grep leaves out pass through too, like sed '/b/s/b/X/'
+    assert_eq!(
+        run_fxt_stdout(&["--keep-others", "-g", "b", "--upper", input.path_str()]),
+        "h\nB\na\nB\n"
+    );
+    //a reordering sorts the selected run in place, the header stays first
+    assert_eq!(
+        run_fxt_stdout(&["--keep-others", "-s", "-R", "2-", input.path_str()]),
+        "h\na\nb\nb\n"
+    );
+}
+
+#[test]
+fn keep_others_edits_in_place_without_losing_rows() {
+    let input = TempFile::new("keep-others-in-place", "a\nb\nc\n");
+    run_fxt_stdout(&[
+        "-i",
+        "--keep-others",
+        "-R",
+        "2",
+        "-f",
+        "b",
+        "-r",
+        "X",
+        input.path_str(),
+    ]);
+    assert_eq!(fs::read_to_string(&input.path).unwrap(), "a\nX\nc\n");
+}
+
+#[test]
+fn keep_others_conflicts_with_what_consumes_rows() {
+    for args in [
+        ["--keep-others", "-d"],
+        ["--keep-others", "--count"],
+        ["--keep-others", "--number"],
+    ] {
+        let output = run_fxt_with_stdin(&args, "a\n");
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+    }
+}
+
+#[test]
+fn in_place_leaves_a_file_nothing_matched_in_as_it_was() {
+    let input = TempFile::new("in-place-no-match", "a\nb\n");
+    let output = run_fxt(&["-i", "-g", "zz", input.path_str()]);
+    //exit 1, as for any filter that matched nothing, and the file intact
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&input.path).unwrap(), "a\nb\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nothing matched, left unchanged"),
+        "{stderr}"
+    );
+
+    let dry_run = run_fxt(&["-i", "--dry-run", "-g", "zz", input.path_str()]);
+    let stdout = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(stdout.contains("unchanged (nothing matched)"), "{stdout}");
+}
+
+#[test]
 fn dry_run_reports_an_unchanged_file() {
     let input = TempFile::new("dry-run-same", "nothing to find here\n");
 
