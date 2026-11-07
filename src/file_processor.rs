@@ -16,6 +16,7 @@ use crate::text;
 use crate::transform::{Lines, Pipeline};
 
 use bstr::io::BufReadExt;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io;
 use std::io::{BufRead, Write};
@@ -169,6 +170,10 @@ pub struct FileProcessor {
     /// field open goes on in the next, and the row is the whole record.
     /// `--rows`, `--number` and error messages then count records.
     pub quoted_records: bool,
+    /// A processed row that is not valid UTF-8 has its invalid bytes
+    /// replaced with U+FFFD (`--lossy`) instead of failing the run. Rows
+    /// passed through untouched keep their bytes as they were.
+    pub lossy: bool,
 }
 
 impl FileProcessor {
@@ -265,14 +270,21 @@ impl FileProcessor {
             return Ok(());
         }
 
-        let utf8_line = from_utf8(raw_line).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{} {line_number} is not valid UTF-8: {e}", self.row_noun()),
-            )
-        })?;
+        let utf8_line = match (from_utf8(raw_line), self.lossy) {
+            (Ok(line), _) => Cow::Borrowed(line),
+            (Err(_), true) => String::from_utf8_lossy(raw_line),
+            (Err(e), false) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "{} {line_number} is not valid UTF-8: {e} (--lossy replaces it)",
+                        self.row_noun()
+                    ),
+                ));
+            }
+        };
 
-        let (content, terminator) = text::split_line_terminator(utf8_line);
+        let (content, terminator) = text::split_line_terminator(&utf8_line);
 
         if let Some(predicate) = &self.predicate
             && !predicate.matches(content)?
@@ -294,6 +306,21 @@ impl FileProcessor {
 
         //a transform may expand the line into several, or drop it
         match self.transforms.apply(content)? {
+            //under `--lossy`, a repaired row the pipeline left as it was
+            //goes out as it came in, invalid bytes and all — replacing
+            //them is only worth it where the row is rewritten anyway, so
+            //`--lossy -i` changes no more of a file than the edit does
+            Lines::One(Cow::Borrowed(kept))
+                if matches!(utf8_line, Cow::Owned(_))
+                    && kept.len() == content.len()
+                    && self.reorder.is_none()
+                    && self.reducer.is_none() =>
+            {
+                if self.passes_unique(kept, &mut state.seen_keys) {
+                    self.write_kept_line(raw_line, state, writer)?;
+                }
+                Ok(())
+            }
             Lines::One(content) => self.emit(&content, terminator, state, writer),
             Lines::Several(contents) => contents
                 .iter()

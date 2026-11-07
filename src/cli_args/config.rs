@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::encoding::Malformed;
 use crate::pattern::{BytePattern, Pattern, Syntax};
 use clap::ArgMatches;
 use encoding_rs::Encoding;
@@ -124,6 +125,9 @@ pub struct Config {
     //`--output-encoding`: `None` writes UTF-8, or with --in-place each
     //file's own encoding
     pub output_encoding: Option<&'static Encoding>,
+    //`--lossy`: input not valid in its encoding is replaced with U+FFFD
+    //rather than an error
+    pub lossy: bool,
     //`Some` splits every line at each occurrence of the separator
     pub split_on: Option<String>,
     //`Some` wraps every line into chunks of that many chars
@@ -210,6 +214,14 @@ impl Config {
     }
 
     /// What an input without a byte order mark is decoded from.
+    /// What becomes of input not valid in its encoding.
+    pub fn on_malformed(&self) -> Malformed {
+        match self.lossy {
+            true => Malformed::Replace,
+            false => Malformed::Fail,
+        }
+    }
+
     pub fn input_encoding(&self) -> &'static Encoding {
         self.encoding
             .unwrap_or(encoding_rs::UTF_8)
@@ -342,6 +354,7 @@ impl TryFrom<ArgMatches> for Config {
             output_encoding: matches
                 .get_one::<&'static Encoding>("output-encoding")
                 .copied(),
+            lossy: matches.get_flag("lossy"),
             split_on: matches
                 .get_one::<String>("split-on")
                 .cloned(),

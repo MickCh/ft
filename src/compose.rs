@@ -40,6 +40,7 @@ pub fn build_processor(config: &Config) -> FileProcessor {
         reducer: build_reducer(config),
         stop_when_matched: config.quiet,
         quoted_records: config.quoted,
+        lossy: config.lossy,
     }
 }
 

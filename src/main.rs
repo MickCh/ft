@@ -282,8 +282,12 @@ fn open_inputs(config: &Config) -> Result<Box<dyn BufRead>, AppError> {
     for input in &config.inputs {
         readers.push(match input {
             Input::Stdin => {
-                let (_, reader) = encoding::open(std::io::stdin(), config.input_encoding())
-                    .map_err(AppError::Processing)?;
+                let (_, reader) = encoding::open(
+                    std::io::stdin(),
+                    config.input_encoding(),
+                    config.on_malformed(),
+                )
+                .map_err(AppError::Processing)?;
                 Box::new(reader)
             }
             Input::File(path) => Box::new(open_decoded(config, path)?.1),
@@ -305,7 +309,8 @@ fn open_inputs(config: &Config) -> Result<Box<dyn BufRead>, AppError> {
 /// ends up with.
 fn open_decoded(config: &Config, path: &Path) -> Result<(SourceEncoding, Decoded<File>), AppError> {
     let file = File::open(path).map_err(|source| open_error(path, source))?;
-    encoding::open(file, config.input_encoding()).map_err(|source| open_error(path, source))
+    encoding::open(file, config.input_encoding(), config.on_malformed())
+        .map_err(|source| open_error(path, source))
 }
 
 /// What an edited file is written back in: `--output-encoding`, or else

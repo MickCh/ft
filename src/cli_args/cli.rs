@@ -493,6 +493,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("lossy")
+                .long("lossy")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Replace bytes that are not valid in the input encoding with U+FFFD \
+                     instead of failing",
+                ),
+        )
+        .arg(
             Arg::new("in-place")
                 .short('i')
                 .long("in-place")

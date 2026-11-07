@@ -1716,6 +1716,63 @@ fn in_place_with_an_output_encoding_converts_the_file() {
 }
 
 #[test]
+fn invalid_utf8_fails_and_points_at_lossy() {
+    let input = TempFile::new("invalid-utf8", b"ok\nbad\xFF\n");
+    let output = run_fxt(&["--upper", input.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("line 2 is not valid UTF-8"), "{stderr}");
+    assert!(stderr.contains("--lossy"), "{stderr}");
+}
+
+#[test]
+fn lossy_replaces_invalid_bytes_in_the_rows_it_rewrites() {
+    let input = TempFile::new("lossy-rewrite", b"ok\nbad\xFF\xFEend\n");
+    let output = run_fxt(&["--lossy", "--upper", input.path_str()]);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, "OK\nBAD\u{FFFD}\u{FFFD}END\n".as_bytes());
+}
+
+#[test]
+fn lossy_leaves_the_rows_it_does_not_change_as_they_were() {
+    //read: `--grep` matches the repaired text, the row goes out unrepaired,
+    //like `grep -a`
+    let input = TempFile::new("lossy-keep", b"ok\nbad\xFF\n");
+    let output = run_fxt(&["--lossy", "-g", "bad", input.path_str()]);
+    assert_eq!(output.stdout, b"bad\xFF\n");
+
+    //a replacement that misses the row leaves the file unchanged...
+    let dry_run = run_fxt(&[
+        "--lossy",
+        "-i",
+        "--dry-run",
+        "-f",
+        "zz",
+        "-r",
+        "y",
+        input.path_str(),
+    ]);
+    let stdout = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(stdout.contains("unchanged"), "{stdout}");
+
+    //...and one that hits another row edits only that row
+    run_fxt_stdout(&["--lossy", "-i", "-f", "ok", "-r", "OK", input.path_str()]);
+    assert_eq!(fs::read(&input.path).unwrap(), b"OK\nbad\xFF\n");
+}
+
+#[test]
+fn lossy_decodes_other_encodings_with_replacement() {
+    //an unpaired surrogate in UTF-16LE, found by its BOM
+    let input = TempFile::new("lossy-utf16", b"\xFF\xFEa\x00\x00\xD8b\x00\n\x00");
+    let output = run_fxt(&[input.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        run_fxt_stdout(&["--lossy", input.path_str()]),
+        "a\u{FFFD}b\n"
+    );
+}
+
+#[test]
 fn output_is_encoded_as_asked() {
     let input = TempFile::new("to-cp1250", "Łódź\n");
     let output = run_fxt(&["--output-encoding", "windows-1250", input.path_str()]);

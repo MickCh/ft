@@ -11,13 +11,26 @@
 //! carry one — and an in-place edit puts it back. A UTF-16 BOM also
 //! settles the encoding, whatever was declared, as it does in a browser.
 //!
-//! Neither direction replaces what it cannot convert: an input that is
-//! not valid in its encoding, or a character the output encoding has no
-//! byte for, is an error — a silently substituted `?` or U+FFFD would be
-//! data lost without a word.
+//! Neither direction replaces what it cannot convert unless asked to: an
+//! input that is not valid in its encoding, or a character the output
+//! encoding has no byte for, is an error — a silently substituted `?` or
+//! U+FFFD would be data lost without a word. `--lossy` asks for it on the
+//! way in ([`Malformed::Replace`]); the way out stays strict, since a
+//! replacement there would be made up.
 
-use encoding_rs::{DecoderResult, Encoder, EncoderResult, Encoding, UTF_8, UTF_16BE, UTF_16LE};
+use encoding_rs::{
+    CoderResult, DecoderResult, Encoder, EncoderResult, Encoding, UTF_8, UTF_16BE, UTF_16LE,
+};
 use std::io::{self, Chain, Cursor, Read, Write};
+
+/// What becomes of input that is not valid in its encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Malformed {
+    /// It is an error.
+    Fail,
+    /// Each malformed sequence becomes U+FFFD.
+    Replace,
+}
 
 /// How an input turned out to be encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,9 +64,13 @@ impl<R: Read> Read for Decoded<R> {
 
 /// Open `reader` as UTF-8 text: take its BOM off, if any, and decode it
 /// from the encoding the BOM names — or, without one, from `declared`.
+/// UTF-8 passes through unchecked, malformed or not: the engine checks
+/// it row by row, and under `--lossy` replaces only in the rows it
+/// processes, so the rest keep their bytes.
 pub fn open<R: Read>(
     mut reader: R,
     declared: &'static Encoding,
+    malformed: Malformed,
 ) -> io::Result<(SourceEncoding, Decoded<R>)> {
     let mut head = Vec::with_capacity(LONGEST_BOM);
     //a read may return fewer bytes than asked for, so keep reading until
@@ -76,7 +93,7 @@ pub fn open<R: Read>(
         //already what the engine reads: no copy, no check — the engine
         //validates UTF-8 itself, row by row
         true => Decoded::Utf8(rest),
-        false => Decoded::Other(DecodeReader::new(rest, encoding)),
+        false => Decoded::Other(DecodeReader::new(rest, encoding, malformed)),
     };
     Ok((source, decoded))
 }
@@ -109,6 +126,7 @@ pub struct DecodeReader<R: Read> {
     inner: R,
     encoding: &'static Encoding,
     decoder: encoding_rs::Decoder,
+    malformed: Malformed,
     chunk: Vec<u8>,
     //decoded, not yet handed out: `decoded[position..]`
     decoded: Vec<u8>,
@@ -117,12 +135,13 @@ pub struct DecodeReader<R: Read> {
 }
 
 impl<R: Read> DecodeReader<R> {
-    fn new(inner: R, encoding: &'static Encoding) -> Self {
+    fn new(inner: R, encoding: &'static Encoding, malformed: Malformed) -> Self {
         Self {
             inner,
             encoding,
             //the BOM, if any, is already gone
             decoder: encoding.new_decoder_without_bom_handling(),
+            malformed,
             chunk: vec![0; CHUNK],
             decoded: Vec::new(),
             position: 0,
@@ -137,14 +156,34 @@ impl<R: Read> DecodeReader<R> {
         let last = read == 0;
         let input = &self.chunk[..read];
 
-        let capacity = self
-            .decoder
-            .max_utf8_buffer_length_without_replacement(input.len())
-            .ok_or_else(|| io::Error::other("input chunk too large to decode"))?;
+        let capacity = match self.malformed {
+            Malformed::Fail => self
+                .decoder
+                .max_utf8_buffer_length_without_replacement(input.len()),
+            Malformed::Replace => self
+                .decoder
+                .max_utf8_buffer_length(input.len()),
+        }
+        .ok_or_else(|| io::Error::other("input chunk too large to decode"))?;
         self.decoded.resize(capacity, 0);
-        let (result, _, written) = self
-            .decoder
-            .decode_to_utf8_without_replacement(input, &mut self.decoded, last);
+        let (result, written) = match self.malformed {
+            Malformed::Fail => {
+                let (result, _, written) = self
+                    .decoder
+                    .decode_to_utf8_without_replacement(input, &mut self.decoded, last);
+                (result, written)
+            }
+            Malformed::Replace => {
+                let (result, _, written, _) =
+                    self.decoder
+                        .decode_to_utf8(input, &mut self.decoded, last);
+                let result = match result {
+                    CoderResult::InputEmpty => DecoderResult::InputEmpty,
+                    CoderResult::OutputFull => DecoderResult::OutputFull,
+                };
+                (result, written)
+            }
+        };
         self.decoded.truncate(written);
         self.position = 0;
         self.finished = last;
@@ -155,7 +194,10 @@ impl<R: Read> DecodeReader<R> {
             DecoderResult::OutputFull => Err(io::Error::other("decoder ran out of room")),
             DecoderResult::Malformed(..) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("the input is not valid {}", self.encoding.name()),
+                format!(
+                    "the input is not valid {} (--lossy replaces it)",
+                    self.encoding.name()
+                ),
             )),
         }
     }
@@ -290,7 +332,7 @@ mod tests {
     use encoding_rs::{SHIFT_JIS, WINDOWS_1250};
 
     fn opened(input: &[u8], declared: &'static Encoding) -> io::Result<(SourceEncoding, Vec<u8>)> {
-        let (source, mut reader) = open(input, declared)?;
+        let (source, mut reader) = open(input, declared, Malformed::Fail)?;
         let mut text = Vec::new();
         reader.read_to_end(&mut text)?;
         Ok((source, text))
@@ -362,7 +404,7 @@ mod tests {
     #[test]
     fn a_bom_split_across_reads_is_still_found() {
         // Given a reader returning one byte at a time
-        let (source, mut reader) = open(Trickle(b"\xEF\xBB\xBFx"), UTF_8).unwrap();
+        let (source, mut reader) = open(Trickle(b"\xEF\xBB\xBFx"), UTF_8, Malformed::Fail).unwrap();
 
         // When
         let mut rest = Vec::new();
@@ -424,7 +466,7 @@ mod tests {
         // at a time, so characters are cut at every possible point
         let text = "日本語のテキスト\n".repeat(CHUNK / 8);
         let (bytes, _, _) = SHIFT_JIS.encode(&text);
-        let (_, mut reader) = open(Trickle(&bytes), SHIFT_JIS).unwrap();
+        let (_, mut reader) = open(Trickle(&bytes), SHIFT_JIS, Malformed::Fail).unwrap();
 
         // When
         let mut decoded = Vec::new();
@@ -452,6 +494,36 @@ mod tests {
                 .contains("not valid UTF-16LE"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn lossy_decoding_replaces_what_is_malformed() {
+        // Given an unpaired surrogate in UTF-16LE, read a byte at a time
+        let input = b"\xFF\xFEa\x00\x00\xD8b\x00\n\x00";
+        let (_, mut reader) = open(Trickle(input), UTF_8, Malformed::Replace).unwrap();
+
+        // When
+        let mut text = String::new();
+        reader
+            .read_to_string(&mut text)
+            .unwrap();
+
+        // Then it is one U+FFFD, and the rest decodes as before
+        assert_eq!(text, "a\u{FFFD}b\n");
+    }
+
+    #[test]
+    fn lossy_utf8_is_left_to_the_engine() {
+        // Given invalid UTF-8, which only the rows processed should repair
+        let input = b"a\xFFb\n";
+
+        // When opened lossily
+        let (_, mut reader) = open(&input[..], UTF_8, Malformed::Replace).unwrap();
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+
+        // Then the bytes pass through untouched
+        assert_eq!(bytes, input);
     }
 
     #[test]
