@@ -150,7 +150,14 @@ pub struct Config {
     pub join: Option<String>,
     //the summary to write instead of the processed rows
     pub summary: SummarySpec,
-    pub grep: Option<Pattern>,
+    //`--grep`, as often as given: a row matches any of them, or every
+    //one with `--all`
+    pub grep: Vec<Pattern>,
+    pub grep_all: bool,
+    //`--min-fields`: rows with fewer fields are filtered out
+    pub min_fields: Option<usize>,
+    //`--max-len`: rows longer than this are filtered out
+    pub max_len: Option<usize>,
     //`--from`/`--to`: rows addressed by content, matched as bytes so the
     //rows outside them never need to be UTF-8
     pub from_pattern: Option<BytePattern>,
@@ -244,7 +251,13 @@ impl Config {
     /// `--to`) — and so whether a run can find nothing to match, which
     /// the exit code reports, like grep's.
     pub fn filters_by_content(&self) -> bool {
-        self.grep.is_some() || self.from_pattern.is_some() || self.to_pattern.is_some()
+        self.has_patterns() || self.min_fields.is_some() || self.max_len.is_some()
+    }
+
+    /// Whether any pattern matches rows (`--grep`, `--from`, `--to`),
+    /// which is what `--ignore-case` can apply to.
+    fn has_patterns(&self) -> bool {
+        !self.grep.is_empty() || self.from_pattern.is_some() || self.to_pattern.is_some()
     }
 
     /// The files among the inputs, in order. With `--in-place` these are
@@ -273,9 +286,11 @@ impl TryFrom<ArgMatches> for Config {
             Pattern::new(source, ignore_case, syntax).map_err(ConfigError::InvalidRegex)
         };
         let grep = matches
-            .get_one::<String>("grep")
+            .get_many::<String>("grep")
+            .into_iter()
+            .flatten()
             .map(compile)
-            .transpose()?;
+            .collect::<Result<Vec<_>, _>>()?;
         let regex_mode = matches.get_flag("regex");
         let find_patterns = matches
             .get_many::<String>("find")
@@ -428,6 +443,13 @@ impl TryFrom<ArgMatches> for Config {
                     .cloned(),
             },
             grep,
+            grep_all: matches.get_flag("all"),
+            min_fields: matches
+                .get_one::<usize>("min-fields")
+                .copied(),
+            max_len: matches
+                .get_one::<usize>("max-len")
+                .copied(),
             from_pattern: row_pattern(&matches, "from", ignore_case, syntax)?,
             to_pattern: row_pattern(&matches, "to", ignore_case, syntax)?,
             invert: matches.get_flag("invert"),
@@ -468,7 +490,7 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::DeleteWithReorder);
         }
 
-        if config.ignore_case && config.replacements.is_empty() && !config.filters_by_content() {
+        if config.ignore_case && config.replacements.is_empty() && !config.has_patterns() {
             return Err(ConfigError::IgnoreCaseWithoutPattern);
         }
 
@@ -902,25 +924,13 @@ mod tests {
     #[test]
     fn grep_compiles_as_regex() {
         let config = config_from(&["fxt", "-g", "a+b", "input.txt"]).unwrap();
-        assert!(
-            config
-                .grep
-                .unwrap()
-                .is_match("aaab")
-                .unwrap()
-        );
+        assert!(config.grep[0].is_match("aaab").unwrap());
     }
 
     #[test]
     fn grep_honors_ignore_case() {
         let config = config_from(&["fxt", "--ignore-case", "-g", "abc", "input.txt"]).unwrap();
-        assert!(
-            config
-                .grep
-                .unwrap()
-                .is_match("ABC")
-                .unwrap()
-        );
+        assert!(config.grep[0].is_match("ABC").unwrap());
     }
 
     #[test]

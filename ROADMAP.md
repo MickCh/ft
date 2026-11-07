@@ -32,6 +32,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Regex backreferences** — `-P`/`--perl-regexp` compiles every regex with `fancy-regex` (backreferences, lookaround); the default stays the linear-time `regex`. Behind `pattern::Pattern`/`BytePattern`, so `--grep`, `--find`, `--from`/`--to` share it. A backtracking match can fail at run time, so `LinePredicate::matches`, `LineTransform::apply` and `PatternRange::admits` now return `io::Result` — the failure ends the run instead of reading as a miss. *(2026-11-06 comparison)*
 - ✅ **Grapheme columns** — `--graphemes` counts char columns and `--wrap` widths in grapheme clusters (`unicode-segmentation`). A `ColumnSpan::Graphemes` resolves its columns to char ranges per line, as field mode does, so not one char helper in `text.rs` changed; ASCII lines without a CRLF borrow the ranges as they are. *(2026-11-06 comparison)*
 - ✅ **More summaries** — `--median` (exact for integers: halves added back rather than a sum that may overflow), `--distinct`, `--first`, `--last`, per group too: four more `Aggregate`/`Accumulator` variants, no engine change. The text ones read `select_canonical`, like `--group-by`.
+- ✅ **More predicates** — `--grep` repeatable (`GrepPredicate::any_of`/`all_of`, `--all`), `MinFields` (`--min-fields`, counting no further than it needs: `FieldSpan::count_fields`), `MaxLength` (`--max-len`); `AllOf` joins whatever filters are given. They count as content filters for the exit code and `--quiet`.
 - ✅ **`--encode` / `--decode`** — `codec::Codec` (base64, hex, url, by hand: a few lines each, held by a round-trip property), applied per cell by `CodecColumns` through `text::try_map_cells`. Decoding is fallible twice over: the codec, then UTF-8, which `--lossy` repairs.
 - ✅ **`--expand` / `--unexpand`** — two more `MapColumns` constructors; the mapping became a boxed closure so it can carry the tab size. A property holds `unexpand` to changing nothing `expand` would show.
 - ✅ **`--reverse-chars`** — one more `MapColumns` constructor (two: by chars, by grapheme clusters).
@@ -45,9 +46,7 @@ Implemented in the order suggested below, one commit per item:
 
 ## 1. Free slots: a new `LineTransform` / `LinePredicate` (no engine changes)
 
-Each is one new type plus one branch in `compose::build_pipeline`:
-
-- New predicates: `--min-fields N`, `--max-len N`, a repeatable `--grep` with AND/OR
+Each is one new type plus one branch in `compose::build_pipeline` (or `build_predicate`). None are queued at the moment; candidates that would fit: `--min-len`/`--max-fields` (the other bounds), `--center`, `--rot13`.
 
 ## 2. Still open
 

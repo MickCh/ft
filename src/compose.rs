@@ -5,10 +5,10 @@
 //! CLI layer never constructs engine internals itself.
 
 use crate::cli_args::{Config, FindPattern, ReorderMode, Replacement};
-use crate::columns::{ColumnList, ColumnSpan};
+use crate::columns::{ColumnList, ColumnSpan, FieldSpan};
 use crate::file_processor::{FileProcessor, Reorder, RowMode, SortSpec};
 use crate::pattern_range::PatternRange;
-use crate::predicate::{GrepPredicate, LinePredicate};
+use crate::predicate::{AllOf, GrepPredicate, LinePredicate, MaxLength, MinFields};
 use crate::reduce::{Aggregate, Join, LineReducer, Summarize};
 use crate::transform::{
     CodecColumns, DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, PadColumns,
@@ -167,15 +167,31 @@ fn build_reorder(config: &Config, cols: &mut ColumnClaims) -> Option<Reorder> {
     })
 }
 
-/// Build the row filter implied by the configuration, if any.
+/// Build the row filter implied by the configuration, if any: every
+/// filter given, each narrowing the others.
 fn build_predicate(config: &Config, cols: &mut ColumnClaims) -> Option<Box<dyn LinePredicate>> {
-    config.grep.as_ref().map(|pattern| {
-        Box::new(GrepPredicate::new(
-            pattern.clone(),
-            cols.key_or_cols(&config.grep_key),
-            config.invert,
-        )) as Box<dyn LinePredicate>
-    })
+    let mut predicates: Vec<Box<dyn LinePredicate>> = Vec::new();
+    if !config.grep.is_empty() {
+        let patterns = config.grep.clone();
+        let span = cols.key_or_cols(&config.grep_key);
+        predicates.push(Box::new(match config.grep_all {
+            true => GrepPredicate::all_of(patterns, span, config.invert),
+            false => GrepPredicate::any_of(patterns, span, config.invert),
+        }));
+    }
+    if let (Some(min), Some(delimiter)) = (config.min_fields, &config.field_delimiter) {
+        let mut spec = FieldSpan::new(delimiter.clone(), ColumnList::from(1..=1));
+        spec.quoted = config.quoted;
+        predicates.push(Box::new(MinFields::new(spec, min)));
+    }
+    if let Some(max) = config.max_len {
+        predicates.push(Box::new(MaxLength::new(max, config.graphemes)));
+    }
+    match predicates.len() {
+        0 => None,
+        1 => predicates.pop(),
+        _ => Some(Box::new(AllOf(predicates))),
+    }
 }
 
 /// Build the per-line transform pipeline implied by the configuration.
@@ -554,9 +570,9 @@ mod tests {
     #[test]
     fn grep_keeps_only_matching_lines() {
         let mut config = Config::default();
-        config.grep = Some(
+        config.grep = vec![
             crate::pattern::Pattern::new("ERROR", false, crate::pattern::Syntax::Linear).unwrap(),
-        );
+        ];
 
         let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
         assert_eq!(result, "a ERROR\nc ERROR\n");
@@ -566,9 +582,9 @@ mod tests {
     fn grep_with_delete_removes_matching_lines() {
         let mut config = Config::default();
         config.delete = true;
-        config.grep = Some(
+        config.grep = vec![
             crate::pattern::Pattern::new("ERROR", false, crate::pattern::Syntax::Linear).unwrap(),
-        );
+        ];
 
         let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
         assert_eq!(result, "b INFO\n");
@@ -578,9 +594,9 @@ mod tests {
     fn grep_filters_within_row_range_only() {
         let mut config = Config::default();
         config.rows = Some((1..=2).into());
-        config.grep = Some(
+        config.grep = vec![
             crate::pattern::Pattern::new("keep", false, crate::pattern::Syntax::Linear).unwrap(),
-        );
+        ];
 
         //row 3 matches but lies outside the selected rows
         let result = run(config, "keep a\ndrop b\nkeep c\n");
@@ -592,7 +608,7 @@ mod tests {
         let mut config = Config::default();
         config.reorder = sorted(false, false);
         config.grep =
-            Some(crate::pattern::Pattern::new("x", false, crate::pattern::Syntax::Linear).unwrap());
+            vec![crate::pattern::Pattern::new("x", false, crate::pattern::Syntax::Linear).unwrap()];
 
         let result = run(config, "bx\nc\nax\n");
         assert_eq!(result, "ax\nbx\n");
@@ -859,9 +875,9 @@ mod tests {
     fn join_folds_only_the_rows_that_survive_the_filters() {
         let mut config = Config::default();
         config.join = Some(",".to_owned());
-        config.grep = Some(
+        config.grep = vec![
             crate::pattern::Pattern::new("keep", false, crate::pattern::Syntax::Linear).unwrap(),
-        );
+        ];
 
         let result = run(config, "keep a\ndrop b\nkeep c\n");
         assert_eq!(result, format!("keep a,keep c{NEW_LINE}"));
@@ -905,9 +921,9 @@ mod tests {
     fn count_counts_only_the_rows_that_survive_the_filters() {
         let mut config = Config::default();
         config.summary.count = true;
-        config.grep = Some(
+        config.grep = vec![
             crate::pattern::Pattern::new("ERROR", false, crate::pattern::Syntax::Linear).unwrap(),
-        );
+        ];
 
         //a reducer sees the rows the pipeline let through, no others
         let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
@@ -1175,9 +1191,9 @@ mod tests {
         //read, since the predicate runs before any transform
         let mut config = Config::default();
         config.field_delimiter = Some(",".to_owned());
-        config.grep = Some(
+        config.grep = vec![
             crate::pattern::Pattern::new("ERROR", false, crate::pattern::Syntax::Linear).unwrap(),
-        );
+        ];
         config.grep_key = Some((1..=1).into());
         config.cols = Some((2..=2).into());
 

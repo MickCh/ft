@@ -359,6 +359,63 @@ fn a_failure_exits_with_two() {
 }
 
 #[test]
+fn several_greps_match_any_or_with_all_every_one() {
+    let input = TempFile::new("greps", "a b\na\nb\nc\n");
+    assert_eq!(
+        run_fxt_stdout(&["-g", "a", "-g", "b", input.path_str()]),
+        "a b\na\nb\n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&["-g", "a", "-g", "b", "--all", input.path_str()]),
+        "a b\n"
+    );
+    //--invert flips the combined match: rows that do not have both
+    assert_eq!(
+        run_fxt_stdout(&["-g", "a", "-g", "b", "--all", "-v", input.path_str()]),
+        "a\nb\nc\n"
+    );
+}
+
+#[test]
+fn min_fields_and_max_len_filter_rows() {
+    let input = TempFile::new("min-fields", "a,b,c\na,b\n\"x,y\",z,w\n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "--quoted", "--min-fields", "3", input.path_str()]),
+        "a,b,c\n\"x,y\",z,w\n"
+    );
+    //with --delete they choose what goes
+    assert_eq!(
+        run_fxt_stdout(&["-d", "-F", ",", "--min-fields", "3", input.path_str()]),
+        "a,b\n"
+    );
+    //filters given together narrow each other down
+    assert_eq!(
+        run_fxt_stdout(&["--max-len", "5", "-g", "b", input.path_str()]),
+        "a,b,c\na,b\n"
+    );
+
+    //like --grep, a filter that keeps nothing exits with 1
+    let output = run_fxt(&["--max-len", "2", input.path_str()]);
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn min_fields_requires_fields_and_all_requires_grep() {
+    assert_eq!(
+        run_fxt_with_stdin(&["--min-fields", "2"], "a\n")
+            .status
+            .code(),
+        Some(2)
+    );
+    assert_eq!(
+        run_fxt_with_stdin(&["--all"], "a\n")
+            .status
+            .code(),
+        Some(2)
+    );
+}
+
+#[test]
 fn quiet_answers_with_the_exit_code_alone() {
     let input = TempFile::new("quiet", "a ERROR\nb INFO\n");
 

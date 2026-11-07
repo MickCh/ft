@@ -73,6 +73,12 @@ pub struct FieldSpan {
 }
 
 impl FieldSpan {
+    /// How many fields `line` has, split as this span splits it — counting
+    /// no further than `limit`, which is all a lower bound needs to know.
+    pub fn count_fields(&self, line: &str, limit: usize) -> usize {
+        field_positions(line, self, limit).len()
+    }
+
     /// Field mode with the input delimiter reused on output and no
     /// quoting, which is what a plain `--fields` asks for.
     pub fn new(delimiter: impl Into<String>, fields: ColumnList) -> FieldSpan {

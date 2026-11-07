@@ -7,6 +7,8 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 ### Added
 
 - `--lossy`: input that is not valid in its encoding no longer fails the run; each malformed sequence becomes U+FFFD. Invalid UTF-8 is repaired only in the rows `fxt` actually rewrites — a row passed through, filtered in, or left as it was by every transform keeps its bytes, so `--lossy -i` changes no more of a file than the edit itself.
+- `--grep` is repeatable: a row matches any of the patterns, or every one with `--all`.
+- `--min-fields <n>` and `--max-len <n>`: keep the rows with at least `n` fields, or at most `n` characters; content filters like `--grep`, with its exit codes.
 - `--encode <codec>` / `--decode <codec>`: base64, hex and URL percent encoding of the column range, each field on its own; invalid input fails the run, decoded bytes that are not UTF-8 too unless `--lossy`.
 - `--expand[=<tabsize>]` / `--unexpand[=<tabsize>]`: tabs to spaces and back within the column range, like `expand` and `unexpand -a`.
 - `--reverse-chars`: reverse the column range, like `rev` (grapheme clusters under `--graphemes`).

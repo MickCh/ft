@@ -57,8 +57,9 @@ pub fn cli() -> Command {
                 .value_parser(parse_delimiter)
                 .help("Treat the column ranges as fields separated by this delimiter (requires a column range)"),
         )
-        //--fields needs some column range to interpret, but any of the
-        //three will do, so they form one group it can require
+        //--fields needs something that counts in fields — a column range,
+        //or --min-fields — but any of them will do, so they form one
+        //group it can require
         .group(
             ArgGroup::new("column-ranges")
                 .args([
@@ -75,6 +76,7 @@ pub fn cli() -> Command {
                     "first",
                     "last",
                     "group-by",
+                    "min-fields",
                 ])
                 .multiple(true),
         )
@@ -194,7 +196,33 @@ pub fn cli() -> Command {
                 .short('g')
                 .long("grep")
                 .required(false)
-                .help("Keep only rows matching this regex (with --delete: delete them)"),
+                .action(ArgAction::Append)
+                .help("Keep only rows matching this regex (with --delete: delete them); repeatable, any matches unless --all"),
+        )
+        .arg(
+            Arg::new("all")
+                .long("all")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .requires("grep")
+                .help("With several --grep, a row must match every one of them (requires --grep)"),
+        )
+        .arg(
+            Arg::new("min-fields")
+                .long("min-fields")
+                .required(false)
+                .value_name("N")
+                .requires("fields")
+                .value_parser(parse_width)
+                .help("Keep only rows with at least N fields (requires --fields)"),
+        )
+        .arg(
+            Arg::new("max-len")
+                .long("max-len")
+                .required(false)
+                .value_name("N")
+                .value_parser(value_parser!(usize))
+                .help("Keep only rows at most N characters long"),
         )
         .arg(
             Arg::new("from")
@@ -215,7 +243,7 @@ pub fn cli() -> Command {
         //what --quiet can ask about: a filter by content
         .group(
             ArgGroup::new("content-filters")
-                .args(["grep", "from", "to"])
+                .args(["grep", "from", "to", "min-fields", "max-len"])
                 .multiple(true),
         )
         .arg(
@@ -724,7 +752,8 @@ fn parse_codec(input: &str) -> Result<Codec, String> {
         .ok_or_else(|| format!("Unknown codec `{input}`: expected base64, hex or url"))
 }
 
-/// Parse a width (`--wrap`, `--pad-left`, `--pad-right`, a tab size): a wrapping
+/// Parse a width (`--wrap`, `--pad-left`, `--pad-right`, a tab size,
+/// `--min-fields`): a wrapping
 /// width of 0 would cut the line into infinitely many empty chunks, and
 /// padding to 0 would do nothing, so at least one char is required.
 fn parse_width(input: &str) -> Result<usize, String> {

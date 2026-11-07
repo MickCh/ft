@@ -31,7 +31,10 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 | `-u, --unique` | Drop duplicate rows, comparing the column range (first wins) |
 | `--unique-key <range>` | Columns keying `--unique`, instead of `--cols` (requires `--unique`) |
 | `--grep-key <range>` | Columns `--grep` matches in, instead of `--cols` (requires `--grep`) |
-| `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them) |
+| `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them); repeatable: rows matching any of them |
+| `--all` | With several `--grep`, keep only rows matching every one (requires `--grep`) |
+| `--min-fields <n>` | Keep only rows with at least `<n>` fields (requires `--fields`) |
+| `--max-len <n>` | Keep only rows at most `<n>` characters long |
 | `--from <regex>` | Rows from each line matching the regex… (like `sed '/A/,/B/'`) |
 | `--to <regex>` | …through the next line matching this one; alone, from the first line |
 | `--invert` | Invert the `--grep` match, like `grep -v` (requires `--grep`) |
@@ -92,6 +95,8 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 - Find/replace only replaces occurrences that lie entirely inside the column range.
 - `--find` and `--replace` may be repeated to run several substitutions: the *n*-th `--find` pairs with the *n*-th `--replace`, and the pairs apply left to right, so a later pair can rewrite what an earlier one produced. Every `--find` must have its own `--replace` and vice versa (a lone `--find` is rejected — use `--grep` to filter rows by content instead).
 - `--grep` filters rows by content, complementing the positional row range: only rows inside `--rows` *and* matching the pattern are processed. With `--delete`, matching rows are deleted instead. The match is scoped to the column range.
+- `--grep` may be given several times: a row then matches when any of the patterns does, like `grep -e A -e B`, or — with `--all` — only when every one does, in any order (`-g ERROR -g disk --all`). `--invert` turns the combined answer around, so `-g a -g b --all -v` keeps the rows that lack at least one of them.
+- `--min-fields <n>` keeps the rows that have at least `<n>` fields, split as `--fields` splits them (`--quoted` included; an empty line is one empty field), and `--max-len <n>` the rows at most `<n>` characters long (grapheme clusters under `--graphemes`), measured without the line terminator. They are content filters like `--grep`: they combine with it and with each other (a row must pass all of them), with `--delete` they pick the rows to delete, and when nothing passes the exit code is 1, and `fxt -d --max-len 120 notes.md` prints the lines that are too long.
 - Regular expressions (`--grep`, `--regex --find`, `--from`, `--to`) use the `regex` crate by default, which matches in time linear in the input whatever the pattern — and so has no backreferences or lookaround. `-P` switches all of them to a backtracking engine (`fancy-regex`) that has both: `(.)\1`, `(?<=\$)\d+`, `(?!draft)`. Capture groups in a replacement are written `$1` or `${name}` either way. A pattern that backtracks without end gives up after a million steps; that is an error (exit code 2), never a silent miss.
 - `--from`/`--to` address rows by content, like `sed '/START/,/END/'`: a block runs from a line matching `--from` through the next line matching `--to`, both included. The end is looked for from the line *after* the start, so `--from '^\[db' --to '^\['` takes the `[db]` section up to and including the next header, and once a block ends the next `--from` match opens another — every block is selected. `--from` alone runs to the end of the input; `--to` alone runs from the first line through the first match (which may be the first line itself, like `sed 0,/END/`). Blocks combine with the other filters: a row is processed when it lies in `--rows` *and* in a block *and* matches `--grep`, so `--rows` and `--grep` narrow a block rather than extend it. The patterns see whole lines (not the column range), honour `--ignore-case`, and are matched as bytes, so rows outside every block pass through even if they are not valid UTF-8.
 - `--upper`, `--lower`, `--title-case`, `--squeeze` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`. `--squeeze` runs before `--trim`, so `--squeeze --trim` normalizes the whitespace of a line completely.
@@ -153,8 +158,8 @@ Like `grep`:
 
 | Code | Meaning |
 |---|---|
-| `0` | Rows matched (a run without `--grep`, `--from` or `--to` has nothing that could fail to match, so it always succeeds) |
-| `1` | `--grep`, `--from` or `--to` was given and no row matched |
+| `0` | Rows matched (a run without a content filter — `--grep`, `--from`, `--to`, `--min-fields`, `--max-len` — has nothing that could fail to match, so it always succeeds) |
+| `1` | A content filter was given and no row matched |
 | `2` | The run failed (bad arguments, unreadable file, …) |
 
 A row counts as matched when it lies inside `--rows` *and* satisfies the filter — including the rows a `--delete` removed, since matching is why they went. `--quiet` writes nothing at all and leaves only the exit code, stopping at the first match (`grep -q`), which makes `fxt` usable as a condition:
@@ -257,6 +262,14 @@ fxt -F , --group-by 1 --median 3 --distinct 2 --last 4 data.csv
 # Drop blank lines; drop rows left empty by cutting a column
 fxt --trim --drop-empty input.txt
 fxt -C 3 --drop-empty input.txt
+
+# Rows with ERROR or WARN; rows with both "disk" and "full"; CSV rows with all 5 fields
+fxt -g ERROR -g WARN app.log
+fxt -g disk -g full --all app.log
+fxt -F , --quoted --min-fields 5 data.csv
+
+# Lines longer than 100 characters (delete the ones that fit)
+fxt -d --max-len 100 notes.md
 
 # Keep only rows containing ERROR; delete rows that match a pattern
 fxt -g ERROR app.log
