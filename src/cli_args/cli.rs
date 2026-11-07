@@ -3,7 +3,9 @@ use clap_complete::Shell;
 use std::ops::RangeInclusive;
 
 use crate::columns::ColumnList;
+use crate::encoding;
 use crate::ranges::{RangeBound, RangeSpec};
+use encoding_rs::Encoding;
 
 pub fn cli() -> Command {
     Command::new(crate_name!())
@@ -406,6 +408,28 @@ pub fn cli() -> Command {
                 .help("Output filename"),
         )
         .arg(
+            Arg::new("encoding")
+                .long("encoding")
+                .required(false)
+                .value_name("ENCODING")
+                .value_parser(parse_encoding)
+                .help(
+                    "Encoding of the inputs, e.g. windows-1250, latin1, utf-16le \
+                     (default utf-8; a UTF-16 or UTF-8 byte order mark overrides it)",
+                ),
+        )
+        .arg(
+            Arg::new("output-encoding")
+                .long("output-encoding")
+                .required(false)
+                .value_name("ENCODING")
+                .value_parser(parse_output_encoding)
+                .help(
+                    "Encoding of the output (default utf-8; with --in-place, \
+                     each file's own encoding)",
+                ),
+        )
+        .arg(
             Arg::new("in-place")
                 .short('i')
                 .long("in-place")
@@ -528,6 +552,21 @@ fn parse_delimiter(input: &str) -> Result<String, String> {
 
 /// Parse a backup suffix: an empty one would name the file itself, so
 /// the backup would be the very file about to be overwritten.
+/// Parse an encoding label, as the WHATWG Encoding Standard names them
+/// (`windows-1250`, `latin1`, `utf-16le`, `shift_jis`, …).
+fn parse_encoding(input: &str) -> Result<&'static Encoding, String> {
+    Encoding::for_label(input.as_bytes()).ok_or_else(|| format!("Unknown encoding `{input}`"))
+}
+
+/// Parse an encoding the output can be written in.
+fn parse_output_encoding(input: &str) -> Result<&'static Encoding, String> {
+    let encoding = parse_encoding(input)?;
+    match encoding::can_encode(encoding) {
+        true => Ok(encoding),
+        false => Err(format!("Text cannot be written in `{input}`")),
+    }
+}
+
 fn parse_suffix(input: &str) -> Result<String, String> {
     if input.is_empty() {
         return Err("The backup suffix cannot be empty".to_owned());

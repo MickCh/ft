@@ -6,9 +6,11 @@ use std::process::ExitCode;
 
 use clap_complete::Shell;
 
-use fxt::bom::{UTF8_BOM, WithoutBom, strip_bom};
+use encoding_rs::{Encoding, UTF_8};
+
 use fxt::cli_args::{Config, InPlace, Input, cli};
 use fxt::compose;
+use fxt::encoding::{self, Decoded, EncodeWriter, SourceEncoding};
 use fxt::error::AppError;
 use fxt::file_processor::RunOutcome;
 
@@ -102,16 +104,16 @@ fn report_changes(config: &Config, path: &Path) -> Result<RunOutcome, AppError> 
     //the file is read twice: once as the input, once as what the result
     //is compared against
     let mut comparison = CompareWriter::new(open_file(path)?);
-    let (had_bom, reader) = open_without_bom(path)?;
-    //the edit would put the mark back, so the comparison expects it too
-    if had_bom {
-        comparison
-            .write_all(UTF8_BOM)
-            .map_err(AppError::Processing)?;
-    }
-    let outcome = process(config, BufReader::new(reader), &mut comparison)?;
+    let (source, reader) = open_decoded(config, path)?;
+    //the edit would put the mark back and encode the result as the file
+    //is, so the comparison expects both too
+    let target = in_place_encoding(config, source);
+    write_bom(source, target, &mut comparison)?;
+    let mut writer = encoded(target, comparison);
+    let outcome = process(config, BufReader::new(reader), &mut writer)?;
 
-    let verdict = if comparison
+    let verdict = if writer
+        .get_mut()
         .differs()
         .map_err(AppError::Processing)?
     {
@@ -141,7 +143,7 @@ fn run_streaming(config: &Config) -> Result<RunOutcome, AppError> {
 
     let reader = open_inputs(config)?;
 
-    let mut writer: Box<dyn Write> = match (&config.output_filename, config.quiet) {
+    let destination: Box<dyn Write> = match (&config.output_filename, config.quiet) {
         //--quiet asks only whether anything matched: the answer is the
         //exit code, and the rows themselves go nowhere
         (_, true) => Box::new(std::io::sink()),
@@ -150,10 +152,14 @@ fn run_streaming(config: &Config) -> Result<RunOutcome, AppError> {
                 path: path.clone(),
                 source,
             })?;
-            Box::new(BufWriter::new(file))
+            Box::new(file)
         }
-        (None, _) => Box::new(BufWriter::new(std::io::stdout())),
+        (None, _) => Box::new(std::io::stdout()),
     };
+    //buffered in front of the encoder, which then gets large writes to
+    //convert rather than every short piece the engine writes
+    let target = config.output_encoding.unwrap_or(UTF_8);
+    let mut writer = BufWriter::new(encoded(target, destination));
 
     process(config, reader, &mut writer)
 }
@@ -165,9 +171,11 @@ fn run_streaming(config: &Config) -> Result<RunOutcome, AppError> {
 /// link being replaced by a regular file. The temporary file inherits
 /// the original's permissions and is synced to disk before the swap.
 fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunOutcome, AppError> {
-    //the BOM is taken off for processing and put back below: the edited
-    //file stays encoded as it was
-    let (had_bom, reader) = open_without_bom(path)?;
+    //the BOM is taken off for processing and put back below, and the
+    //result encoded as the input was: the edited file stays encoded as
+    //it was, unless --output-encoding converts it
+    let (source, reader) = open_decoded(config, path)?;
+    let target = in_place_encoding(config, source);
     let reader = BufReader::new(reader);
     //resolve symlinks so the rename below swaps out the link's target,
     //not the link itself (which would turn it into a regular file)
@@ -187,18 +195,11 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
         source,
     })?;
 
-    let mut writer = BufWriter::new(temp_file);
+    let mut writer = BufWriter::new(encoded(target, temp_file));
 
     //finish writing and match the original permissions before renaming,
     //so the temp file holds the whole output and the right mode
-    let bom_written = if had_bom {
-        writer
-            .write_all(UTF8_BOM)
-            .map_err(AppError::Processing)
-    } else {
-        Ok(())
-    };
-    let result = bom_written
+    let result = write_bom(source, target, writer.get_mut().get_mut())
         .and_then(|()| process(config, reader, &mut writer))
         .and_then(|outcome| {
             writer
@@ -210,6 +211,7 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
             //durability: sync so a crash right after the swap cannot
             //leave an empty or truncated file behind
             writer
+                .get_ref()
                 .get_ref()
                 .sync_all()
                 .map_err(|source| replace_error(path, source))?;
@@ -280,10 +282,11 @@ fn open_inputs(config: &Config) -> Result<Box<dyn BufRead>, AppError> {
     for input in &config.inputs {
         readers.push(match input {
             Input::Stdin => {
-                let (_, reader) = strip_bom(std::io::stdin()).map_err(AppError::Processing)?;
+                let (_, reader) = encoding::open(std::io::stdin(), config.input_encoding())
+                    .map_err(AppError::Processing)?;
                 Box::new(reader)
             }
-            Input::File(path) => Box::new(open_without_bom(path)?.1),
+            Input::File(path) => Box::new(open_decoded(config, path)?.1),
         });
     }
 
@@ -297,11 +300,81 @@ fn open_inputs(config: &Config) -> Result<Box<dyn BufRead>, AppError> {
     Ok(Box::new(BufReader::new(chained)))
 }
 
-/// Open `path` with its BOM, if any, taken off — and say whether it had
-/// one. Unbuffered: the caller buffers whatever reader it ends up with.
-fn open_without_bom(path: &Path) -> Result<(bool, WithoutBom<File>), AppError> {
+/// Open `path` as UTF-8 text, with its BOM, if any, taken off — and say
+/// how it was encoded. Unbuffered: the caller buffers whatever reader it
+/// ends up with.
+fn open_decoded(config: &Config, path: &Path) -> Result<(SourceEncoding, Decoded<File>), AppError> {
     let file = File::open(path).map_err(|source| open_error(path, source))?;
-    strip_bom(file).map_err(|source| open_error(path, source))
+    encoding::open(file, config.input_encoding()).map_err(|source| open_error(path, source))
+}
+
+/// What an edited file is written back in: `--output-encoding`, or else
+/// the encoding it was read in, so editing a file never converts it.
+fn in_place_encoding(config: &Config, source: SourceEncoding) -> &'static Encoding {
+    config
+        .output_encoding
+        .unwrap_or(source.encoding)
+}
+
+/// Put back the byte order mark the file started with, in the form of
+/// the encoding it is written in (none, for one that has no mark).
+fn write_bom<W: Write>(
+    source: SourceEncoding,
+    target: &'static Encoding,
+    writer: &mut W,
+) -> Result<(), AppError> {
+    if !source.bom {
+        return Ok(());
+    }
+    writer
+        .write_all(encoding::bom_of(target))
+        .map_err(AppError::Processing)
+}
+
+/// A writer in `encoding`: UTF-8, which is what the engine writes, goes
+/// straight through; anything else is encoded on the way.
+enum Encoded<W: Write> {
+    Utf8(W),
+    Other(EncodeWriter<W>),
+}
+
+fn encoded<W: Write>(target: &'static Encoding, writer: W) -> Encoded<W> {
+    match target == UTF_8 {
+        true => Encoded::Utf8(writer),
+        false => Encoded::Other(EncodeWriter::new(writer, target)),
+    }
+}
+
+impl<W: Write> Encoded<W> {
+    fn get_ref(&self) -> &W {
+        match self {
+            Encoded::Utf8(writer) => writer,
+            Encoded::Other(writer) => writer.get_ref(),
+        }
+    }
+
+    fn get_mut(&mut self) -> &mut W {
+        match self {
+            Encoded::Utf8(writer) => writer,
+            Encoded::Other(writer) => writer.get_mut(),
+        }
+    }
+}
+
+impl<W: Write> Write for Encoded<W> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Encoded::Utf8(writer) => writer.write(data),
+            Encoded::Other(writer) => writer.write(data),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Encoded::Utf8(writer) => writer.flush(),
+            Encoded::Other(writer) => writer.flush(),
+        }
+    }
 }
 
 fn open_error(path: &Path, source: std::io::Error) -> AppError {

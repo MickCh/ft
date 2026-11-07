@@ -11,7 +11,7 @@ struct TempFile {
 }
 
 impl TempFile {
-    fn new(name: &str, content: &str) -> TempFile {
+    fn new(name: &str, content: impl AsRef<[u8]>) -> TempFile {
         let path = std::env::temp_dir().join(format!("fxt-test-{}-{}", std::process::id(), name));
         fs::write(&path, content).expect("failed to write test input file");
         TempFile { path }
@@ -1610,6 +1610,138 @@ fn dry_run_does_not_count_the_bom_as_a_change() {
         input.path_str(),
     ]);
     assert!(stdout.contains("unchanged"), "{stdout:?}");
+}
+
+/// "Łódź;żółw\nZażółć;gęślą\n" in windows-1250.
+const CP1250: &[u8] = b"\xA3\xF3d\x9F;\xBF\xF3\xB3w\nZa\xBF\xF3\xB3\xE6;g\xEA\x9Cl\xB9\n";
+
+/// `text` in UTF-16LE, with its byte order mark.
+fn utf16le_with_bom(text: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(
+        text.encode_utf16()
+            .flat_map(u16::to_le_bytes),
+    );
+    bytes
+}
+
+#[test]
+fn a_declared_encoding_is_decoded_into_utf8() {
+    let input = TempFile::new("cp1250", CP1250);
+    let stdout = run_fxt_stdout(&[
+        "--encoding",
+        "windows-1250",
+        "-F",
+        ";",
+        "-C",
+        "2",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "żółw\ngęślą\n");
+}
+
+#[test]
+fn an_undeclared_legacy_encoding_still_fails_as_utf8() {
+    let input = TempFile::new("cp1250-undeclared", CP1250);
+    let output = run_fxt(&[input.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not valid UTF-8"), "{stderr}");
+}
+
+#[test]
+fn utf16_is_recognized_by_its_bom() {
+    let input = TempFile::new("utf16", utf16le_with_bom("b\na\nc\n"));
+    assert_eq!(run_fxt_stdout(&["-s", input.path_str()]), "a\nb\nc\n");
+}
+
+#[test]
+fn in_place_keeps_the_file_encoding() {
+    //a legacy encoding, declared
+    let legacy = TempFile::new("cp1250-in-place", CP1250);
+    run_fxt_stdout(&["-i", "--encoding", "cp1250", "--upper", legacy.path_str()]);
+    let expected = b"\xA3\xD3D\x8F;\xAF\xD3\xA3W\nZA\xAF\xD3\xA3\xC6;G\xCA\x8CL\xA5\n";
+    assert_eq!(fs::read(&legacy.path).unwrap(), expected);
+
+    //UTF-16, found by its mark, which is written back
+    let utf16 = TempFile::new("utf16-in-place", utf16le_with_bom("b\na\n"));
+    run_fxt_stdout(&["-i", "-s", utf16.path_str()]);
+    assert_eq!(fs::read(&utf16.path).unwrap(), utf16le_with_bom("a\nb\n"));
+}
+
+#[test]
+fn in_place_with_an_output_encoding_converts_the_file() {
+    let input = TempFile::new("cp1250-convert", CP1250);
+    run_fxt_stdout(&[
+        "-i",
+        "--encoding",
+        "windows-1250",
+        "--output-encoding",
+        "utf-8",
+        "-R",
+        "1-",
+        input.path_str(),
+    ]);
+    assert_eq!(
+        fs::read_to_string(&input.path).unwrap(),
+        "Łódź;żółw\nZażółć;gęślą\n"
+    );
+}
+
+#[test]
+fn output_is_encoded_as_asked() {
+    let input = TempFile::new("to-cp1250", "Łódź\n");
+    let output = run_fxt(&["--output-encoding", "windows-1250", input.path_str()]);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"\xA3\xF3d\x9F\n");
+}
+
+#[test]
+fn a_character_the_output_encoding_lacks_fails() {
+    let input = TempFile::new("unmappable", "ok\n日本\n");
+    let output = run_fxt(&["--output-encoding", "windows-1250", input.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("'日' (U+65E5) cannot be written in windows-1250"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_failed_conversion_leaves_the_file_alone() {
+    let input = TempFile::new("unmappable-in-place", "ok\n日本\n");
+    let output = run_fxt(&["-i", "--output-encoding", "latin1", input.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(fs::read_to_string(&input.path).unwrap(), "ok\n日本\n");
+}
+
+#[test]
+fn dry_run_compares_in_the_file_encoding() {
+    let input = TempFile::new("cp1250-dry-run", CP1250);
+    let stdout = run_fxt_stdout(&[
+        "-i",
+        "--dry-run",
+        "--encoding",
+        "windows-1250",
+        "-f",
+        "nothing",
+        "-r",
+        "x",
+        input.path_str(),
+    ]);
+    assert!(stdout.contains("unchanged"), "{stdout:?}");
+}
+
+#[test]
+fn unknown_encodings_are_rejected() {
+    let output = run_fxt(&["--encoding", "klingon", "-"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Unknown encoding `klingon`"));
+
+    let output = run_fxt(&["--output-encoding", "replacement", "-"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be written"));
 }
 
 #[test]

@@ -35,6 +35,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
 - ✅ **Quoted `--unique` keys** — `--unique` keys on `select_canonical` too, so under `--quoted` `"a"` and `a` are duplicates, as they are one `--group-by` group.
 - ✅ **Quoted text-sort keys** — the text sort reads `select_value` like the numeric one, so under `--quoted` `"b"` sorts between `a` and `c` instead of first, on its quote. With `--group-by`, `--unique` and the numeric sort, every key under `--quoted` now reads field values.
+- ✅ **Encodings** — `--encoding <label>` decodes the inputs from any WHATWG encoding (`encoding_rs`), a UTF-16/UTF-8 BOM settles it by itself, and `--output-encoding` writes the output in one. `--in-place` writes each file back as it was read (BOM included) unless `--output-encoding` converts it. Undecodable input and unmappable output are errors, never replacements. Done at the edges (`encoding::open`, `EncodeWriter`), so the engine stays UTF-8 only.
 - ✅ **Pattern-addressed rows** — `--from`/`--to`, `sed '/A/,/B/'` semantics (inclusive, end looked for from the next line, every block selected; `--to` alone like `sed 0,/B/`). Not a `RangeBound` variant after all: `RangeSpec` resolves up front, this cannot, so it is its own stateful `PatternRange`, told every line in order and intersected with `--rows`. Matched as bytes, so rows outside a block need not be UTF-8.
 - ✅ **Property tests** — `proptest` modules in `columns.rs` and `text.rs` check the field splitter against the char-by-char one it replaced and against `str::split`, quoted values round-tripping through CSV, and the char helpers against a `Vec<char>` reference (`select(R)` put back into `delete(R)` rebuilds the line), on lines of multi-byte chars, quotes and multi-char delimiters. Deliberately broken versions of the byte walk and of the ASCII fast path were caught at once.
 - ✅ **Benchmarks** — `benches/engine.rs` (`criterion`): the engine on 100k generated log and CSV rows, in memory, per operation; baseline under *Performance* below.
@@ -52,7 +53,7 @@ Each is one new type plus one branch in `compose::build_pipeline`:
 
 ## 2. Still open
 
-- **Encodings** — non-UTF-8 input is a hard error today. Add `--encoding latin1|utf16`, or a lossy/byte-oriented mode.
+- **Lossy/byte mode** — input in an unknown or mixed encoding is still a hard error (`--encoding` covers the known ones). A mode that passes undecodable bytes through, or replaces them, would make `fxt` usable on such files too.
 - **More reducers** — `--median`, `--distinct` (count of distinct keys), `--first`/`--last` per group. Now just implementations of an abstraction that exists.
 
 ## 3. From the 2026-11-06 comparison with grep/sed/sort/cut/awk
@@ -61,7 +62,7 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 
 - **Grapheme columns** — columns count code points, so `e\u0301` and ZWJ emoji sequences can be split. An opt-in `--graphemes` (`unicode-segmentation`) would count user-perceived characters; it touches every char-indexed helper in `text.rs`.
 - **Regex backreferences** — `(.)\1` is rejected by the `regex` crate. `fancy-regex` behind a flag would allow it, at the cost of linear-time matching guarantees.
-- **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; the *Encodings* item above (a lossy/byte mode) is the real answer.
+- **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; `--encoding` answers it for files in a known encoding, the *Lossy/byte mode* item above for the rest.
 - **Performance** — `fxt` beat `sed` on replacement and `awk`/pipelines on combined operations, but trailed `grep` on plain filtering and `sort` on whole-line sorting (300k rows, Windows). `cargo bench` now measures the engine in memory; the baseline (100k rows, release build, Windows, 2026-11-06) points at field mode rather than at `--grep` or the sort:
 
   | Case | Throughput |

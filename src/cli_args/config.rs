@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::ArgMatches;
+use encoding_rs::Encoding;
 use regex::{Regex, RegexBuilder};
 
 use super::ConfigError;
@@ -111,6 +112,12 @@ pub struct Config {
     pub number: bool,
     //--fields splits on the delimiter even inside quotes unless set
     pub quoted: bool,
+    //`--encoding`: what inputs without a byte order mark are decoded
+    //from; `None` is UTF-8
+    pub encoding: Option<&'static Encoding>,
+    //`--output-encoding`: `None` writes UTF-8, or with --in-place each
+    //file's own encoding
+    pub output_encoding: Option<&'static Encoding>,
     //`Some` splits every line at each occurrence of the separator
     pub split_on: Option<String>,
     //`Some` wraps every line into chunks of that many chars
@@ -193,6 +200,12 @@ impl Config {
             }),
             None => ColumnSpan::Chars(columns),
         }
+    }
+
+    /// What an input without a byte order mark is decoded from.
+    pub fn input_encoding(&self) -> &'static Encoding {
+        self.encoding
+            .unwrap_or(encoding_rs::UTF_8)
     }
 
     /// Whether rows are chosen by what they contain (`--grep`, `--from`,
@@ -317,6 +330,12 @@ impl TryFrom<ArgMatches> for Config {
             squeeze: matches.get_flag("squeeze"),
             number: matches.get_flag("number"),
             quoted: matches.get_flag("quoted"),
+            encoding: matches
+                .get_one::<&'static Encoding>("encoding")
+                .copied(),
+            output_encoding: matches
+                .get_one::<&'static Encoding>("output-encoding")
+                .copied(),
             split_on: matches
                 .get_one::<String>("split-on")
                 .cloned(),
