@@ -1,6 +1,6 @@
 # fxt — File Transformer
 
-[![Rust](https://github.com/MickCh/ft/actions/workflows/rust.yml/badge.svg)](https://github.com/MickCh/ft/actions/workflows/rust.yml)
+[![Rust](https://github.com/MickCh/fxt/actions/workflows/rust.yml/badge.svg)](https://github.com/MickCh/fxt/actions/workflows/rust.yml)
 
 A small command-line tool for transforming text files: select or delete row and column ranges, reorder columns, sort/reverse/shuffle lines, filter by content or take blocks between two patterns (like `sed '/A/,/B/'`), find/replace within a column range, wrap/split/join rows, summarize them (count, sum, avg, min, max, median, distinct, first, last, per group), and edit files in place — with CSV support (quoted fields, records spanning several lines), any text encoding in and out, and optional backreferences and lookaround (`-P`).
 

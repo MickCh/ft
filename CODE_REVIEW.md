@@ -1,4 +1,4 @@
-# Code Review — `ft`
+# Code Review — `fxt` (then still named `ft`)
 
 Date: 2026-07-11. Scope: full codebase (all modules and tests). `cargo clippy --all-targets -- -D warnings` and `cargo test` (65 tests) both pass. Findings marked *(verified)* were reproduced against the built binary.
 
@@ -10,7 +10,7 @@ Date: 2026-07-11. Scope: full codebase (all modules and tests). `cargo clippy --
 
 ```
 $ printf 'one\ntwo\nthree\n' > same.txt
-$ ft -R 1-2 -o same.txt same.txt   # exit 0, no error
+$ fxt -R 1-2 -o same.txt same.txt   # exit 0, no error
 $ wc -c same.txt                   # 0 bytes
 ```
 
@@ -24,7 +24,7 @@ In `run_streaming` (`src/main.rs:32`) the reader is opened before `File::create`
 
 ```
 $ ln -s target.txt link.txt
-$ ft -i --tac link.txt    # link.txt is now a regular file, target.txt untouched
+$ fxt -i --tac link.txt    # link.txt is now a regular file, target.txt untouched
 ```
 
 `rename` swaps out the symlink itself, not its target. This matches `sed -i` without `--follow-symlinks`, so it is an acceptable trade-off — but it should be a conscious decision: either document it in `--help`, or resolve the path (`fs::canonicalize`) before building the temp sibling and renaming.
@@ -34,7 +34,7 @@ $ ft -i --tac link.txt    # link.txt is now a regular file, target.txt untouched
 ### 3. A broken pipe ends with an error *(verified)*
 
 ```
-$ ft big.txt | head -1
+$ fxt big.txt | head -1
 Error: Processing error: Broken pipe (os error 32)   # exit 1
 ```
 

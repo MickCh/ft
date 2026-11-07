@@ -123,9 +123,9 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 The first version, as `ft`: row and column ranges (lists, open and end-relative bounds, field mode with `--quoted` CSV), sort/tac/shuffle, `--grep` with grep-like exit codes and `--quiet`, `--unique`, case and whitespace transforms, `--number`, `--wrap`, `--split-on`/`--join`, `--drop-empty`, summaries per `--group-by`, find/replace, and in-place editing of many files with `--backup` and `--dry-run`.
 
-[Unreleased]: https://github.com/MickCh/ft/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/MickCh/ft/compare/v0.4.1...v0.5.0
-[0.4.1]: https://github.com/MickCh/ft/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/MickCh/ft/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/MickCh/ft/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/MickCh/ft/compare/5d06433...v0.2.0
+[Unreleased]: https://github.com/MickCh/fxt/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/MickCh/fxt/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/MickCh/fxt/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/MickCh/fxt/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/MickCh/fxt/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/MickCh/fxt/compare/5d06433...v0.2.0
