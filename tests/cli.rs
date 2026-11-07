@@ -1841,6 +1841,192 @@ fn in_place_leaves_no_temporary_file_behind() {
     assert_eq!(entries, [std::ffi::OsString::from("data.txt")]);
 }
 
+/// A directory of its own for a test that looks at every file in it.
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(name: &str) -> TempDir {
+        let path = std::env::temp_dir().join(format!("fxt-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        TempDir { path }
+    }
+
+    fn write(&self, name: &str, content: impl AsRef<[u8]>) -> PathBuf {
+        let path = self.path.join(name);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    /// The names of the files in it, sorted.
+    fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(&self.path)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[test]
+fn in_place_failing_part_way_leaves_the_file_and_nothing_else() {
+    //row 3 is not UTF-8: the edit fails after rows 1 and 2 were written
+    //to the temporary file
+    let dir = TempDir::new("in-place-fails");
+    let input = dir.write("data.txt", b"a\nb\n\xff\nc\n");
+    let output = run_fxt(&["-i", "--backup", ".bak", "--upper", input.to_str().unwrap()]);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("line 3 is not valid UTF-8"), "{stderr}");
+    //the original as it was, no temporary file, and no backup either:
+    //the backup is only taken right before the swap
+    assert_eq!(fs::read(&input).unwrap(), b"a\nb\n\xff\nc\n");
+    assert_eq!(dir.names(), ["data.txt"]);
+}
+
+#[test]
+fn in_place_stops_at_the_first_file_that_fails() {
+    //files are edited one by one: the one before the failure is done,
+    //the failing one and those after it are left as they were
+    let dir = TempDir::new("in-place-batch-fails");
+    let first = dir.write("1.txt", "a\n");
+    let broken = dir.write("2.txt", b"\xff\n");
+    let last = dir.write("3.txt", "c\n");
+    let output = run_fxt(&[
+        "-i",
+        "--upper",
+        first.to_str().unwrap(),
+        broken.to_str().unwrap(),
+        last.to_str().unwrap(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(fs::read_to_string(&first).unwrap(), "A\n");
+    assert_eq!(fs::read(&broken).unwrap(), b"\xff\n");
+    assert_eq!(fs::read_to_string(&last).unwrap(), "c\n");
+    assert_eq!(dir.names(), ["1.txt", "2.txt", "3.txt"]);
+}
+
+#[cfg(windows)]
+#[test]
+fn in_place_refuses_a_read_only_file_on_windows() {
+    //Windows will not rename over a read-only file: the edit fails
+    //cleanly, the file intact and no temporary file left behind
+    let dir = TempDir::new("in-place-read-only");
+    let input = dir.write("data.txt", "a\n");
+    let mut permissions = fs::metadata(&input)
+        .unwrap()
+        .permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&input, permissions.clone()).unwrap();
+
+    let output = run_fxt(&["-i", "--upper", input.to_str().unwrap()]);
+    let content = fs::read_to_string(&input).unwrap();
+    let names = dir.names();
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    fs::set_permissions(&input, permissions).unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Cannot replace input file"), "{stderr}");
+    assert_eq!(content, "a\n");
+    assert_eq!(names, ["data.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_edits_a_read_only_file_and_keeps_it_read_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    //on Unix the directory decides whether a file may be replaced, so a
+    //read-only file is edited like any other, and stays read-only
+    let dir = TempDir::new("in-place-read-only");
+    let input = dir.write("data.txt", "a\n");
+    fs::set_permissions(&input, fs::Permissions::from_mode(0o444)).unwrap();
+
+    run_fxt_stdout(&["-i", "--upper", input.to_str().unwrap()]);
+    assert_eq!(fs::read_to_string(&input).unwrap(), "A\n");
+    let mode = fs::metadata(&input)
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o444);
+    assert_eq!(dir.names(), ["data.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_fails_cleanly_in_a_directory_it_cannot_write() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new("in-place-locked-dir");
+    let input = dir.write("data.txt", "a\n");
+    fs::set_permissions(&dir.path, fs::Permissions::from_mode(0o555)).unwrap();
+    //root may write anyway, and then there is nothing to test
+    let writable = fs::write(dir.path.join("probe"), "").is_ok();
+    let output = run_fxt(&["-i", "--upper", input.to_str().unwrap()]);
+    let content = fs::read_to_string(&input).unwrap();
+    fs::set_permissions(&dir.path, fs::Permissions::from_mode(0o755)).unwrap();
+    if writable {
+        return;
+    }
+
+    //the temporary file cannot be created: nothing was touched
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(content, "a\n");
+    assert_eq!(dir.names(), ["data.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_refuses_a_dangling_symlink() {
+    let dir = TempDir::new("in-place-dangling");
+    let link = dir.path.join("link.txt");
+    std::os::unix::fs::symlink(dir.path.join("missing.txt"), &link).unwrap();
+
+    let output = run_fxt(&["-i", "--upper", link.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(2));
+    //no file appears where the link points
+    assert_eq!(dir.names(), ["link.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_backs_up_the_symlink_target_next_to_it() {
+    let targets = TempDir::new("in-place-backup-target");
+    let links = TempDir::new("in-place-backup-link");
+    let target = targets.write("data.txt", "a\n");
+    let link = links.path.join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    run_fxt_stdout(&["-i", "--backup", ".bak", "--upper", link.to_str().unwrap()]);
+    //the target is what is edited, so its backup lies beside it
+    assert_eq!(targets.names(), ["data.txt", "data.txt.bak"]);
+    assert_eq!(
+        fs::read_to_string(targets.path.join("data.txt.bak")).unwrap(),
+        "a\n"
+    );
+    assert_eq!(links.names(), ["link.txt"]);
+    assert_eq!(fs::read_to_string(&link).unwrap(), "A\n");
+}
+
 #[cfg(unix)]
 #[test]
 fn in_place_edits_the_symlink_target_and_keeps_the_link() {
