@@ -22,9 +22,22 @@ use std::io::{BufRead, Write};
 use std::str::from_utf8;
 
 /// A buffered line split into content and its original terminator.
+#[derive(Default)]
 struct Line {
     content: String,
     terminator: &'static str,
+}
+
+/// The first eight bytes of `key` as a big-endian number, zero-padded:
+/// keys whose numbers differ compare as the numbers do, so it can settle
+/// a comparison before the keys themselves are read. (Padding cannot
+/// mislead: where a shorter key's padding meets a nonzero byte, the
+/// shorter key is a prefix of the other and sorts first either way.)
+fn byte_prefix(key: &str) -> u64 {
+    let mut prefix = [0; 8];
+    let len = key.len().min(8);
+    prefix[..len].copy_from_slice(&key.as_bytes()[..len]);
+    u64::from_be_bytes(prefix)
 }
 
 /// Mutable state threaded through one `run` call.
@@ -404,32 +417,126 @@ impl FileProcessor {
         Ok(())
     }
 
-    fn sort_lines(buffer: &mut [Line], spec: &SortSpec) {
-        //`Reverse` keeps the sort stable in descending order too
-        use std::cmp::Reverse;
-        //a key span beyond the line yields an empty key, like `cut`; under
-        //`--quoted` the key is the fields' values, so `"b"` sorts after
-        //`a` rather than first, on its quote
-        let text_key = |line: &Line| {
-            spec.key_span
-                .select_value(&line.content)
-                .into_owned()
-        };
+    fn sort_lines(buffer: &mut Vec<Line>, spec: &SortSpec) {
         //a numeric key reads the field's value (unquoted under `--quoted`);
         //`None` — not a number — sorts before every number, as `Option`
         //orders it, where a sentinel value would collide with `-inf`
-        let numeric_key = |line: &Line| {
-            Number::parse(
-                &spec
-                    .key_span
-                    .select_value(&line.content),
-            )
-        };
-        match (spec.numeric, spec.reverse) {
-            (false, false) => buffer.sort_by_cached_key(|line| text_key(line)),
-            (false, true) => buffer.sort_by_cached_key(|line| Reverse(text_key(line))),
-            (true, false) => buffer.sort_by_cached_key(numeric_key),
-            (true, true) => buffer.sort_by_cached_key(|line| Reverse(numeric_key(line))),
+        if spec.numeric {
+            let keys = buffer.iter().map(|line| {
+                Number::parse(
+                    &spec
+                        .key_span
+                        .select_value(&line.content),
+                )
+            });
+            let order = Self::sorted_order(keys, spec.reverse);
+            return Self::permute(buffer, &order);
         }
+        //a key span beyond the line yields an empty key, like `cut`; under
+        //`--quoted` the key is the fields' values, so `"b"` sorts after
+        //`a` rather than first, on its quote. A key that is one piece of
+        //the line — the whole line by default — is borrowed from it, not
+        //copied. Its first bytes go in front, as a number: most
+        //comparisons are settled by them, without a trip to the line
+        let keys = buffer.iter().map(|line| {
+            let key = spec
+                .key_span
+                .select_value(&line.content);
+            (byte_prefix(&key), key)
+        });
+        let order = Self::sorted_order(keys, spec.reverse);
+        Self::permute(buffer, &order);
+    }
+
+    /// The positions of `keys` in stable sorted order. Each key is computed
+    /// once, and the sort moves only keys and positions, never the lines.
+    /// Equal keys are ordered by position — in input order under
+    /// `--reverse` too — which makes the sort stable, so the faster
+    /// unstable one can do it.
+    fn sorted_order<K: Ord>(keys: impl Iterator<Item = K>, reverse: bool) -> Vec<usize> {
+        let mut keyed: Vec<(K, usize)> = keys.zip(0..).collect();
+        match reverse {
+            false => keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1))),
+            true => keyed.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1))),
+        }
+        keyed
+            .into_iter()
+            .map(|(_, position)| position)
+            .collect()
+    }
+
+    /// Rearrange `buffer` so that its `i`-th line is the one that was at
+    /// `order[i]`; `order` is a permutation of its positions.
+    fn permute(buffer: &mut Vec<Line>, order: &[usize]) {
+        let mut lines = std::mem::take(buffer);
+        *buffer = order
+            .iter()
+            .map(|&position| std::mem::take(&mut lines[position]))
+            .collect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_prefix_orders_as_the_keys_do() {
+        // Given keys that differ early, late, by length and past 8 bytes
+        let mut keys = vec![
+            "b",
+            "ab",
+            "a",
+            "",
+            "a\u{0}",
+            "abcdefgh2",
+            "abcdefgh1",
+            "ż",
+            "z",
+        ];
+
+        // When they are ordered by prefix first, then in full
+        let mut by_prefix = keys.clone();
+        by_prefix.sort_by_key(|key| (byte_prefix(key), *key));
+        keys.sort();
+
+        // Then the order is the plain one
+        assert_eq!(by_prefix, keys);
+    }
+
+    #[test]
+    fn sorted_order_is_stable_both_ways() {
+        // Given keys with duplicates
+        let keys = ["b", "a", "b", "a"];
+
+        // When sorted ascending and descending
+        let ascending = FileProcessor::sorted_order(keys.iter(), false);
+        let descending = FileProcessor::sorted_order(keys.iter(), true);
+
+        // Then equal keys keep their input order either way
+        assert_eq!(ascending, [1, 3, 0, 2]);
+        assert_eq!(descending, [0, 2, 1, 3]);
+    }
+
+    #[test]
+    fn permute_moves_each_line_to_its_place() {
+        // Given three lines and an order for them
+        let mut buffer: Vec<Line> = ["x", "y", "z"]
+            .into_iter()
+            .map(|content| Line {
+                content: content.to_owned(),
+                terminator: "\n",
+            })
+            .collect();
+
+        // When permuted
+        FileProcessor::permute(&mut buffer, &[2, 0, 1]);
+
+        // Then the lines follow the order
+        let contents: Vec<&str> = buffer
+            .iter()
+            .map(|line| line.content.as_str())
+            .collect();
+        assert_eq!(contents, ["z", "x", "y"]);
     }
 }

@@ -17,6 +17,7 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 - Selecting columns copies nothing when the selection is one piece of the line, and field mode no longer allocates per line for field positions: `-F , -C 1` 1.9× faster, `-C 1-6` 1.5×, a summary over a field 1.3–1.4×.
 - Several statistics over the same column read and parse it once: `--sum 3 --avg 3 --min 3 --max 3` 1.6× faster.
+- A text sort borrows its keys instead of copying every line, and settles most comparisons on the keys' first bytes: a whole-line `--sort` 1.4× faster, now ahead of `sort -s`; by a field 1.15×.
 
 ## [0.3.0] — 2026-11-07
 
