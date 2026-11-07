@@ -148,11 +148,30 @@ impl ColumnSpan {
     /// operations keep using [`ColumnSpan::select`], whose quotes make a
     /// projection valid CSV; numeric ones read this.
     pub fn select_value<'a>(&self, line: &'a str) -> Cow<'a, str> {
+        self.select_value_in(&SplitLine::new(line, [self]))
+    }
+
+    /// [`ColumnSpan::select_value`] from a line already split, which
+    /// several spans may share.
+    pub fn select_value_in<'a>(&self, split: &SplitLine<'a, '_>) -> Cow<'a, str> {
         match self {
             ColumnSpan::Fields(spec) if spec.quoted => {
-                join_parts(self.quoted_values(line), self.joiner())
+                join_parts(self.quoted_values(spec, split), self.joiner())
             }
-            _ => self.select(line),
+            _ => self.select_in(split),
+        }
+    }
+
+    /// [`ColumnSpan::select`] from a line already split.
+    fn select_in<'a>(&self, split: &SplitLine<'a, '_>) -> Cow<'a, str> {
+        match self {
+            ColumnSpan::Chars(_) => self.select(split.line),
+            ColumnSpan::Fields(spec) => {
+                let parts = spec.fields.written();
+                let positions = split.positions_for(spec, parts);
+                let ranges = resolve_parts(&positions, spec, parts, false);
+                text::select_ranges(split.line, &ranges, self.joiner())
+            }
         }
     }
 
@@ -165,33 +184,36 @@ impl ColumnSpan {
     /// in one key (`a,"b,c"` is not `"a,b",c`), and the key is valid CSV
     /// to print. Without `--quoted` it is the selection as written.
     pub fn select_canonical<'a>(&self, line: &'a str) -> Cow<'a, str> {
+        self.select_canonical_in(&SplitLine::new(line, [self]))
+    }
+
+    /// [`ColumnSpan::select_canonical`] from a line already split, which
+    /// several spans may share.
+    pub fn select_canonical_in<'a>(&self, split: &SplitLine<'a, '_>) -> Cow<'a, str> {
         match self {
             ColumnSpan::Fields(spec) if spec.quoted => {
                 let joiner = self.joiner();
                 let fields = self
-                    .quoted_values(line)
+                    .quoted_values(spec, split)
                     .into_iter()
                     .map(|value| quote_if_needed(value, joiner))
                     .collect();
                 join_parts(fields, joiner)
             }
-            _ => self.select(line),
+            _ => self.select_in(split),
         }
     }
 
     /// The CSV value of every selected field, one by one — a part like
     /// `1-2` spans two fields, each with quotes of its own — in the order
     /// written, skipping fields the line does not have.
-    fn quoted_values<'a>(&self, line: &'a str) -> Vec<Cow<'a, str>> {
-        let ColumnSpan::Fields(spec) = self else {
-            return vec![self.select(line)];
-        };
+    fn quoted_values<'a>(&self, spec: &FieldSpan, split: &SplitLine<'a, '_>) -> Vec<Cow<'a, str>> {
         let parts = spec.fields.written();
-        let positions = field_positions(line, spec, fields_needed(parts));
+        let positions = split.positions_for(spec, parts);
         parts
             .iter()
             .flat_map(|part| (*part.start()).max(1)..=(*part.end()).min(positions.len()))
-            .map(|field| unquote(text::select_columns(line, &positions[field - 1])))
+            .map(|field| unquote(text::select_columns(split.line, &positions[field - 1])))
             .collect()
     }
 
@@ -231,12 +253,95 @@ fn resolve_fields(
     swallow_delimiter: bool,
 ) -> Vec<RangeInclusive<usize>> {
     let positions = field_positions(line, spec, fields_needed(parts));
-    let delimiter_len = spec.delimiter.chars().count();
+    resolve_parts(&positions, spec, parts, swallow_delimiter)
+}
 
+/// Resolve every part against fields already split out of the line.
+fn resolve_parts(
+    positions: &[RangeInclusive<usize>],
+    spec: &FieldSpan,
+    parts: &[RangeInclusive<usize>],
+    swallow_delimiter: bool,
+) -> Vec<RangeInclusive<usize>> {
+    let delimiter_len = spec.delimiter.chars().count();
     parts
         .iter()
-        .filter_map(|part| resolve_part(&positions, part, delimiter_len, swallow_delimiter))
+        .filter_map(|part| resolve_part(positions, part, delimiter_len, swallow_delimiter))
         .collect()
+}
+
+/// A line split into fields once, for several spans to read from — a
+/// summary's key and each of its aggregates — instead of each splitting
+/// it again. It is split as far as the furthest of them needs.
+///
+/// Spans of one run share their field settings, but a span whose
+/// delimiter or quoting differs, or that reaches further than the split
+/// went, is not given a wrong answer: it splits the line for itself.
+pub struct SplitLine<'line, 'spec> {
+    line: &'line str,
+    fields: Option<SplitFields<'spec>>,
+}
+
+struct SplitFields<'spec> {
+    delimiter: &'spec str,
+    quoted: bool,
+    /// How many fields were asked for (see `fields_needed`): a split cut
+    /// short there answers for no span reaching further.
+    limit: usize,
+    positions: Vec<RangeInclusive<usize>>,
+}
+
+impl<'line, 'spec> SplitLine<'line, 'spec> {
+    /// Split `line` for `spans` to read: as far as the furthest field
+    /// span with the settings of the first one needs. A line read only
+    /// by char spans is not split at all.
+    pub fn new(line: &'line str, spans: impl IntoIterator<Item = &'spec ColumnSpan>) -> Self {
+        let mut shared: Option<(&'spec FieldSpan, usize)> = None;
+        for span in spans {
+            let ColumnSpan::Fields(spec) = span else {
+                continue;
+            };
+            let needed = fields_needed(spec.fields.written());
+            match &mut shared {
+                None => shared = Some((spec, needed)),
+                Some((first, limit)) if same_split(first, spec) => *limit = (*limit).max(needed),
+                Some(_) => {}
+            }
+        }
+
+        let fields = shared.map(|(spec, limit)| SplitFields {
+            delimiter: &spec.delimiter,
+            quoted: spec.quoted,
+            limit,
+            positions: field_positions(line, spec, limit),
+        });
+        SplitLine { line, fields }
+    }
+
+    /// The fields of the line as `spec` splits them, as far as `parts`
+    /// need: the shared split when it fits, else a split of its own.
+    fn positions_for(
+        &self,
+        spec: &FieldSpan,
+        parts: &[RangeInclusive<usize>],
+    ) -> Cow<'_, [RangeInclusive<usize>]> {
+        let needed = fields_needed(parts);
+        match &self.fields {
+            Some(fields)
+                if fields.delimiter == spec.delimiter
+                    && fields.quoted == spec.quoted
+                    && fields.limit >= needed =>
+            {
+                Cow::Borrowed(&fields.positions)
+            }
+            _ => Cow::Owned(field_positions(self.line, spec, needed)),
+        }
+    }
+}
+
+/// Whether two field spans split a line the same way.
+fn same_split(this: &FieldSpan, that: &FieldSpan) -> bool {
+    this.delimiter == that.delimiter && this.quoted == that.quoted
 }
 
 /// How many fields a line must be split into to resolve `parts`: up to
@@ -886,6 +991,31 @@ mod properties {
             let span = ColumnSpan::fields(delimiter, ColumnList::new(vec![range]));
             let deleted = text::remove_ranges(&line, &span.delete_ranges(&line));
             prop_assert_eq!(deleted, kept.join(delimiter));
+        }
+
+        #[test]
+        fn a_shared_split_reads_like_a_split_of_ones_own(
+            line in lines(),
+            delimiter in delimiters(),
+            other in delimiters(),
+            quoted in any::<bool>(),
+            parts in prop::collection::vec(prop::collection::vec(field_ranges(), 1..3), 1..4),
+        ) {
+            // Given several spans sharing one split — and one that splits
+            // differently, which must fall back to a split of its own
+            let mut spans: Vec<ColumnSpan> = parts
+                .into_iter()
+                .map(|parts| ColumnSpan::Fields(span(delimiter, quoted, parts)))
+                .collect();
+            spans.push(ColumnSpan::Fields(span(other, !quoted, vec![2..=3])));
+            let split = SplitLine::new(&line, &spans);
+
+            // When / Then each reads what it would read alone
+            for span in &spans {
+                prop_assert_eq!(span.select_value_in(&split), span.select_value(&line));
+                prop_assert_eq!(span.select_canonical_in(&split), span.select_canonical(&line));
+                prop_assert_eq!(span.select_in(&split), span.select(&line));
+            }
         }
 
         #[test]

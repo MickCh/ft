@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use crate::columns::ColumnSpan;
+use crate::columns::{ColumnSpan, SplitLine};
 use crate::constants::NEW_LINE;
 use crate::number::Number;
 
@@ -80,15 +80,19 @@ impl Aggregate {
     /// a number — those rows are skipped rather than counted as zero,
     /// which would bend both the sum and the average. The value is read
     /// unquoted, so `"10"` in a `--quoted` CSV field counts as 10.
-    fn number(&self, line: &str) -> Option<Number> {
-        let span = match self {
-            Aggregate::Count => return None,
+    fn number(&self, line: &SplitLine<'_, '_>) -> Option<Number> {
+        Number::parse(&self.span()?.select_value_in(line))
+    }
+
+    /// The columns this aggregate reads; `Count` reads none.
+    fn span(&self) -> Option<&ColumnSpan> {
+        match self {
+            Aggregate::Count => None,
             Aggregate::Sum(span)
             | Aggregate::Avg(span)
             | Aggregate::Min(span)
-            | Aggregate::Max(span) => span,
-        };
-        Number::parse(&span.select_value(line))
+            | Aggregate::Max(span) => Some(span),
+        }
     }
 }
 
@@ -117,7 +121,7 @@ impl Accumulator {
         }
     }
 
-    fn accept(&mut self, aggregate: &Aggregate, line: &str) {
+    fn accept(&mut self, aggregate: &Aggregate, line: &SplitLine<'_, '_>) {
         if let Accumulator::Count(rows) = self {
             *rows += 1;
             return;
@@ -165,10 +169,45 @@ pub struct Summarize {
     key_span: Option<ColumnSpan>,
     aggregates: Vec<Aggregate>,
     separator: String,
-    //keys in first-seen order, so the summary does not come out shuffled
-    //by the hash map
+    groups: Groups,
+}
+
+/// The running accumulators per group key, kept in the order the keys
+/// first appear, so the summary does not come out shuffled by the hash
+/// map.
+#[derive(Default)]
+struct Groups {
     order: Vec<String>,
-    groups: HashMap<String, Vec<Accumulator>>,
+    accumulators: HashMap<String, Vec<Accumulator>>,
+}
+
+impl Groups {
+    /// The accumulators of the group `key`, started for `aggregates` the
+    /// first time the key appears. The key is looked up borrowed; only a
+    /// new group takes a copy of it.
+    fn get_or_start(&mut self, key: &str, aggregates: &[Aggregate]) -> &mut Vec<Accumulator> {
+        if !self.accumulators.contains_key(key) {
+            self.order.push(key.to_owned());
+            let started = aggregates
+                .iter()
+                .map(Accumulator::start)
+                .collect();
+            self.accumulators
+                .insert(key.to_owned(), started);
+        }
+        self.accumulators
+            .get_mut(key)
+            .expect("the group was just started")
+    }
+
+    /// Every group, in first-seen order.
+    fn in_order(&self) -> impl Iterator<Item = (&str, &[Accumulator])> {
+        self.order.iter().filter_map(|key| {
+            self.accumulators
+                .get(key)
+                .map(|accumulators| (key.as_str(), accumulators.as_slice()))
+        })
+    }
 }
 
 impl Summarize {
@@ -177,33 +216,20 @@ impl Summarize {
         aggregates: Vec<Aggregate>,
         separator: impl Into<String>,
     ) -> Summarize {
-        let mut summarize = Summarize {
-            key_span,
-            aggregates,
-            separator: separator.into(),
-            order: Vec::new(),
-            groups: HashMap::new(),
-        };
+        let mut groups = Groups::default();
         //without --group-by the summary describes the whole input, and
         //an input with no rows still has a description: a count of 0,
         //a sum of 0 — like `grep -c` or `wc -l`. With --group-by, no
         //rows means no groups, and no rows to print.
-        if summarize.key_span.is_none() {
-            summarize.start_group(String::new());
+        if key_span.is_none() {
+            groups.get_or_start("", &aggregates);
         }
-        summarize
-    }
-
-    /// Register a group the first time its key appears, keeping the
-    /// first-seen order the summary is printed in.
-    fn start_group(&mut self, key: String) {
-        self.order.push(key.clone());
-        let accumulators = self
-            .aggregates
-            .iter()
-            .map(Accumulator::start)
-            .collect();
-        self.groups.insert(key, accumulators);
+        Summarize {
+            key_span,
+            aggregates,
+            separator: separator.into(),
+            groups,
+        }
     }
 }
 
@@ -211,36 +237,35 @@ impl LineReducer for Summarize {
     /// A summary can say nothing until the input ends, so the writer
     /// goes unused here.
     fn accept(&mut self, line: &str, _writer: &mut dyn Write) -> io::Result<()> {
+        //split once for the key and every aggregate, rather than once each
+        let spans = self.key_span.iter().chain(
+            self.aggregates
+                .iter()
+                .filter_map(Aggregate::span),
+        );
+        let split = SplitLine::new(line, spans);
+
         //without --group-by every row lands in the same, unnamed group;
         //the canonical form makes `"a"` and `a` one group under --quoted
         let key = match &self.key_span {
-            Some(span) => span.select_canonical(line),
+            Some(span) => span.select_canonical_in(&split),
             None => Cow::Borrowed(""),
         };
 
-        //the key is looked up borrowed; only a new group owns a copy
-        if !self.groups.contains_key(key.as_ref()) {
-            self.start_group(key.as_ref().to_owned());
-        }
-
-        let Some(accumulators) = self.groups.get_mut(key.as_ref()) else {
-            return Ok(());
-        };
+        let accumulators = self
+            .groups
+            .get_or_start(&key, &self.aggregates);
         for (aggregate, accumulator) in self.aggregates.iter().zip(accumulators) {
-            accumulator.accept(aggregate, line);
+            accumulator.accept(aggregate, &split);
         }
         Ok(())
     }
 
     fn finish(&mut self, writer: &mut dyn Write) -> io::Result<()> {
-        for key in &self.order {
-            let Some(accumulators) = self.groups.get(key) else {
-                continue;
-            };
-
+        for (key, accumulators) in self.groups.in_order() {
             let mut columns: Vec<String> = Vec::with_capacity(accumulators.len() + 1);
             if self.key_span.is_some() {
-                columns.push(key.clone());
+                columns.push(key.to_owned());
             }
             columns.extend(
                 accumulators
