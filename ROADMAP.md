@@ -50,7 +50,10 @@ Each is one new type plus one branch in `compose::build_pipeline` (or `build_pre
 
 ## 2. Still open
 
-Nothing at the moment; see *Free slots* above for small additions.
+- **`~N` ranges at the end only** — `-R '~1000-~1'` buffers the whole input to learn the line count (38 ms on 300k rows, where `tail -n 1000` takes 17). A row spec whose every part lies in the last N rows needs only a ring of the last N rows (and rows outside it, which are dropped, need no buffering at all); `tail` also seeks from the end of a regular file, which a stream reader cannot.
+- **Text mappings that build a `String` per line** — `--reverse-chars` (269 ms on 300k rows), `--pad-left` on a field (214), `--expand` (192) and `--encode base64` on a field (191) are the slowest transforms: each mapping returns a new `String` per range, which `map_ranges` then copies into the rebuilt line. Writing straight into the rebuilt line, as the literal `--find` does since its rework, and keeping a line no mapping changes (`Keep`), should bring them near the 140 ms of a replacement.
+
+See *Free slots* above for small additions.
 
 ## 3. From the 2026-11-06 comparison with grep/sed/sort/cut/awk
 
@@ -88,6 +91,34 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
   | `--count` (control) | 91 ms | 92 ms |
 
   A summary used to split the same line once per aggregate plus once for the key; it now splits it once (`SplitLine`), shared by the key and every aggregate: `--group-by 1 --sum 3` 555 → 341 ms, `--quoted` 629 → 395 ms, four aggregates 660 → 512 ms; summaries without a key, with nothing to share, lost ~10–16 ns a row (`--count` 88 → 98 ms). Aggregates over the same span used to read and parse its number once each; now once per distinct span (`NumberReadings`): `--sum 3 --avg 3 --min 3 --max 3` 546 → 350 ms, with `--group-by 1` 645 → 428 ms, single aggregates unchanged. Every field selection used to allocate its field positions, its resolved ranges and a copy of the result; now the ranges live inline (`SmallVec`, `SpanRanges`) and a contiguous selection only narrows the line (`LineOutcome::Slice`). 1M rows: `-F , -C 1` 258 → 138 ms, `--quoted -C 2` 342 → 207 ms, `--sum 3` 283 → 214 ms, `--group-by 1 --count --sum 3` 364 → 260 ms, `-C 1-6` 128 → 86 ms (pass-through speed); a permutation still joins new text. a literal `--find` was slower than `--grep` by more than its writing explained — fixed: a line without the literal is now kept uncopied, and a match is written straight into the rebuilt line (1M rows: no match 374 → 243 ms, which is pass-through's 228 ms; 1 row in 10 382 → 259 ms; every row 396 → 366 ms). What remains against `grep` is output volume: a replacement writes every row, a filter only the matches. A text sort used to copy every line into its key (`sort_by_cached_key`) and compare strings that live all over the heap; now a key is borrowed from its line, carries its first eight bytes as a number, and keys are sorted with their positions (ties broken by position, so the unstable sort stays stable), the lines moved once at the end. 300k rows: `-s` 250 → 178 ms, `-s --reverse` 240 → 174 ms, by a quoted CSV field (1M rows) 500 → 439 ms; numeric sorts unchanged. Borrowing alone gained nothing; the time went to comparisons missing the cache. Every buffered row then still had a `String` of its own; now a reorder buffer (`LineBuffer`) keeps all their text in one, with a small record per row that reordering moves instead, and the `~N` buffer is one `Vec<u8>` with row ends. 300k rows, best of 9 interleaved: `--tac` 126 → 111 ms, `--shuffle` 148 → 125, `-s` 229 → 209, `-R ~1000-~1` 46 → 33, a quoted CSV field sort (1M rows) 566 → 499; streaming unchanged. In-process `cargo bench` numbers swing by ±20% on this machine between runs, so compare binaries (best of several interleaved runs) before trusting a change.
+
+  Measured again on 2026-11-07, after the 0.4.0 release and the Unreleased work (300k rows, median of 11 rotated runs, stdout piped, every tool's output identical; ms):
+
+  | Case | `fxt` HEAD | `fxt` 0.4.0 | `ft` 0.1.0 | Reference |
+  |---|---:|---:|---:|---:|
+  | `-g ERROR` | 40 | 39 | 61 | `grep` 44 |
+  | `-f foo -r bar` | 138 | 138 | 169 | `sed` 546 |
+  | `-s` | 163 | 160 | 283 | `sort -s` 242 |
+  | `-g ERROR -f foo -r bar --upper` | 52 | 51 | 80 | `awk` 423 |
+  | the same, against a pipeline | 59 | 54 | 86 | `grep \| sed \| tr` 127 |
+  | `--tac` | 120 | 122 | 140 | `tac` 122 |
+  | `-R '~1000-~1'` | 38 | 37 | 51 | `tail -n 1000` 17 |
+
+  HEAD and 0.4.0 differ by noise only (the two "uppercase" rows run the same `fxt` command). The features added since, against their nearest MSYS counterpart:
+
+  | Case | `fxt` HEAD | Reference |
+  |---|---:|---:|
+  | `-g ERROR -g 99999` | 49 | `grep -e … -e …` 52 |
+  | `-g ERROR -g '^00' --all` | 41 | `awk '/ERROR/ && /^00/'` 305 |
+  | `-F , --min-fields 3` | 66 | `awk -F, 'NF >= 3'` 121 |
+  | `--max-len 20` | 35 | `awk 'length($0) <= 20'` 95 |
+  | `--expand` | 192 | `expand` 356 |
+  | `--unexpand` | 161 | `unexpand -a` 431 |
+  | `-F , -C 2 --pad-left 8` | 214 | `awk` with `sprintf("%8s")` 245 |
+  | `-F , -C 3 --encode base64` | 191 | — |
+  | `--reverse-chars` | 269 | — (`rev` is not in Git for Windows) |
+
+  `fxt` leads every case but `tail`; the two items under *Still open* are what these numbers point at.
 
 ## 4. Tool maturity (cheap, highly visible)
 
