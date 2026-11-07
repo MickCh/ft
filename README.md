@@ -2,7 +2,7 @@
 
 [![Rust](https://github.com/MickCh/ft/actions/workflows/rust.yml/badge.svg)](https://github.com/MickCh/ft/actions/workflows/rust.yml)
 
-A small command-line tool for transforming text files: select or delete row and column ranges, reorder columns, sort/reverse/shuffle lines, filter by content, find/replace within a column range, wrap/split/join rows, summarize them (count, sum, avg, min, max, per group), and edit files in place — with CSV support (one record per line).
+A small command-line tool for transforming text files: select or delete row and column ranges, reorder columns, sort/reverse/shuffle lines, filter by content or take blocks between two patterns (like `sed '/A/,/B/'`), find/replace within a column range, wrap/split/join rows, summarize them (count, sum, avg, min, max, median, distinct, first, last, per group), and edit files in place — with CSV support (quoted fields, records spanning several lines), any text encoding in and out, and optional backreferences and lookaround (`-P`).
 
 It was called `ft` until 2026-11; the binary was renamed because PowerShell aliases `ft` to `Format-Table`, which shadowed it.
 
@@ -35,11 +35,11 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 | `--from <regex>` | Rows from each line matching the regex… (like `sed '/A/,/B/'`) |
 | `--to <regex>` | …through the next line matching this one; alone, from the first line |
 | `--invert` | Invert the `--grep` match, like `grep -v` (requires `--grep`) |
-| `-q, --quiet` | Write nothing; say with the exit code whether anything matched (requires `--grep`) |
+| `-q, --quiet` | Write nothing; say with the exit code whether anything matched (requires `--grep`, `--from` or `--to`) |
 | `-f, --find <text>` | Substring to find (repeatable, paired with `--replace`) |
 | `-r, --replace <text>` | Replacement text (repeatable, one per `--find`) |
 | `-e, --regex` | Treat the find pattern as a regular expression (requires `--find`) |
-| `--ignore-case` | Match the find pattern case-insensitively (requires `--find`) |
+| `--ignore-case` | Match the find, grep and `--from`/`--to` patterns case-insensitively (requires one of them) |
 | `-P`, `--perl-regexp` | Let every regex use backreferences (`(.)\1`) and lookaround (`(?<=x)`, `(?!y)`), matched by backtracking |
 | `--upper` | Convert the column range to uppercase |
 | `--lower` | Convert the column range to lowercase |
@@ -60,10 +60,14 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 | `--distinct <cols>` | Summarize: how many different values those columns hold |
 | `--first <cols>` / `--last <cols>` | Summarize: those columns in the first / last row (of each group) |
 | `--group-by <cols>` | Summarize once per distinct value of those columns (requires a summary) |
+| `--encoding <name>` | Encoding of the inputs, e.g. `windows-1250`, `latin1`, `utf-16le` (default UTF-8; a byte order mark overrides it) |
+| `--output-encoding <name>` | Encoding of the output (default UTF-8; with `--in-place`, each file's own) |
 | `-o, --output <file>` | Write to a file instead of stdout |
 | `-i, --in-place` | Edit the input files in place (needs files, conflicts with `-o`) |
 | `--backup <suffix>` | Keep a copy of each edited file, with this suffix (requires `--in-place`) |
 | `--dry-run` | Report which files the edit would change, without writing (requires `--in-place`) |
+| `--completions <shell>` | Print a completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`) and exit |
+| `--man` | Print the man page and exit |
 
 ### Semantics
 
@@ -75,7 +79,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 - A column range with no other operation **selects** columns (like `cut`): only the characters inside the range are output. With `--sort` it is the sort key, with `--find` it scopes the replacement, and with `--delete` it is removed — in those cases the rest of the line is kept.
 - `--sort-key`, `--unique-key` and `--grep-key` give those operations a column range of their own, so `--cols` is free for another one: `-C 5 -f a -r b --sort --sort-key 3` replaces inside column 5 but sorts by column 3. An operation with its own key no longer claims `--cols`, so a `--cols` left over with no other operation goes back to **selecting** columns. The sort and unique keys then address that selected result, since they are read from the transformed line; the grep key addresses the line *as read*, since the filter runs before any transform — so `-F , -C 2 --grep-key 1 -g ERROR` keeps the rows whose field 1 matches and prints their field 2.
 - With `--fields`, the column ranges count **delimited fields** instead of characters: `-F , -C 2` addresses the second comma-separated field, per line. All column-based operations (select, delete, sort key, find/replace scope, `--grep`, `--unique`, case/trim) work on fields the same way; deleting fields also removes one adjacent delimiter, like `cut`, and a field list is merged before that, so `-C 2,3` deletes exactly what `-C 2-3` does. Selected fields are rejoined by the delimiter (or `--output-delimiter`), and a field the line does not have is skipped rather than joining a stray delimiter. The delimiter may be more than one character.
-- `--quoted` makes field mode read CSV rather than a plain split: a delimiter inside a `"…"` field no longer splits it, and a doubled `""` is an escaped quote (RFC 4180). A field keeps its quotes — they are part of the text it occupies — so selecting or reordering fields re-joins them into valid CSV, and deleting one takes its quotes with it. Operations that read a field as a *number* (`--sort --numeric` and the `--sum`/`--avg`/`--min`/`--max` summaries) read its value instead, without the quotes, so `"10"` counts as 10. A record may span several lines: a newline inside quotes belongs to the field, so under `--quoted` a row is a whole *record* — `--rows`, `--number`, `--count` and error messages count records, not lines, and the newline comes out with the field unchanged. A quoted field still open at the end of the input fails with exit code 2 rather than swallow the rest of the file.
+- `--quoted` makes field mode read CSV rather than a plain split: a delimiter inside a `"…"` field no longer splits it, and a doubled `""` is an escaped quote (RFC 4180). A field keeps its quotes — they are part of the text it occupies — so selecting or reordering fields re-joins them into valid CSV, and deleting one takes its quotes with it. Operations that read a field as a *number* (`--sort --numeric` and the `--sum`/`--avg`/`--min`/`--max`/`--median` summaries) read its value instead, without the quotes, so `"10"` counts as 10. A record may span several lines: a newline inside quotes belongs to the field, so under `--quoted` a row is a whole *record* — `--rows`, `--number`, `--count` and error messages count records, not lines, and the newline comes out with the field unchanged. A quoted field still open at the end of the input fails with exit code 2 rather than swallow the rest of the file.
 - With `--delete`, the row range is **removed**: rows outside the range pass through unchanged. Adding a column range deletes only those columns inside the selected rows.
 - Find/replace only replaces occurrences that lie entirely inside the column range.
 - `--find` and `--replace` may be repeated to run several substitutions: the *n*-th `--find` pairs with the *n*-th `--replace`, and the pairs apply left to right, so a later pair can rewrite what an earlier one produced. Every `--find` must have its own `--replace` and vice versa (a lone `--find` is rejected — use `--grep` to filter rows by content instead).
@@ -202,6 +206,8 @@ fxt -e -f '(\w+)@(\w+)' -r '$2.$1' input.txt
 
 # Case-insensitive replace: rewrites foo, FOO, Foo, ...
 fxt --ignore-case -f foo -r bar input.txt
+
+# Backreferences and lookaround (-P)
 fxt -P -g '(.)\1' words.txt                       # lines with a doubled letter
 fxt -P -e -f '\b(\w+) \1\b' -r '$1' notes.txt    # "the the" -> "the"
 
@@ -312,8 +318,14 @@ fxt --completions powershell | Out-String | Invoke-Expression
 
 ## Project structure
 
+- `src/main.rs` — the binary: files, stdin/stdout, `--in-place`, `--dry-run`, exit codes
 - `src/cli_args/` — clap definition and validated `Config` (`TryFrom<ArgMatches>`)
-- `src/transform.rs` — `LineTransform` trait and per-line operations; the pipeline is derived from the configuration once
-- `src/text.rs` — pure, char-indexed text helpers
-- `src/file_processor.rs` — streaming orchestrator, generic over `BufRead`/`Write`
-- `tests/cli.rs` — end-to-end tests running the real binary
+- `src/compose.rs` — turns a `Config` into a processor; the only place that knows how options map onto engine parts
+- `src/file_processor.rs` — the streaming engine, generic over `BufRead`/`Write`: row selection, filtering, reordering
+- `src/transform.rs` — `LineTransform` trait and the per-line operations (one line in, zero or more out)
+- `src/predicate.rs`, `src/pattern_range.rs` — `--grep`, and `--from`/`--to` blocks
+- `src/reduce.rs` — `LineReducer`: `--join` and the summaries
+- `src/columns.rs`, `src/ranges.rs`, `src/records.rs` — column spans (chars, graphemes, fields, quoted CSV), row ranges, multi-line CSV records
+- `src/text.rs`, `src/number.rs`, `src/pattern.rs`, `src/encoding.rs` — char-indexed text helpers, exact numbers, the two regex engines, text encodings
+- `tests/cli.rs` — end-to-end tests running the real binary; property tests (`proptest`) sit next to the parsers and text helpers
+- `benches/engine.rs` — `criterion` benchmarks of the engine
