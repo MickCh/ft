@@ -7,6 +7,7 @@
 use crate::cli_args::{Config, FindPattern, ReorderMode, Replacement};
 use crate::columns::{ColumnList, ColumnSpan};
 use crate::file_processor::{FileProcessor, Reorder, RowMode, SortSpec};
+use crate::pattern_range::PatternRange;
 use crate::predicate::{GrepPredicate, LinePredicate};
 use crate::reduce::{Aggregate, Join, LineReducer, Summarize};
 use crate::transform::{
@@ -29,6 +30,8 @@ pub fn build_processor(config: &Config) -> FileProcessor {
 
     FileProcessor {
         rows: config.rows_or_full(),
+        pattern_range: (config.from_pattern.is_some() || config.to_pattern.is_some())
+            .then(|| PatternRange::new(config.from_pattern.clone(), config.to_pattern.clone())),
         row_mode: row_mode(config),
         reorder,
         predicate,

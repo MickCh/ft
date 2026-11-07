@@ -121,6 +121,10 @@ pub struct Config {
     //the summary to write instead of the processed rows
     pub summary: SummarySpec,
     pub grep: Option<Regex>,
+    //`--from`/`--to`: rows addressed by content, matched as bytes so the
+    //rows outside them never need to be UTF-8
+    pub from_pattern: Option<regex::bytes::Regex>,
+    pub to_pattern: Option<regex::bytes::Regex>,
     pub invert: bool,
     //answer only whether anything matched: write nothing, and say it
     //with the exit code
@@ -189,6 +193,13 @@ impl Config {
             }),
             None => ColumnSpan::Chars(columns),
         }
+    }
+
+    /// Whether rows are chosen by what they contain (`--grep`, `--from`,
+    /// `--to`) — and so whether a run can find nothing to match, which
+    /// the exit code reports, like grep's.
+    pub fn filters_by_content(&self) -> bool {
+        self.grep.is_some() || self.from_pattern.is_some() || self.to_pattern.is_some()
     }
 
     /// The files among the inputs, in order. With `--in-place` these are
@@ -335,6 +346,8 @@ impl TryFrom<ArgMatches> for Config {
                     .cloned(),
             },
             grep,
+            from_pattern: row_pattern(&matches, "from", ignore_case)?,
+            to_pattern: row_pattern(&matches, "to", ignore_case)?,
             invert: matches.get_flag("invert"),
             quiet: matches.get_flag("quiet"),
             unique: matches.get_flag("unique"),
@@ -359,7 +372,10 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::ReplaceWithDelete);
         }
 
-        if config.delete && config.rows.is_none() && config.cols.is_none() && config.grep.is_none()
+        if config.delete
+            && config.rows.is_none()
+            && config.cols.is_none()
+            && !config.filters_by_content()
         {
             return Err(ConfigError::DeleteWithoutRange);
         }
@@ -370,7 +386,7 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::DeleteWithReorder);
         }
 
-        if config.ignore_case && config.replacements.is_empty() && config.grep.is_none() {
+        if config.ignore_case && config.replacements.is_empty() && !config.filters_by_content() {
             return Err(ConfigError::IgnoreCaseWithoutPattern);
         }
 
@@ -387,6 +403,23 @@ impl TryFrom<ArgMatches> for Config {
 
         Ok(config)
     }
+}
+
+/// Compile the `--from` or `--to` pattern, honouring `--ignore-case`.
+fn row_pattern(
+    matches: &ArgMatches,
+    id: &str,
+    ignore_case: bool,
+) -> Result<Option<regex::bytes::Regex>, ConfigError> {
+    matches
+        .get_one::<String>(id)
+        .map(|pattern| {
+            regex::bytes::RegexBuilder::new(pattern)
+                .case_insensitive(ignore_case)
+                .build()
+                .map_err(|e| ConfigError::InvalidRegex(e.to_string()))
+        })
+        .transpose()
 }
 
 /// The inputs named on the command line, in order. No argument (or a
@@ -802,6 +835,47 @@ mod tests {
     fn rejects_invalid_grep_regex() {
         let error = config_from(&["fxt", "-g", "[unclosed", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::InvalidRegex(_)));
+    }
+
+    #[test]
+    fn row_patterns_compile_as_byte_regexes() {
+        // Given / When
+        let config = config_from(&["fxt", "--from", "^a", "--to", "z$", "input.txt"]).unwrap();
+
+        // Then
+        assert!(
+            config
+                .from_pattern
+                .unwrap()
+                .is_match(b"abc")
+        );
+        assert!(
+            config
+                .to_pattern
+                .unwrap()
+                .is_match(b"xyz")
+        );
+        let error = config_from(&["fxt", "--from", "[unclosed", "input.txt"]).unwrap_err();
+        assert!(matches!(error, ConfigError::InvalidRegex(_)));
+    }
+
+    #[test]
+    fn row_patterns_count_as_a_content_filter() {
+        // Given / When / Then: enough for --delete, --ignore-case, --quiet
+        assert!(config_from(&["fxt", "-d", "--from", "x", "input.txt"]).is_ok());
+        let config = config_from(&["fxt", "--ignore-case", "--to", "END", "input.txt"]).unwrap();
+        assert!(
+            config
+                .to_pattern
+                .unwrap()
+                .is_match(b"end")
+        );
+        assert!(config_from(&["fxt", "-q", "--from", "x", "input.txt"]).is_ok());
+        assert!(
+            cli()
+                .try_get_matches_from(["fxt", "-q", "input.txt"])
+                .is_err()
+        );
     }
 
     #[test]

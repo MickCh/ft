@@ -7,6 +7,7 @@
 use crate::columns::{self, ColumnSpan};
 use crate::constants::NEW_LINE;
 use crate::number::Number;
+use crate::pattern_range::PatternRange;
 use crate::predicate::LinePredicate;
 use crate::ranges::{RangeSet, RangeSpec};
 use crate::reduce::LineReducer;
@@ -131,6 +132,9 @@ fn write_pending_separator<W: Write>(state: &mut RunState, writer: &mut W) -> io
 pub struct FileProcessor {
     /// Rows taking part in processing (every row when no range given).
     pub rows: RangeSpec,
+    /// `--from`/`--to`: rows addressed by content, resolved as the lines
+    /// stream past. A row is processed when it lies in `rows` *and* here.
+    pub pattern_range: Option<PatternRange>,
     /// What happens to rows inside vs outside the row range.
     pub row_mode: RowMode,
     /// `None` means lines stream straight to the writer.
@@ -214,15 +218,24 @@ impl FileProcessor {
         state: &mut RunState,
         writer: &mut W,
     ) -> io::Result<()> {
-        if !rows.contains(line_number) {
+        //every line moves the pattern range along — also one outside
+        //`--rows`, since it may open or close a block all the same
+        let in_pattern_range = match &mut self.pattern_range {
+            Some(range) => range.admits(text::without_line_terminator(raw_line)),
+            None => true,
+        };
+
+        if !in_pattern_range || !rows.contains(line_number) {
             if self.row_mode.keeps_unselected() {
                 self.write_kept_line(raw_line, state, writer)?;
             }
             return Ok(());
         }
 
-        //without a content filter, deleting whole rows needs no UTF-8 look
+        //without a predicate, deleting whole rows needs no UTF-8 look; the
+        //row is still a match — `--from`/`--to` may be why it goes
         if self.row_mode.deletes_selected() && self.predicate.is_none() {
+            state.matched = true;
             return Ok(());
         }
 

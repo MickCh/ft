@@ -23,6 +23,14 @@ pub fn split_line_terminator(line: &str) -> (&str, &'static str) {
     (line, "")
 }
 
+/// The content of a raw line, its terminator ("\r\n" or "\n") cut off:
+/// [`split_line_terminator`] for bytes that need not be UTF-8.
+pub fn without_line_terminator(line: &[u8]) -> &[u8] {
+    line.strip_suffix(b"\r\n")
+        .or_else(|| line.strip_suffix(b"\n"))
+        .unwrap_or(line)
+}
+
 /// Cut the line into consecutive chunks of at most `width` characters
 /// (like `fold -w`), counting chars rather than bytes. A line that
 /// already fits yields itself, so the result is never empty; a `width`

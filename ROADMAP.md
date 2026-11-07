@@ -27,6 +27,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Order of operations documented** — README section on the fixed pipeline and the shared `--cols` scope, with examples. *(2026-11-06 comparison)*
 - ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
 - ✅ **Quoted `--unique` keys** — `--unique` keys on `select_canonical` too, so under `--quoted` `"a"` and `a` are duplicates, as they are one `--group-by` group.
+- ✅ **Pattern-addressed rows** — `--from`/`--to`, `sed '/A/,/B/'` semantics (inclusive, end looked for from the next line, every block selected; `--to` alone like `sed 0,/B/`). Not a `RangeBound` variant after all: `RangeSpec` resolves up front, this cannot, so it is its own stateful `PatternRange`, told every line in order and intersected with `--rows`. Matched as bytes, so rows outside a block need not be UTF-8.
 - ✅ **Property tests** — `proptest` modules in `columns.rs` and `text.rs` check the field splitter against the char-by-char one it replaced and against `str::split`, quoted values round-tripping through CSV, and the char helpers against a `Vec<char>` reference (`select(R)` put back into `delete(R)` rebuilds the line), on lines of multi-byte chars, quotes and multi-char delimiters. Deliberately broken versions of the byte walk and of the ASCII fast path were caught at once.
 - ✅ **Benchmarks** — `benches/engine.rs` (`criterion`): the engine on 100k generated log and CSV rows, in memory, per operation; baseline under *Performance* below.
 - ✅ **Completions, man page, help examples** — `--completions <shell>` (`clap_complete`) and `--man` (`clap_mangen`) are exclusive flags of the binary itself, so they work after a plain `cargo install`; `after_help` lists examples of the newer features.
@@ -43,7 +44,6 @@ Each is one new type plus one branch in `compose::build_pipeline`:
 
 ## 2. Still open
 
-- **Pattern-addressed rows** — `--from /START/ --to /END/` (a range like `sed`'s). Fits as a new `RangeBound` variant, but must be resolved while streaming rather than via `resolve(total)`. The largest remaining design item.
 - **Encodings** — non-UTF-8 input is a hard error today. Add `--encoding latin1|utf16`, or a lossy/byte-oriented mode.
 - **More reducers** — `--median`, `--distinct` (count of distinct keys), `--first`/`--last` per group. Now just implementations of an abstraction that exists.
 

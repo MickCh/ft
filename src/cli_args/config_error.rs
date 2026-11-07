@@ -44,11 +44,14 @@ impl fmt::Display for ConfigError {
             ConfigError::DeleteWithoutRange => {
                 write!(
                     f,
-                    "Delete requires a row range (--rows), a column range (--cols) or a filter (--grep)"
+                    "Delete requires a row range (--rows), a column range (--cols) or a filter (--grep, --from, --to)"
                 )
             }
             ConfigError::IgnoreCaseWithoutPattern => {
-                write!(f, "Ignore-case requires a pattern (--find or --grep)")
+                write!(
+                    f,
+                    "Ignore-case requires a pattern (--find, --grep, --from or --to)"
+                )
             }
             ConfigError::InPlaceWithoutFile => {
                 write!(

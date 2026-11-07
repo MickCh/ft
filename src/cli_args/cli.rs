@@ -18,6 +18,7 @@ pub fn cli() -> Command {
              \x20 fxt -F , -C 2 --grep-key 1 -g X a.csv   field 2 of the rows whose field 1 has X\n\
              \x20 fxt -F , --group-by 1 --sum 2 data.csv  sum field 2 per distinct field 1\n\
              \x20 fxt -s -n --reverse -F , -C 3 data.csv  sort by field 3, largest first\n\
+             \x20 fxt --from '^\\[db' --to '^\\[' a.ini     the [db] section, through the next header\n\
              \x20 fxt -g ERROR -d -i --backup .bak a.log  delete matching rows in place,\n\
              \x20                                        keeping a backup\n\
              \n\
@@ -177,6 +178,28 @@ pub fn cli() -> Command {
                 .long("grep")
                 .required(false)
                 .help("Keep only rows matching this regex (with --delete: delete them)"),
+        )
+        .arg(
+            Arg::new("from")
+                .long("from")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_name("REGEX")
+                .help("Rows from each line matching REGEX (inclusive; like sed '/A/,/B/')"),
+        )
+        .arg(
+            Arg::new("to")
+                .long("to")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_name("REGEX")
+                .help("...through the next line matching REGEX (inclusive); alone: from line 1"),
+        )
+        //what --quiet can ask about: a filter by content
+        .group(
+            ArgGroup::new("content-filters")
+                .args(["grep", "from", "to"])
+                .multiple(true),
         )
         .arg(
             Arg::new("invert")
@@ -368,9 +391,12 @@ pub fn cli() -> Command {
                 .long("quiet")
                 .required(false)
                 .action(ArgAction::SetTrue)
-                .requires("grep")
+                .requires("content-filters")
                 .conflicts_with_all(["output", "in-place"])
-                .help("Write nothing; exit 0 if any row matched, 1 if none did (requires --grep)"),
+                .help(
+                    "Write nothing; exit 0 if any row matched, 1 if none did \
+                     (requires --grep, --from or --to)",
+                ),
         )
         .arg(
             Arg::new("output")

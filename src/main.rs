@@ -33,9 +33,9 @@ fn main() -> ExitCode {
     }
 }
 
-/// What the run reports back to the shell. Without a `--grep` filter
-/// there is nothing that could fail to match, so a plain transformation
-/// always counts as a match.
+/// What the run reports back to the shell. Without a filter by content
+/// (`--grep`, `--from`, `--to`) there is nothing that could fail to
+/// match, so a plain transformation always counts as a match.
 enum Verdict {
     Matched,
     NothingMatched,
@@ -43,7 +43,7 @@ enum Verdict {
 
 impl Verdict {
     fn of(config: &Config, matched: bool) -> Verdict {
-        match config.grep.is_none() || matched {
+        match !config.filters_by_content() || matched {
             true => Verdict::Matched,
             false => Verdict::NothingMatched,
         }

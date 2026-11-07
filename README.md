@@ -32,6 +32,8 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 | `--unique-key <range>` | Columns keying `--unique`, instead of `--cols` (requires `--unique`) |
 | `--grep-key <range>` | Columns `--grep` matches in, instead of `--cols` (requires `--grep`) |
 | `-g, --grep <regex>` | Keep only rows matching the regex (with `--delete`: delete them) |
+| `--from <regex>` | Rows from each line matching the regex… (like `sed '/A/,/B/'`) |
+| `--to <regex>` | …through the next line matching this one; alone, from the first line |
 | `--invert` | Invert the `--grep` match, like `grep -v` (requires `--grep`) |
 | `-q, --quiet` | Write nothing; say with the exit code whether anything matched (requires `--grep`) |
 | `-f, --find <text>` | Substring to find (repeatable, paired with `--replace`) |
@@ -73,6 +75,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 - Find/replace only replaces occurrences that lie entirely inside the column range.
 - `--find` and `--replace` may be repeated to run several substitutions: the *n*-th `--find` pairs with the *n*-th `--replace`, and the pairs apply left to right, so a later pair can rewrite what an earlier one produced. Every `--find` must have its own `--replace` and vice versa (a lone `--find` is rejected — use `--grep` to filter rows by content instead).
 - `--grep` filters rows by content, complementing the positional row range: only rows inside `--rows` *and* matching the pattern are processed. With `--delete`, matching rows are deleted instead. The match is scoped to the column range.
+- `--from`/`--to` address rows by content, like `sed '/START/,/END/'`: a block runs from a line matching `--from` through the next line matching `--to`, both included. The end is looked for from the line *after* the start, so `--from '^\[db' --to '^\['` takes the `[db]` section up to and including the next header, and once a block ends the next `--from` match opens another — every block is selected. `--from` alone runs to the end of the input; `--to` alone runs from the first line through the first match (which may be the first line itself, like `sed 0,/END/`). Blocks combine with the other filters: a row is processed when it lies in `--rows` *and* in a block *and* matches `--grep`, so `--rows` and `--grep` narrow a block rather than extend it. The patterns see whole lines (not the column range), honour `--ignore-case`, and are matched as bytes, so rows outside every block pass through even if they are not valid UTF-8.
 - `--upper`, `--lower`, `--title-case`, `--squeeze` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`. `--squeeze` runs before `--trim`, so `--squeeze --trim` normalizes the whitespace of a line completely.
 - `--number` prefixes each **output** row with its number (separated by `--output-delimiter`, else `--fields`, else a tab). It counts the rows it actually emits — after the filters, after `--split-on`/`--wrap` expanded them and after `--drop-empty` removed some — so the numbers are always contiguous. It cannot be combined with a reordering, which would shuffle the numbers along with the rows.
 - `--wrap` cuts every processed line into chunks of at most `<width>` **characters** — one row in, several rows out. It runs after the other transforms, so the chunks are cut from the finished line. If the input's last line had no terminator, neither does the last chunk.
@@ -94,7 +97,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 
 The flags describe *what* to do, not in which order: whatever order they are written in, `fxt` always runs the same pipeline.
 
-1. **Row range** (`--rows`), then the **content filter** (`--grep`/`--invert`) — on the line *as it was read*, before any transform.
+1. **Row range** (`--rows` and the `--from`/`--to` blocks), then the **content filter** (`--grep`/`--invert`) — on the line *as it was read*, before any transform.
 2. **Transforms**, in this fixed order: column delete → find/replace pairs → `--upper` → `--lower` → `--title-case` → `--squeeze` → `--trim` → `--split-on` → `--wrap` → `--drop-empty` → `--number`.
 3. **`--unique`**, on the transformed line.
 4. **Reordering** (`--sort`/`--tac`/`--shuffle`), then a **reducer** (`--join` or a summary) instead of writing the rows.
@@ -124,8 +127,8 @@ Like `grep`:
 
 | Code | Meaning |
 |---|---|
-| `0` | Rows matched (a run without `--grep` has nothing that could fail to match, so it always succeeds) |
-| `1` | `--grep` was given and no row matched |
+| `0` | Rows matched (a run without `--grep`, `--from` or `--to` has nothing that could fail to match, so it always succeeds) |
+| `1` | `--grep`, `--from` or `--to` was given and no row matched |
 | `2` | The run failed (bad arguments, unreadable file, …) |
 
 A row counts as matched when it lies inside `--rows` *and* satisfies the filter — including the rows a `--delete` removed, since matching is why they went. `--quiet` writes nothing at all and leaves only the exit code, stopping at the first match (`grep -q`), which makes `fxt` usable as a condition:
@@ -220,6 +223,13 @@ fxt -C 3 --drop-empty input.txt
 # Keep only rows containing ERROR; delete rows that match a pattern
 fxt -g ERROR app.log
 fxt -d -g '^#' config.txt
+
+# Blocks addressed by content, like sed '/A/,/B/'
+fxt --from '^\[db\]' --to '^\[' app.ini       # the [db] section and the header after it
+fxt --from BEGIN --to END dump.sql             # every BEGIN…END block
+fxt -d --from '^<!--' --to '-->$' page.html    # delete comment blocks
+fxt --to '^$' mail.txt                         # the header lines, through the first blank one
+fxt --from '^\[db\]' --to '^\[' -g = -s app.ini  # the section's key=value lines, sorted
 
 # Sort and deduplicate by the key in columns 1-8 (like sort -u)
 fxt -s -u -C 1-8 input.txt

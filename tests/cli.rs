@@ -1507,3 +1507,109 @@ fn completions_and_man_stand_alone() {
     let output = run_fxt(&["--completions", "bash", "input.txt"]);
     assert_eq!(output.status.code(), Some(2));
 }
+
+const SECTIONS: &str = "intro\n[one]\na=1\n[two]\nb=2\nb=0\n[three]\nc=3\n";
+
+#[test]
+fn from_to_selects_a_block_like_sed() {
+    //inclusive at both ends; the end is looked for after the start line,
+    //so the next header closes the block (and belongs to it)
+    let input = TempFile::new("from-to", SECTIONS);
+    let stdout = run_fxt_stdout(&["--from", r"^\[two", "--to", r"^\[", input.path_str()]);
+    assert_eq!(stdout, "[two]\nb=2\nb=0\n[three]\n");
+}
+
+#[test]
+fn from_to_selects_every_block() {
+    let input = TempFile::new("from-to-blocks", "x\nBEGIN\n1\nEND\ny\nBEGIN\n2\nEND\nz\n");
+    let stdout = run_fxt_stdout(&["--from", "BEGIN", "--to", "END", input.path_str()]);
+    assert_eq!(stdout, "BEGIN\n1\nEND\nBEGIN\n2\nEND\n");
+}
+
+#[test]
+fn from_alone_runs_to_the_end_and_to_alone_from_the_start() {
+    let input = TempFile::new("from-to-open", SECTIONS);
+    let stdout = run_fxt_stdout(&["--from", r"^\[three", input.path_str()]);
+    assert_eq!(stdout, "[three]\nc=3\n");
+    let stdout = run_fxt_stdout(&["--to", r"^\[", input.path_str()]);
+    assert_eq!(stdout, "intro\n[one]\n");
+}
+
+#[test]
+fn delete_removes_the_block() {
+    let input = TempFile::new("from-to-delete", SECTIONS);
+    let stdout = run_fxt_stdout(&["-d", "--from", r"^\[one", "--to", "a=", input.path_str()]);
+    assert_eq!(stdout, "intro\n[two]\nb=2\nb=0\n[three]\nc=3\n");
+}
+
+#[test]
+fn from_to_combines_with_rows_grep_and_sort() {
+    let input = TempFile::new("from-to-combined", SECTIONS);
+    //rows 5-6 that are also in the block
+    let stdout = run_fxt_stdout(&[
+        "-R",
+        "5-",
+        "--from",
+        r"^\[two",
+        "--to",
+        "b=0",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "b=2\nb=0\n");
+    //only the block's rows are filtered, and sorted in place
+    let stdout = run_fxt_stdout(&[
+        "--from",
+        r"^\[two",
+        "--to",
+        "b=0",
+        "-g",
+        "=",
+        "-s",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "b=0\nb=2\n");
+}
+
+#[test]
+fn from_to_works_with_end_relative_rows() {
+    //~N buffers the input; the pattern range must still see every line
+    let input = TempFile::new("from-to-tail", SECTIONS);
+    let stdout = run_fxt_stdout(&["-R", "~3-", "--from", r"^\[two", input.path_str()]);
+    assert_eq!(stdout, "b=0\n[three]\nc=3\n");
+}
+
+#[test]
+fn from_honours_ignore_case() {
+    let input = TempFile::new("from-ignore-case", "a\nstart\nb\n");
+    let stdout = run_fxt_stdout(&["--ignore-case", "--from", "START", input.path_str()]);
+    assert_eq!(stdout, "start\nb\n");
+}
+
+#[test]
+fn from_that_never_matches_exits_one_and_quiet_asks_it() {
+    let input = TempFile::new("from-none", SECTIONS);
+    let output = run_fxt(&["--from", "NOWHERE", input.path_str()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+
+    let output = run_fxt(&["-q", "--from", r"^\[two", input.path_str()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn rows_outside_the_block_need_not_be_utf8() {
+    //matched as bytes: a stray byte outside the block passes through
+    let input = TempFile::new("from-bytes", "");
+    fs::write(&input.path, b"bad \xff\nSTART\nok\n").unwrap();
+    let output = run_fxt(&["-d", "--from", "START", input.path_str()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"bad \xff\n");
+}
+
+#[test]
+fn from_to_matches_lines_without_their_crlf() {
+    let input = TempFile::new("from-crlf", "a\r\nSTART\r\nb\r\nEND\r\nc\r\n");
+    let stdout = run_fxt_stdout(&["--from", "^START$", "--to", "^END$", input.path_str()]);
+    assert_eq!(stdout, "START\r\nb\r\nEND\r\n");
+}
