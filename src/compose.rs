@@ -1234,3 +1234,76 @@ mod tests {
         assert_eq!(result, "1\ta \n2\tb\n3\tc\n");
     }
 }
+
+#[cfg(test)]
+mod properties {
+    use super::*;
+    use crate::ranges::{RangeBound, RangeSpec};
+    use proptest::prelude::*;
+    use std::io::Cursor;
+
+    fn run(config: &Config, input: &str) -> String {
+        let mut output = Vec::new();
+        build_processor(config)
+            .run(Cursor::new(input.as_bytes()), &mut output)
+            .expect("processing failed");
+        String::from_utf8(output).expect("output is not valid UTF-8")
+    }
+
+    fn bound() -> impl Strategy<Value = RangeBound> {
+        prop_oneof![
+            (1usize..12).prop_map(RangeBound::FromStart),
+            (1usize..12).prop_map(RangeBound::FromEnd),
+        ]
+    }
+
+    /// Row specs whose every part starts from the end: what the engine
+    /// holds only a ring of the last rows for.
+    fn tail_spec() -> impl Strategy<Value = Vec<(RangeBound, RangeBound)>> {
+        prop::collection::vec(((1usize..12).prop_map(RangeBound::FromEnd), bound()), 1..4)
+    }
+
+    proptest! {
+        #[test]
+        fn a_tail_selection_is_what_resolving_the_whole_input_selects(
+            lines in prop::collection::vec("[a-c]{0,3}", 0..15),
+            parts in tail_spec(),
+            mode in 0usize..3,
+        ) {
+            // Given rows, a spec counted from the end and a row mode
+            let input: String = lines.iter().map(|line| format!("{line}\n")).collect();
+            let spec = RangeSpec::new(parts);
+            let mut config = Config {
+                rows: Some(spec.clone()),
+                ..Config::default()
+            };
+            match mode {
+                0 => config.upper = true,
+                1 => config.delete = true,
+                _ => {
+                    config.upper = true;
+                    config.keep_others = true;
+                }
+            }
+
+            // When the engine runs over it
+            let output = run(&config, &input);
+
+            // Then it is what the spec resolved against the line count picks
+            let rows = spec.resolve(lines.len());
+            let expected: String = lines
+                .iter()
+                .enumerate()
+                .filter_map(|(index, line)| {
+                    let selected = rows.contains(index + 1);
+                    match (mode, selected) {
+                        (0, true) | (2, true) => Some(format!("{}\n", line.to_uppercase())),
+                        (0, false) | (1, true) => None,
+                        _ => Some(format!("{line}\n")),
+                    }
+                })
+                .collect();
+            prop_assert_eq!(output, expected);
+        }
+    }
+}

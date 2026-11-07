@@ -16,7 +16,7 @@ use crate::transform::{Lines, Pipeline};
 
 use bstr::io::BufReadExt;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::io::{BufRead, Write};
 use std::str::from_utf8;
@@ -259,10 +259,50 @@ impl FileProcessor {
             if !(self.stop_when_matched && state.matched) {
                 records.finish()?;
             }
+        } else if let Some(tail_len) = self.rows.tail_len() {
+            //every part starts counting from the end (`~10-`): nothing
+            //before the last `tail_len` rows can be selected, so only they
+            //are held, in a ring, until the line count is known
+            let tail_len = tail_len.max(1);
+            let unselected = RangeSet::new(Vec::new());
+            let mut records = Records::new(self.quoted_records);
+            let mut tail: VecDeque<Vec<u8>> = VecDeque::new();
+            let mut row_number = 0usize;
+            reader.for_byte_line_with_terminator(|raw_line| {
+                let Some(row) = records.push(raw_line) else {
+                    return Ok(true);
+                };
+                row_number += 1;
+                //the row leaving the ring lies before the tail: it goes
+                //the way of every unselected row — on through `--from`,
+                //and out unchanged where the mode keeps such rows
+                let mut slot = Vec::new();
+                if tail.len() == tail_len
+                    && let Some(evicted) = tail.pop_front()
+                {
+                    let evicted_number = row_number - tail_len;
+                    self.process_line(&evicted, evicted_number, &unselected, &mut state, writer)?;
+                    slot = evicted;
+                }
+                //the allocation is reused for the row coming in
+                slot.clear();
+                slot.extend_from_slice(&row);
+                tail.push_back(slot);
+                Ok(true)
+            })?;
+            records.finish()?;
+            let rows = self.rows.resolve(row_number);
+            let first = row_number - tail.len() + 1;
+            for (offset, row) in tail.iter().enumerate() {
+                self.process_line(row, first + offset, &rows, &mut state, writer)?;
+                if self.stop_when_matched && state.matched {
+                    break;
+                }
+            }
         } else {
-            //end-relative bounds (`~N`) only resolve once the total
-            //line count is known: the whole input must be buffered, back
-            //to back in one allocation, each row remembered by its end
+            //bounds counted from both ends (`2-~2`) only resolve once the
+            //total line count is known: the whole input must be buffered,
+            //back to back in one allocation, each row remembered by its end
             let mut records = Records::new(self.quoted_records);
             let mut bytes = Vec::new();
             let mut ends = Vec::new();

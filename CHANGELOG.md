@@ -33,7 +33,8 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ### Performance
 
-- Rows held back for reordering, and the input buffered for `~N` row bounds, are stored back to back in one allocation instead of one per row; reordering moves small records, not the text. `-R ~1000-~1` 1.4× faster, `--shuffle` 1.2×, `--tac`, `--sort` and a sort by a CSV field 1.1×.
+- Rows held back for reordering, and the input buffered for `~N` row bounds, are stored back to back in one allocation instead of one per row; reordering moves small records, not the text. `--shuffle` 1.2× faster, `--tac`, `--sort` and a sort by a CSV field 1.1×.
+- A row range whose every part starts from the end (`-R ~1000-`) holds only that many rows, in a ring, instead of the whole input: 1.65× faster on 300k rows (35 → 21 ms; `tail` takes 15), and memory no longer grows with the input.
 
 ## [0.4.0] — 2026-11-07
 

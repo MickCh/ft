@@ -938,6 +938,19 @@ fn end_relative_rows_work_on_stdin() {
 }
 
 #[test]
+fn a_tail_still_sees_the_blocks_opened_before_it() {
+    //--from must be told every row, also those that never reach the tail
+    let input = "b\nx\ny\nz\n";
+    let output = run_fxt_with_stdin(&["-R", "~2-", "--from", "b"], input);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "y\nz\n");
+    let output = run_fxt_with_stdin(&["-R", "~2-", "--from", "y"], input);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "y\nz\n");
+    //and rows before the tail stay where they were when they are kept
+    let output = run_fxt_with_stdin(&["-R", "~2-", "--keep-others", "--upper"], input);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "b\nx\nY\nZ\n");
+}
+
+#[test]
 fn delete_removes_end_relative_rows() {
     let input = TempFile::new("delete-rows-end-relative", INPUT);
     let stdout = run_fxt_stdout(&["-d", "-R", "~1", input.path_str()]);

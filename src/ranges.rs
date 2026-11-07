@@ -48,6 +48,20 @@ impl RangeSpec {
         })
     }
 
+    /// How far from the end the spec reaches, when every part starts
+    /// counting from the end (`~10-`, `~5-~2`, `~3-8`): no row before the
+    /// last `n` can be selected then, so only those need holding until
+    /// the line count is known. `None` when a part starts from the start
+    /// (`2-~1`), which may select any row.
+    pub fn tail_len(&self) -> Option<usize> {
+        self.parts
+            .iter()
+            .try_fold(0, |furthest, (from, _)| match from {
+                RangeBound::FromEnd(value) => Some(furthest.max(*value)),
+                RangeBound::FromStart(_) => None,
+            })
+    }
+
     /// Resolve every bound against the total number of lines. Parts
     /// that fall entirely before the first line disappear.
     pub fn resolve(&self, total: usize) -> RangeSet {
@@ -162,6 +176,19 @@ mod tests {
 
         let relative = RangeSpec::new(vec![(RangeBound::FromEnd(2), RangeBound::FromEnd(1))]);
         assert!(!relative.is_absolute());
+    }
+
+    #[test]
+    fn tail_len_is_how_far_from_the_end_a_spec_reaches() {
+        use RangeBound::{FromEnd, FromStart};
+        // Given specs whose parts all start from the end / Then the furthest
+        let spec = RangeSpec::new(vec![(FromEnd(3), FromEnd(1)), (FromEnd(7), FromStart(9))]);
+        assert_eq!(spec.tail_len(), Some(7));
+
+        // And a part starting from the start may select any row
+        let mixed = RangeSpec::new(vec![(FromEnd(3), FromEnd(1)), (FromStart(2), FromEnd(1))]);
+        assert_eq!(mixed.tail_len(), None);
+        assert_eq!(RangeSpec::from(2..=4).tail_len(), None);
     }
 
     #[test]
