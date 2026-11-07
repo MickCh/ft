@@ -10,8 +10,9 @@
 //! (delete, case/trim, find/replace) work on the normalized set, where
 //! the parts are sorted and merged and order carries no meaning.
 
+use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::ops::RangeInclusive;
+use std::ops::{Deref, RangeInclusive};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::ranges::RangeSet;
@@ -84,6 +85,31 @@ impl FieldSpan {
     }
 }
 
+/// Char ranges found on one line: its fields, or what a span resolves to.
+/// A handful cover nearly every line, so they are kept inline, without
+/// an allocation per line; more spill to the heap.
+pub type Ranges = SmallVec<[RangeInclusive<usize>; 8]>;
+
+/// The char ranges a span occupies on a line: its own list, borrowed,
+/// when it needs no resolving (char columns, ASCII graphemes), else the
+/// ranges resolved for this line.
+#[derive(Debug)]
+pub enum SpanRanges<'a> {
+    Borrowed(&'a [RangeInclusive<usize>]),
+    Resolved(Ranges),
+}
+
+impl Deref for SpanRanges<'_> {
+    type Target = [RangeInclusive<usize>];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            SpanRanges::Borrowed(ranges) => ranges,
+            SpanRanges::Resolved(ranges) => ranges,
+        }
+    }
+}
+
 /// How a column list addresses a line: by character positions, by
 /// user-perceived characters (grapheme clusters), or by delimited fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,24 +131,24 @@ impl ColumnSpan {
     /// (`3,1,2`) reads the parts in that order. Field parts that lie past
     /// the last field of `line` are dropped: they address nothing, and
     /// keeping them would join a stray delimiter into the result.
-    pub fn read_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
+    pub fn read_ranges(&self, line: &str) -> SpanRanges<'_> {
         match self {
-            ColumnSpan::Chars(list) => Cow::Borrowed(list.written()),
+            ColumnSpan::Chars(list) => SpanRanges::Borrowed(list.written()),
             ColumnSpan::Graphemes(list) => resolve_graphemes(line, list.written()),
             ColumnSpan::Fields(spec) => {
-                Cow::Owned(resolve_fields(line, spec, spec.fields.written(), false))
+                SpanRanges::Resolved(resolve_fields(line, spec, spec.fields.written(), false))
             }
         }
     }
 
     /// The char ranges to write into: normalized, so they are ascending
     /// and never overlap and the line can be rebuilt in one pass.
-    pub fn write_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
+    pub fn write_ranges(&self, line: &str) -> SpanRanges<'_> {
         match self {
-            ColumnSpan::Chars(list) => Cow::Borrowed(list.normalized()),
+            ColumnSpan::Chars(list) => SpanRanges::Borrowed(list.normalized()),
             ColumnSpan::Graphemes(list) => resolve_graphemes(line, list.normalized()),
             ColumnSpan::Fields(spec) => {
-                Cow::Owned(resolve_fields(line, spec, spec.fields.normalized(), false))
+                SpanRanges::Resolved(resolve_fields(line, spec, spec.fields.normalized(), false))
             }
         }
     }
@@ -131,12 +157,12 @@ impl ColumnSpan {
     /// swallows one adjacent delimiter (like `cut`), so deleting fields
     /// does not leave a dangling delimiter behind. Normalizing first is
     /// what makes `-C 2,3` delete the same columns as `-C 2-3`.
-    pub fn delete_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
+    pub fn delete_ranges(&self, line: &str) -> SpanRanges<'_> {
         match self {
-            ColumnSpan::Chars(list) => Cow::Borrowed(list.normalized()),
+            ColumnSpan::Chars(list) => SpanRanges::Borrowed(list.normalized()),
             ColumnSpan::Graphemes(list) => resolve_graphemes(line, list.normalized()),
             ColumnSpan::Fields(spec) => {
-                Cow::Owned(resolve_fields(line, spec, spec.fields.normalized(), true))
+                SpanRanges::Resolved(resolve_fields(line, spec, spec.fields.normalized(), true))
             }
         }
     }
@@ -254,12 +280,9 @@ impl From<ColumnList> for ColumnSpan {
 /// `line`, in the order given, dropping parts that lie beyond it. Where
 /// every char is a grapheme of its own — ASCII without a CRLF, which is
 /// one cluster — the parts already are char ranges and are borrowed.
-fn resolve_graphemes<'a>(
-    line: &str,
-    parts: &'a [RangeInclusive<usize>],
-) -> Cow<'a, [RangeInclusive<usize>]> {
+fn resolve_graphemes<'a>(line: &str, parts: &'a [RangeInclusive<usize>]) -> SpanRanges<'a> {
     if line.is_ascii() && !line.contains("\r\n") {
-        return Cow::Borrowed(parts);
+        return SpanRanges::Borrowed(parts);
     }
     //the char index each grapheme starts at, plus the total at the end
     let mut starts = Vec::new();
@@ -271,7 +294,7 @@ fn resolve_graphemes<'a>(
     starts.push(chars);
     let graphemes = starts.len() - 1;
 
-    Cow::Owned(
+    SpanRanges::Resolved(
         parts
             .iter()
             .filter_map(|part| {
@@ -291,7 +314,7 @@ fn resolve_fields(
     spec: &FieldSpan,
     parts: &[RangeInclusive<usize>],
     swallow_delimiter: bool,
-) -> Vec<RangeInclusive<usize>> {
+) -> Ranges {
     let positions = field_positions(line, spec, fields_needed(parts));
     resolve_parts(&positions, spec, parts, swallow_delimiter)
 }
@@ -302,7 +325,7 @@ fn resolve_parts(
     spec: &FieldSpan,
     parts: &[RangeInclusive<usize>],
     swallow_delimiter: bool,
-) -> Vec<RangeInclusive<usize>> {
+) -> Ranges {
     let delimiter_len = spec.delimiter.chars().count();
     parts
         .iter()
@@ -328,7 +351,7 @@ struct SplitFields<'spec> {
     /// How many fields were asked for (see `fields_needed`): a split cut
     /// short there answers for no span reaching further.
     limit: usize,
-    positions: Vec<RangeInclusive<usize>>,
+    positions: Ranges,
 }
 
 impl<'line, 'spec> SplitLine<'line, 'spec> {
@@ -360,11 +383,7 @@ impl<'line, 'spec> SplitLine<'line, 'spec> {
 
     /// The fields of the line as `spec` splits them, as far as `parts`
     /// need: the shared split when it fits, else a split of its own.
-    fn positions_for(
-        &self,
-        spec: &FieldSpan,
-        parts: &[RangeInclusive<usize>],
-    ) -> Cow<'_, [RangeInclusive<usize>]> {
+    fn positions_for(&self, spec: &FieldSpan, parts: &[RangeInclusive<usize>]) -> SpanRanges<'_> {
         let needed = fields_needed(parts);
         match &self.fields {
             Some(fields)
@@ -372,9 +391,9 @@ impl<'line, 'spec> SplitLine<'line, 'spec> {
                     && fields.quoted == spec.quoted
                     && fields.limit >= needed =>
             {
-                Cow::Borrowed(&fields.positions)
+                SpanRanges::Borrowed(&fields.positions)
             }
-            _ => Cow::Owned(field_positions(self.line, spec, needed)),
+            _ => SpanRanges::Resolved(field_positions(self.line, spec, needed)),
         }
     }
 }
@@ -443,14 +462,14 @@ fn resolve_part(
 ///
 /// The walk stops once `limit` fields are known: `-C 1` of a long line
 /// reads only as far as its first two fields.
-fn field_positions(line: &str, spec: &FieldSpan, limit: usize) -> Vec<RangeInclusive<usize>> {
+fn field_positions(line: &str, spec: &FieldSpan, limit: usize) -> Ranges {
     let bytes = line.as_bytes();
     let delimiter_bytes = spec.delimiter.as_bytes();
     let delimiter_chars = spec.delimiter.chars().count();
     let quoted = spec.quoted;
     //a few fields cover most lines; an open range must not reserve
     //`usize::MAX` of them
-    let mut positions = Vec::with_capacity(limit.min(16));
+    let mut positions = Ranges::new();
 
     //walked byte by byte, which needs no decoding: a delimiter or a quote
     //can only start on a char boundary, since no byte of a multi-byte
@@ -644,7 +663,7 @@ mod tests {
         let span = graphemes(&[2..=3]);
 
         // Then no resolution was needed
-        assert!(matches!(span.read_ranges("abcd"), Cow::Borrowed(_)));
+        assert!(matches!(span.read_ranges("abcd"), SpanRanges::Borrowed(_)));
         // except where CRLF makes two chars one cluster: `b` is column 3
         assert_eq!(graphemes(&[3..=3]).select("a\r\nb"), "b");
     }
@@ -1012,7 +1031,7 @@ mod properties {
             let reference = reference_positions(&line, delimiter, quoted);
 
             // the full split agrees, and an early stop yields its prefix
-            prop_assert_eq!(field_positions(&line, &spec, usize::MAX), reference.clone());
+            prop_assert_eq!(field_positions(&line, &spec, usize::MAX).to_vec(), reference.clone());
             let early = field_positions(&line, &spec, limit);
             prop_assert_eq!(&early[..], &reference[..limit.min(reference.len())]);
         }
