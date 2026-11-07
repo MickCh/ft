@@ -50,6 +50,7 @@ Each is one new type plus one branch in `compose::build_pipeline` (or `build_pre
 
 ## 2. Still open
 
+- The bugs and usability findings of the 2026-11-07 functional tests — see section 3a.
 - **`~N` ranges at the end only** — `-R '~1000-~1'` buffers the whole input to learn the line count (38 ms on 300k rows, where `tail -n 1000` takes 17). A row spec whose every part lies in the last N rows needs only a ring of the last N rows (and rows outside it, which are dropped, need no buffering at all); `tail` also seeks from the end of a regular file, which a stream reader cannot.
 - **Text mappings that build a `String` per line** — `--reverse-chars` (269 ms on 300k rows), `--pad-left` on a field (214), `--expand` (192) and `--encode base64` on a field (191) are the slowest transforms: each mapping returns a new `String` per range, which `map_ranges` then copies into the rebuilt line. Writing straight into the rebuilt line, as the literal `--find` does since its rework, and keeping a line no mapping changes (`Keep`), should bring them near the 140 ms of a replacement.
 
@@ -119,6 +120,42 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
   | `--reverse-chars` | 269 | — (`rev` is not in Git for Windows) |
 
   `fxt` leads every case but `tail`; the two items under *Still open* are what these numbers point at.
+
+## 3a. From the 2026-11-07 functional tests
+
+A black-box run of 525 cases against the documentation (report `fxt-testy-funkcjonalne-2026-11-07.md`, scripts in `fxt-testy-funkcjonalne/`, both next to the repository; `FXT=<binary> bash t3_transforms.sh` runs one file against a given build). On HEAD: 505 pass, 20 fail, every failure one of the items below. When fixing one, carry its cases over into `tests/cli.rs`.
+
+Bugs, roughly in the order to fix them:
+
+- **`--output-delimiter` is ignored inside a field range** — `-F , -C 1-3 --output-delimiter ';'` prints `a,b,c`; only the joins *between* list parts use it (`-C 1,2,3` works, `-C 1-2,3` gives `a,b;c`). A field range resolves to one char range with the delimiters inside it. With an output delimiter that differs from the input one, read ranges must resolve per field (as `cell_ranges` does), so every field boundary is rejoined.
+- **CRLF written into LF files on Windows** — wherever `fxt` adds a terminator of its own it writes `constants::NEW_LINE`, `\r\n` on Windows, whatever the input uses: `--join` always ends in `\r\n`, and a reordered, split or wrapped unterminated last line puts `\r\n` among `\n`s (`printf 'b\na' | fxt --tac` → `a\r\nb`). Summaries write `\n`, so the program is not even consistent with itself. Use the terminator seen in the input (the last one read, `\n` when there was none) instead of a platform constant, and decide (and document) what `--join` ends with — probably the last joined row's terminator, none if it had none. CI runs on Linux only, where the constant is `\n`, so it never saw this: add a `windows-latest` job, and assert bytes in the tests.
+- **`--number -u` keeps duplicates** — numbering is the last transform and `--unique` runs after the transforms, so the number makes every key distinct (and would leave gaps if it did not). Number at emission, after `--unique` (and after a reducer would have taken the row), not as a transform — or make the two conflict, as numbering and reordering do.
+- **Text mappings in field mode work on the whole stretch, not per field** — `-F , -C 1- --reverse-chars` turns `ab,cd` into `dc,ba` (the README promises each field reversed in place), `--trim` on `-C 1-` trims only the ends of the stretch, `--expand` counts tab stops from its start, a `--find` can match across a delimiter (`-f a,a`). Adjacent list parts merge first, so `-C 1,2` does the same. Padding and the codecs already work per cell (`cell_ranges`, `text::map_cells`); move `MapColumns` and the replacements onto cells too in field mode, and say in the README that field mode works per field. Deleting keeps the merged stretch, which is documented and right.
+- **Padding skips an empty line in char mode** — `printf '\n' | fxt --pad-left 3` prints an empty line (field mode pads the empty field). The full span resolves to no char range on an empty line; a cell at `1..=0` should stand for it, as an empty field does.
+
+Usability and validation:
+
+- **`--in-place` with a row selection drops the other rows** — `fxt -i -R 2 -f b -r X f` leaves only row 2 in the file; `-i -s -R 2-` loses the header; `-i -g zz` empties the file (exit 1). Documented selection semantics, but in place it destroys data without a word. There is no way to say "edit rows 2-5, keep the rest" (`RowMode::EditSelected` exists, used only by `-d -C`). Decision needed: an option that keeps unselected rows as they are (`--keep-others`, or that as the default under `-i`), a refusal to write back when a filter matched nothing, a warning when the edit drops rows, or at least a warning in the README.
+- **`-F` requires a column option** — so `-F , --quoted --count` (count records), `-F , --number` (number separator), `-F , --quoted -s|-u|--tac|--join` and `-F , --max-len` are all refused, with an error listing fourteen options. Let `--fields` stand alone (it still says how rows split and what separates `fxt`'s own columns), or at least say "`--fields` needs something to apply to, e.g. `-C 1-`".
+- **Misleading validation messages** — `--min-fields 0` reports "The width must be at least 1" (its parser is the width's); `--join ''` is refused as "The field delimiter cannot be empty", though joining with nothing (`paste -s -d ''`) is a reasonable thing to ask for — accept it.
+- **`--decode base64` accepts `YQ=`** — neither the padded `YQ==` nor the unpadded `YQ`. Padding should be all or nothing: two `=` after two digits, one after three.
+- **`\\?\` paths in Windows error messages** — `canonicalize` leaks into messages (`Cannot replace input file \\?\C:\…`). Report the path as given, or strip the prefix (`dunce::simplified`, or by hand).
+- **An empty `--find ''`** inserts the replacement between every char (`abc` → `xaxbxcx`), as `str::replace` does; refuse it.
+- **`--unexpand` and a lone space before a tab** — `abcdefg \tb` keeps the space where GNU `unexpand -a` makes it a tab; the same on screen, but matching GNU costs nothing.
+
+Documentation:
+
+- `README.md` (*Order of operations*) advises "Use `-i` (ignore case)" — `-i` is `--in-place`, so following it overwrites the file. Say `--ignore-case`. **Fix first.**
+- `-q` "requires `--grep`, `--from` or `--to`" (README table, `--help`) — any content filter, `--min-fields` and `--max-len` too.
+- `--help` for `--ignore-case` says "find/grep pattern"; it applies to `--from`/`--to` as well.
+- `--title-case` lowercases the rest of each word (`wORLD` → `World`) and starts words after `-` and `'` (`Foo-Bar O'Neil`); the description says neither.
+- *Order of operations* lists `--upper` → `--lower`, `--expand`/`--unexpand` and `--pad-left`/`--pad-right` as if they combined; each pair excludes the other. `--number` with `--delete` is refused but undocumented.
+- Numeric sort: keys that are not numbers sort first — last with `--reverse`; say so.
+- The example "Sort only rows 2-100 (e.g. keep a header line first...)" suggests row 1 is kept; `-R` selects, so it is not.
+- The options table lacks `-v` for `--invert`.
+- `--help` texts for `-s` ("Sort specified region"), `-d` ("Delete specified region") and `-f` ("Set substring to find") predate the rest; align them with the README table.
+
+Observed and consistent with the documentation, noted for awareness: files without a final newline run into the next one in a concatenation (like `cat`); mixed-bound row ranges that resolve inverted (`~1-2`) select nothing, quietly; a `--to` that never matches selects everything (as `sed 0,/re/`); `-P` sends patterns without backtracking features to the linear engine; numbers accept `+5`, ` 7`, `1e3`, `inf` but not `0x10` or `NaN`, and floats print raw (`0.30000000000000004`).
 
 ## 4. Tool maturity (cheap, highly visible)
 
