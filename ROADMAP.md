@@ -93,3 +93,4 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 ## 4. Tool maturity (cheap, highly visible)
 
 - ✅ Fuzzing the range parser — property tests in `cli_args::cli` (`properties`): arbitrary and hostile input never panics and only spec characters get through (`+2` and `~+1` used to be accepted, via `usize::from_str`; this property now holds that out); generated specs, written out, select exactly the rows their definition names; column lists normalize to what they cover. Property tests rather than `cargo fuzz`, so they run in CI on every platform.
+- **Release binaries** — a GitHub Actions workflow that, on a `v*` tag, builds `fxt` for Windows, Linux and macOS and attaches the binaries to a GitHub Release, so installing no longer needs `cargo install`. *Deferred (2026-11-07): first a period of using and testing the 0.4 features.*
