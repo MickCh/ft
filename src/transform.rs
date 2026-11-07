@@ -181,11 +181,15 @@ impl LineTransform for DeleteColumns {
 /// mapping keeps `build_pipeline` readable.
 pub struct MapColumns {
     span: ColumnSpan,
-    map: Box<dyn Fn(&str) -> String>,
+    map: Box<WriteMapping>,
 }
 
+/// A text mapping that writes what a range becomes straight into the
+/// line being rebuilt, rather than into a string of its own.
+type WriteMapping = dyn Fn(&str, &mut String);
+
 impl MapColumns {
-    fn with(span: impl Into<ColumnSpan>, map: impl Fn(&str) -> String + 'static) -> MapColumns {
+    fn with(span: impl Into<ColumnSpan>, map: impl Fn(&str, &mut String) + 'static) -> MapColumns {
         MapColumns {
             span: span.into(),
             map: Box::new(map),
@@ -195,29 +199,46 @@ impl MapColumns {
     /// Replaces each tab within the span with spaces up to the next tab
     /// stop, every `tab` columns from the start of the span (`expand`).
     pub fn expand_tabs(span: impl Into<ColumnSpan>, tab: usize) -> MapColumns {
-        MapColumns::with(span, move |within| text::expand_tabs(within, tab))
+        MapColumns::with(span, move |within, out| text::expand_tabs(within, tab, out))
     }
 
     /// Turns runs of spaces within the span that reach a tab stop into
     /// tabs (`unexpand -a`).
     pub fn unexpand_tabs(span: impl Into<ColumnSpan>, tab: usize) -> MapColumns {
-        MapColumns::with(span, move |within| text::unexpand_tabs(within, tab))
+        MapColumns::with(span, move |within, out| {
+            text::unexpand_tabs(within, tab, out)
+        })
     }
 
     /// Uppercases the characters within the span.
     pub fn uppercase(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns::with(span, str::to_uppercase)
+        MapColumns::with(span, |within, out| match within.is_ascii() {
+            //ASCII is uppercased in place, once it is in the line
+            true => {
+                let start = out.len();
+                out.push_str(within);
+                out[start..].make_ascii_uppercase();
+            }
+            false => out.push_str(&within.to_uppercase()),
+        })
     }
 
     /// Lowercases the characters within the span.
     pub fn lowercase(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns::with(span, str::to_lowercase)
+        MapColumns::with(span, |within, out| match within.is_ascii() {
+            true => {
+                let start = out.len();
+                out.push_str(within);
+                out[start..].make_ascii_lowercase();
+            }
+            false => out.push_str(&within.to_lowercase()),
+        })
     }
 
     /// Trims whitespace at both ends of the span (with the full span,
     /// this trims the whole line).
     pub fn trim(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns::with(span, |within| within.trim().to_owned())
+        MapColumns::with(span, |within, out| out.push_str(within.trim()))
     }
 
     /// Uppercases the first letter of every word within the span and
@@ -228,13 +249,17 @@ impl MapColumns {
 
     /// Reverses the characters within the span, like `rev`.
     pub fn reverse_chars(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns::with(span, |within| within.chars().rev().collect())
+        MapColumns::with(span, |within, out| match within.is_ascii() {
+            //every byte of ASCII is a char of its own
+            true => out.extend(within.bytes().rev().map(char::from)),
+            false => out.extend(within.chars().rev()),
+        })
     }
 
     /// Reverses the grapheme clusters within the span (`--graphemes`), so
     /// an accent stays on its letter and an emoji sequence stays whole.
     pub fn reverse_graphemes(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns::with(span, |within| within.graphemes(true).rev().collect())
+        MapColumns::with(span, |within, out| out.extend(within.graphemes(true).rev()))
     }
 
     /// Collapses every run of whitespace within the span into a single
@@ -246,9 +271,22 @@ impl MapColumns {
 
 /// Title-case a piece of text: a letter starts a word when the char
 /// before it does not.
-fn title_case(within: &str) -> String {
-    let mut result = String::with_capacity(within.len());
+fn title_case(within: &str, result: &mut String) {
     let mut starts_word = true;
+
+    //ASCII has one char per byte and a one-byte case of each letter
+    if within.is_ascii() {
+        result.extend(within.bytes().map(|byte| {
+            let cased = match (byte.is_ascii_alphanumeric(), starts_word) {
+                (true, true) => byte.to_ascii_uppercase(),
+                (true, false) => byte.to_ascii_lowercase(),
+                (false, _) => byte,
+            };
+            starts_word = !byte.is_ascii_alphanumeric();
+            char::from(cased)
+        }));
+        return;
+    }
 
     for character in within.chars() {
         if character.is_alphanumeric() {
@@ -262,15 +300,12 @@ fn title_case(within: &str) -> String {
             starts_word = true;
         }
     }
-
-    result
 }
 
 /// Collapse each run of whitespace into one space, keeping the runs at
 /// the ends (a leading run collapses to a single leading space, which
 /// `--trim` then removes if that is what was wanted).
-fn squeeze_whitespace(within: &str) -> String {
-    let mut result = String::with_capacity(within.len());
+fn squeeze_whitespace(within: &str, result: &mut String) {
     let mut in_whitespace = false;
 
     for character in within.chars() {
@@ -284,17 +319,16 @@ fn squeeze_whitespace(within: &str) -> String {
             in_whitespace = false;
         }
     }
-
-    result
 }
 
 impl LineTransform for MapColumns {
     fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
-        Ok(LineOutcome::Replace(text::map_ranges(
-            line,
-            &self.span.write_ranges(line),
-            &self.map,
-        )))
+        let mapped = text::map_ranges(line, &self.span.write_ranges(line), &self.map);
+        //a line the mapping left as it was goes on borrowed
+        Ok(match mapped == line {
+            true => LineOutcome::Keep,
+            false => LineOutcome::Replace(mapped),
+        })
     }
 }
 
@@ -356,7 +390,10 @@ impl CodecColumns {
 impl LineTransform for CodecColumns {
     fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
         let cells = self.span.cell_ranges(line);
-        let converted = text::try_map_cells(line, &cells, |cell| self.convert(cell))?;
+        let converted = text::try_map_cells(line, &cells, |cell, out| {
+            out.push_str(&self.convert(cell)?);
+            Ok::<(), io::Error>(())
+        })?;
         Ok(LineOutcome::Replace(converted))
     }
 }
@@ -395,15 +432,22 @@ impl PadColumns {
         self
     }
 
-    fn pad(&self, cell: &str) -> String {
+    /// Write the cell, padded, into `out`.
+    fn pad(&self, cell: &str, out: &mut String) {
         let length = match self.graphemes {
             true => cell.graphemes(true).count(),
             false => cell.chars().count(),
         };
-        let padding = " ".repeat(self.width.saturating_sub(length));
+        let padding = std::iter::repeat_n(' ', self.width.saturating_sub(length));
         match self.side {
-            PadSide::Left => padding + cell,
-            PadSide::Right => cell.to_owned() + &padding,
+            PadSide::Left => {
+                out.extend(padding);
+                out.push_str(cell);
+            }
+            PadSide::Right => {
+                out.push_str(cell);
+                out.extend(padding);
+            }
         }
     }
 }
@@ -414,7 +458,7 @@ impl LineTransform for PadColumns {
         Ok(LineOutcome::Replace(text::map_cells(
             line,
             &cells,
-            |cell| self.pad(cell),
+            |cell, out| self.pad(cell, out),
         )))
     }
 }
@@ -491,10 +535,12 @@ impl LineTransform for ReplaceInColumnsIgnoreCase {
         Ok(LineOutcome::Replace(text::map_ranges(
             line,
             &self.span.write_ranges(line),
-            |within| {
-                self.pattern
-                    .replace_all(within, NoExpand(&self.replace))
-                    .into_owned()
+            |within, out| {
+                out.push_str(
+                    &self
+                        .pattern
+                        .replace_all(within, NoExpand(&self.replace)),
+                )
             },
         )))
     }
@@ -1016,5 +1062,51 @@ mod tests {
         //a dropped single line leaves nothing behind
         let mut pipeline = Pipeline::new(vec![Box::new(DropEmpty)]);
         assert_eq!(pipeline.apply("").unwrap(), Lines::Several(Vec::new()));
+    }
+}
+
+#[cfg(test)]
+mod properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn mapped(mut transform: MapColumns, line: &str) -> String {
+        match transform.apply(line).unwrap() {
+            LineOutcome::Keep => line.to_owned(),
+            LineOutcome::Replace(rewritten) => rewritten,
+            outcome => panic!("expected a single line, got {outcome:?}"),
+        }
+    }
+
+    /// Title case the obvious way, char by char, for any text.
+    fn title_cased(line: &str) -> String {
+        let mut starts_word = true;
+        let mut result = String::new();
+        for character in line.chars() {
+            match (character.is_alphanumeric(), starts_word) {
+                (true, true) => result.extend(character.to_uppercase()),
+                (true, false) => result.extend(character.to_lowercase()),
+                (false, _) => result.push(character),
+            }
+            starts_word = !character.is_alphanumeric();
+        }
+        result
+    }
+
+    proptest! {
+        //ASCII takes shortcuts; they must land where the general way does
+        #[test]
+        fn the_ascii_shortcuts_agree_with_the_general_mappings(
+            line in prop_oneof!["[a-zA-Z0-9 ,'-]{0,24}", "[a-zA-Zżéß ,'-]{0,24}"],
+        ) {
+            let full = 1..=usize::MAX;
+            prop_assert_eq!(mapped(MapColumns::uppercase(full.clone()), &line), line.to_uppercase());
+            prop_assert_eq!(mapped(MapColumns::lowercase(full.clone()), &line), line.to_lowercase());
+            prop_assert_eq!(
+                mapped(MapColumns::reverse_chars(full.clone()), &line),
+                line.chars().rev().collect::<String>()
+            );
+            prop_assert_eq!(mapped(MapColumns::title_case(full), &line), title_cased(&line));
+        }
     }
 }

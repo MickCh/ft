@@ -168,40 +168,44 @@ pub fn remove_ranges(line: &str, cols: &[RangeInclusive<usize>]) -> String {
 }
 
 /// Apply `map_within` to the parts of the line inside the column ranges,
-/// leaving the rest of the line untouched.
+/// leaving the rest of the line untouched. The mapping writes what a part
+/// becomes straight into the rebuilt line, so no part gets a string of
+/// its own.
 pub fn map_ranges<F>(line: &str, cols: &[RangeInclusive<usize>], map_within: F) -> String
 where
-    F: Fn(&str) -> String,
+    F: Fn(&str, &mut String),
 {
-    rewrite_ranges(line, cols, |within, result| {
-        result.push_str(&map_within(within))
-    })
+    rewrite_ranges(line, cols, map_within)
 }
 
 /// Replace each tab with spaces up to the next tab stop, one every `tab`
 /// columns counted from the start of `text`, like `expand -t`. A line
 /// break inside the text (a multi-line CSV record) starts the count over.
-pub fn expand_tabs(text: &str, tab: usize) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut column = 0;
-    for character in text.chars() {
-        match character {
-            '\t' => {
-                let spaces = tab - column % tab;
-                result.extend(std::iter::repeat_n(' ', spaces));
-                column += spaces;
-            }
-            '\n' => {
-                result.push(character);
-                column = 0;
-            }
-            _ => {
-                result.push(character);
-                column += 1;
-            }
-        }
+/// Written into `result`.
+pub fn expand_tabs(text: &str, tab: usize, result: &mut String) {
+    //most text has no tab at all, and is looked through for one quickly
+    if !text.contains('\t') {
+        result.push_str(text);
+        return;
     }
-    result
+    //the text between two tabs is copied whole; only its width counts
+    let width = |piece: &str| match piece.is_ascii() {
+        true => piece.len(),
+        false => piece.chars().count(),
+    };
+    let mut column = 0;
+    for (index, piece) in text.split('\t').enumerate() {
+        if index > 0 {
+            let spaces = tab - column % tab;
+            result.extend(std::iter::repeat_n(' ', spaces));
+            column += spaces;
+        }
+        result.push_str(piece);
+        column = match piece.rfind('\n') {
+            Some(at) => width(&piece[at + 1..]),
+            None => column + width(piece),
+        };
+    }
 }
 
 /// Turn the blanks that reach a tab stop into tabs, like `unexpand -a`:
@@ -210,8 +214,8 @@ pub fn expand_tabs(text: &str, tab: usize) -> String {
 /// another blank follows it, as GNU has it — so the gaps between words
 /// are not turned into tabs by accident. Whatever it writes
 /// [`expand_tabs`] expands to what the text expands to.
-pub fn unexpand_tabs(text: &str, tab: usize) -> String {
-    let mut result = String::with_capacity(text.len());
+/// Written into `result`.
+pub fn unexpand_tabs(text: &str, tab: usize, result: &mut String) {
     let mut column = 0;
     //spaces read but not yet written: a stop may turn them into a tab
     let mut pending = 0;
@@ -254,19 +258,22 @@ pub fn unexpand_tabs(text: &str, tab: usize) -> String {
         result.push(' ');
     }
     result.extend(std::iter::repeat_n(' ', pending));
-    result
 }
 
 /// Rebuild the line with each cell's text put through `map`. A cell is a
 /// char range as [`crate::columns::ColumnSpan::cell_ranges`] gives them:
 /// ascending, and an empty one (`n..=n-1`) is the point before column
 /// `n`, so something can be written into an empty field. A cell lying
-/// past the end of the line is skipped.
+/// past the end of the line is skipped. The mapping writes what a cell
+/// becomes straight into the rebuilt line.
 pub fn map_cells<F>(line: &str, cells: &[RangeInclusive<usize>], map: F) -> String
 where
-    F: Fn(&str) -> String,
+    F: Fn(&str, &mut String),
 {
-    let mapped = try_map_cells(line, cells, |cell| Ok::<_, Infallible>(map(cell)));
+    let mapped = try_map_cells(line, cells, |cell, result| {
+        map(cell, result);
+        Ok::<_, Infallible>(())
+    });
     match mapped {
         Ok(result) => result,
         Err(never) => match never {},
@@ -276,7 +283,7 @@ where
 /// [`map_cells`] with a mapping that may fail, which fails the whole line.
 pub fn try_map_cells<F, E>(line: &str, cells: &[RangeInclusive<usize>], map: F) -> Result<String, E>
 where
-    F: Fn(&str) -> Result<String, E>,
+    F: Fn(&str, &mut String) -> Result<(), E>,
 {
     let mut result = String::with_capacity(line.len());
     let mut cursor = 0usize;
@@ -293,7 +300,7 @@ where
             continue;
         }
         result.push_str(&line[cursor..from]);
-        result.push_str(&map(&line[from..to])?);
+        map(&line[from..to], &mut result)?;
         cursor = to;
     }
     result.push_str(&line[cursor..]);
@@ -400,6 +407,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn expanded(text: &str, tab: usize) -> String {
+        let mut result = String::new();
+        expand_tabs(text, tab, &mut result);
+        result
+    }
+
+    pub(super) fn unexpanded(text: &str, tab: usize) -> String {
+        let mut result = String::new();
+        unexpand_tabs(text, tab, &mut result);
+        result
+    }
 
     #[test]
     fn test_split_line_terminator() {
@@ -546,26 +565,26 @@ mod tests {
     #[test]
     fn expand_tabs_fills_to_the_next_stop() {
         // Given / When / Then
-        assert_eq!(expand_tabs("a\tbc\td", 4), "a   bc  d");
-        assert_eq!(expand_tabs("abcd\te", 4), "abcd    e");
-        assert_eq!(expand_tabs("\t\tx", 2), "    x");
-        assert_eq!(expand_tabs("ż\tx\n\ty", 4), "ż   x\n    y");
+        assert_eq!(expanded("a\tbc\td", 4), "a   bc  d");
+        assert_eq!(expanded("abcd\te", 4), "abcd    e");
+        assert_eq!(expanded("\t\tx", 2), "    x");
+        assert_eq!(expanded("ż\tx\n\ty", 4), "ż   x\n    y");
     }
 
     #[test]
     fn unexpand_tabs_turns_blanks_at_a_stop_into_tabs() {
         // Given / When / Then
-        assert_eq!(unexpand_tabs("a   bc  d", 4), "a\tbc\td");
-        assert_eq!(unexpand_tabs("        x", 4), "\t\tx");
+        assert_eq!(unexpanded("a   bc  d", 4), "a\tbc\td");
+        assert_eq!(unexpanded("        x", 4), "\t\tx");
         //a lone space at a stop stays a space; spaces before a tab go into it
-        assert_eq!(unexpand_tabs("abc d", 4), "abc d");
-        assert_eq!(unexpand_tabs("a  \tb", 4), "a\tb");
+        assert_eq!(unexpanded("abc d", 4), "abc d");
+        assert_eq!(unexpanded("a  \tb", 4), "a\tb");
         //unless another blank follows it (GNU `unexpand -a`)
-        assert_eq!(unexpand_tabs("abcdefg \tb", 8), "abcdefg\t\tb");
-        assert_eq!(unexpand_tabs("abc  d", 4), "abc\t d");
-        assert_eq!(unexpand_tabs("abc ", 4), "abc ");
+        assert_eq!(unexpanded("abcdefg \tb", 8), "abcdefg\t\tb");
+        assert_eq!(unexpanded("abc  d", 4), "abc\t d");
+        assert_eq!(unexpanded("abc ", 4), "abc ");
         //trailing spaces that reach no stop stay as they are
-        assert_eq!(unexpand_tabs("ab  ", 8), "ab  ");
+        assert_eq!(unexpanded("ab  ", 8), "ab  ");
     }
 
     #[test]
@@ -575,7 +594,7 @@ mod tests {
         let cells = [1..=1, empty_at(3), 4..=4];
 
         // When each cell is bracketed
-        let result = map_cells(line, &cells, |cell| format!("[{cell}]"));
+        let result = map_cells(line, &cells, |cell, out| out.push_str(&format!("[{cell}]")));
 
         // Then the empty field gets its brackets as well
         assert_eq!(result, "[a],[],[ż]");
@@ -585,12 +604,18 @@ mod tests {
     fn map_cells_skips_cells_past_the_line() {
         // Given / When / Then: the point just past the end is still on
         // the line, anything further is not
-        assert_eq!(map_cells("ab", &[empty_at(3)], |_| "!".to_owned()), "ab!");
         assert_eq!(
-            map_cells("ab", &[empty_at(4), 5..=9], |_| "!".to_owned()),
+            map_cells("ab", &[empty_at(3)], |_, out| out.push('!')),
+            "ab!"
+        );
+        assert_eq!(
+            map_cells("ab", &[empty_at(4), 5..=9], |_, out| out.push('!')),
             "ab"
         );
-        assert_eq!(map_cells("żb", &[empty_at(3)], |_| "!".to_owned()), "żb!");
+        assert_eq!(
+            map_cells("żb", &[empty_at(3)], |_, out| out.push('!')),
+            "żb!"
+        );
     }
 
     #[test]
@@ -625,13 +650,13 @@ mod tests {
 
     #[test]
     fn map_ranges_maps_every_part_on_its_own() {
-        let upper = |within: &str| within.to_uppercase();
+        let upper = |within: &str, out: &mut String| out.push_str(&within.to_uppercase());
         assert_eq!(map_ranges("abcdef", &[1..=2, 5..=6], upper), "ABcdEF");
         assert_eq!(map_ranges("abcdef", &[], upper), "abcdef");
 
         //each part is mapped separately, so a length change in one does
         //not shift the next
-        let double = |within: &str| within.repeat(2);
+        let double = |within: &str, out: &mut String| out.push_str(&within.repeat(2));
         assert_eq!(map_ranges("abcdef", &[1..=1, 3..=3], double), "aabccdef");
     }
 
@@ -655,6 +680,7 @@ mod tests {
 /// line, inverted and starting at 0.
 #[cfg(test)]
 mod properties {
+    use super::tests::{expanded, unexpanded};
     use super::*;
     use proptest::prelude::*;
 
@@ -676,14 +702,38 @@ mod properties {
     proptest! {
         #[test]
         fn unexpanding_keeps_what_the_text_expands_to(text in "[a-cż \t]{0,30}", tab in 1usize..9) {
-            prop_assert_eq!(expand_tabs(&unexpand_tabs(&text, tab), tab), expand_tabs(&text, tab));
+            prop_assert_eq!(expanded(&unexpanded(&text, tab), tab), expanded(&text, tab));
+        }
+
+        #[test]
+        fn expanding_is_filling_to_the_next_stop_char_by_char(text in "[a-cż \t\n]{0,30}", tab in 1usize..9) {
+            let mut expected = String::new();
+            let mut column = 0;
+            for character in text.chars() {
+                match character {
+                    '\t' => {
+                        let spaces = tab - column % tab;
+                        expected.extend(std::iter::repeat_n(' ', spaces));
+                        column += spaces;
+                    }
+                    '\n' => {
+                        expected.push(character);
+                        column = 0;
+                    }
+                    _ => {
+                        expected.push(character);
+                        column += 1;
+                    }
+                }
+            }
+            prop_assert_eq!(expanded(&text, tab), expected);
         }
 
         #[test]
         fn expanding_leaves_no_tab_and_unexpanding_adds_no_space(text in "[a-c \t]{0,30}", tab in 1usize..9) {
-            prop_assert!(!expand_tabs(&text, tab).contains('\t'));
+            prop_assert!(!expanded(&text, tab).contains('\t'));
             let spaces = |text: &str| text.matches(' ').count();
-            prop_assert!(spaces(&unexpand_tabs(&text, tab)) <= spaces(&text));
+            prop_assert!(spaces(&unexpanded(&text, tab)) <= spaces(&text));
         }
 
         #[test]
@@ -699,7 +749,7 @@ mod properties {
                 column += width + 1;
             }
             let expected: Vec<String> = line.split(',').map(|field| format!("[{field}]")).collect();
-            prop_assert_eq!(map_cells(&line, &cells, |cell| format!("[{cell}]")), expected.join(","));
+            prop_assert_eq!(map_cells(&line, &cells, |cell, out| out.push_str(&format!("[{cell}]"))), expected.join(","));
         }
 
         #[test]
@@ -733,8 +783,8 @@ mod properties {
             find in prop::sample::select(vec!["a", " ", ",", "ż", "aa", ""]),
             replace in prop::sample::select(vec!["", "X", "🙂🙂"]),
         ) {
-            let expected = map_ranges(&line, std::slice::from_ref(&range), |within| {
-                within.replace(find, replace)
+            let expected = map_ranges(&line, std::slice::from_ref(&range), |within, out| {
+                out.push_str(&within.replace(find, replace))
             });
             let replaced = replace_in_ranges(&line, find, replace, std::slice::from_ref(&range));
             prop_assert_eq!(replaced, expected);
@@ -749,7 +799,7 @@ mod properties {
                 .enumerate()
                 .map(|(index, &c)| if inside.contains(&index) { c.to_ascii_uppercase() } else { c })
                 .collect();
-            let mapped = map_ranges(&line, std::slice::from_ref(&range), |text| text.to_ascii_uppercase());
+            let mapped = map_ranges(&line, std::slice::from_ref(&range), |text, out| out.push_str(&text.to_ascii_uppercase()));
             prop_assert_eq!(mapped, expected);
         }
     }

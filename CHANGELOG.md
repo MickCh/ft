@@ -35,6 +35,7 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 - Rows held back for reordering, and the input buffered for `~N` row bounds, are stored back to back in one allocation instead of one per row; reordering moves small records, not the text. `--shuffle` 1.2× faster, `--tac`, `--sort` and a sort by a CSV field 1.1×.
 - A row range whose every part starts from the end (`-R ~1000-`) holds only that many rows, in a ring, instead of the whole input: 1.65× faster on 300k rows (35 → 21 ms; `tail` takes 15), and memory no longer grows with the input.
+- Text mappings write straight into the rebuilt line instead of building a string per range, with shortcuts for ASCII: `--reverse-chars` 1.75× faster, `--title-case` 1.45×, `--pad-left` on a field 1.2×, `--expand` and `--trim` 1.1×. A line a mapping leaves as it was goes on untouched.
 
 ## [0.4.0] — 2026-11-07
 
