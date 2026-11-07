@@ -185,9 +185,25 @@ impl ColumnSpan {
     /// The char ranges of the span's *cells* on this line, ascending: what
     /// a transform that writes something into every piece of the span,
     /// empty ones too, works on (padding, the codecs). They are the write
-    /// ranges, empty fields included (see [`text::map_cells`]).
+    /// ranges, empty fields included (see [`text::map_cells`]). An empty
+    /// line is one empty cell to a span that starts at its first column,
+    /// as it is one empty field in field mode, so `--pad-left` pads it.
     pub fn cell_ranges(&self, line: &str) -> SpanRanges<'_> {
-        self.write_ranges(line)
+        let starts_the_line = |list: &ColumnList| {
+            list.normalized()
+                .first()
+                .is_some_and(|part| *part.start() <= 1)
+        };
+        match self {
+            ColumnSpan::Chars(list) | ColumnSpan::Graphemes(list)
+                if line.is_empty() && starts_the_line(list) =>
+            {
+                //the point before column 1, as an inverted range
+                let first = 1;
+                SpanRanges::Resolved(std::iter::once(first..=first - 1).collect())
+            }
+            _ => self.write_ranges(line),
+        }
     }
 
     /// Like [`ColumnSpan::write_ranges`], but in field mode each part

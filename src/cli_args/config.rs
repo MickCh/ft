@@ -786,12 +786,11 @@ mod tests {
     }
 
     #[test]
-    fn fields_requires_columns() {
-        assert!(
-            cli()
-                .try_get_matches_from(["fxt", "-F", ",", "input.txt"])
-                .is_err()
-        );
+    fn fields_stands_alone() {
+        //without a column option every field is in the span
+        let config = config_from(&["fxt", "-F", ",", "input.txt"]).unwrap();
+        assert!(config.field_delimiter.is_some());
+        assert!(config.cols.is_none());
     }
 
     #[test]

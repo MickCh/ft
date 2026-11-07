@@ -97,7 +97,11 @@ fn encode_base64(bytes: &[u8]) -> String {
 /// encoding produces, is not base64.
 fn decode_base64(text: &str) -> Option<Vec<u8>> {
     let digits = text.trim_end_matches('=').as_bytes();
-    if text.len() - digits.len() > 2 || digits.len() % 4 == 1 {
+    let padding = text.len() - digits.len();
+    //padding is all or nothing: none at all, or as much as completes the
+    //last group of four (`YQ==`, `YWI=`), never part of it (`YQ=`)
+    let padded_right = padding == 0 || (digits.len() + padding).is_multiple_of(4);
+    if padding > 2 || digits.len() % 4 == 1 || !padded_right {
         return None;
     }
     let mut bytes = Vec::with_capacity(digits.len() * 3 / 4);
@@ -199,6 +203,18 @@ mod tests {
         assert!(Codec::Base64.decode("Z").is_err());
         assert!(Codec::Base64.decode("Zm9v!").is_err());
         assert!(Codec::Base64.decode("Zg===").is_err());
+    }
+
+    #[test]
+    fn base64_padding_is_all_or_nothing() {
+        // Given two digits and three / When padded fully, partly or not
+        // at all / Then only a partial padding is refused
+        assert_eq!(Codec::Base64.decode("YQ==").unwrap(), b"a");
+        assert_eq!(Codec::Base64.decode("YQ").unwrap(), b"a");
+        assert!(Codec::Base64.decode("YQ=").is_err());
+        assert_eq!(Codec::Base64.decode("YWI=").unwrap(), b"ab");
+        assert!(Codec::Base64.decode("YWI==").is_err());
+        assert!(Codec::Base64.decode("YWJj=").is_err());
     }
 
     #[test]

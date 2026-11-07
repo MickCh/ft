@@ -308,6 +308,46 @@ fn pad_right_counts_chars_and_with_graphemes_clusters() {
 }
 
 #[test]
+fn padding_pads_an_empty_line_too() {
+    let input = TempFile::new("pad-empty", "\nab\n");
+    assert_eq!(
+        run_fxt_stdout(&["--pad-left", "3", input.path_str()]),
+        "   \n ab\n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&["-C", "1-", "--pad-right", "2", input.path_str()]),
+        "  \nab\n"
+    );
+    //a span starting further in has no cell on an empty line
+    assert_eq!(
+        run_fxt_stdout(&["-C", "2-", "--pad-left", "3", input.path_str()]),
+        "\na  b\n"
+    );
+}
+
+#[test]
+fn join_takes_an_empty_separator() {
+    let output = run_fxt_with_stdin(&["--join", ""], "a\nb\n");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ab\n");
+}
+
+#[test]
+fn a_bad_count_says_what_it_is() {
+    let output = run_fxt_with_stdin(&["--min-fields", "0"], "a\n");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("The field count must be at least 1"),
+        "{stderr}"
+    );
+
+    let output = run_fxt_with_stdin(&["--wrap", "x"], "a\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("The width `x` isn't a number"), "{stderr}");
+}
+
+#[test]
 fn pad_left_and_pad_right_are_exclusive() {
     let output = run_fxt_with_stdin(&["--pad-left", "3", "--pad-right", "3"], "a\n");
     assert_eq!(output.status.code(), Some(2));
@@ -955,9 +995,25 @@ fn fields_mode_sorts_by_field_key() {
 }
 
 #[test]
-fn fields_flag_requires_columns() {
-    let output = run_fxt(&["-F", ",", "input.txt"]);
-    assert!(!output.status.success());
+fn fields_stands_alone_without_a_column_option() {
+    //a record count needs --quoted, and so --fields, but no columns
+    let records = TempFile::new("fields-alone-count", "a,\"l1\nl2\",c\nd,e,f\n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "--quoted", "--count", records.path_str()]),
+        "2\n"
+    );
+    //the delimiter separates fxt's own columns
+    let plain = TempFile::new("fields-alone-number", "a\nb\n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "--number", plain.path_str()]),
+        "1,a\n2,b\n"
+    );
+    //and a transform without -C works on every field
+    let padded = TempFile::new("fields-alone-trim", " a , b \n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "--trim", padded.path_str()]),
+        "a,b\n"
+    );
 }
 
 #[test]

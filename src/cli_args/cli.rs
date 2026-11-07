@@ -54,32 +54,8 @@ pub fn cli() -> Command {
                 .short('F')
                 .long("fields")
                 .required(false)
-                .requires("column-ranges")
                 .value_parser(parse_delimiter)
-                .help("Treat the column ranges as fields separated by this delimiter (requires a column range)"),
-        )
-        //--fields needs something that counts in fields — a column range,
-        //or --min-fields — but any of them will do, so they form one
-        //group it can require
-        .group(
-            ArgGroup::new("column-ranges")
-                .args([
-                    "columns",
-                    "sort-key",
-                    "unique-key",
-                    "grep-key",
-                    "sum",
-                    "avg",
-                    "min",
-                    "max",
-                    "median",
-                    "distinct",
-                    "first",
-                    "last",
-                    "group-by",
-                    "min-fields",
-                ])
-                .multiple(true),
+                .help("Split rows into fields at this delimiter: the column ranges count fields (without one, every field)"),
         )
         .arg(
             Arg::new("quoted")
@@ -222,7 +198,7 @@ pub fn cli() -> Command {
                 .required(false)
                 .value_name("N")
                 .requires("fields")
-                .value_parser(parse_width)
+                .value_parser(parse_field_count)
                 .help("Keep only rows with at least N fields (requires --fields)"),
         )
         .arg(
@@ -401,8 +377,9 @@ pub fn cli() -> Command {
                     "count", "sum", "avg", "min", "max", "median", "distinct", "first", "last",
                     "delete", "number",
                 ])
-                .value_parser(parse_delimiter)
-                .help("Join every row into a single row, separated by this (like paste -s)"),
+                //an empty separator is fine: the rows are run together
+                .value_parser(value_parser!(String))
+                .help("Join every row into a single row, separated by this (like paste -s; may be empty)"),
         )
         .arg(
             Arg::new("count")
@@ -729,8 +706,6 @@ fn parse_delimiter(input: &str) -> Result<String, String> {
     Ok(input.to_owned())
 }
 
-/// Parse a backup suffix: an empty one would name the file itself, so
-/// the backup would be the very file about to be overwritten.
 /// Parse an encoding label, as the WHATWG Encoding Standard names them
 /// (`windows-1250`, `latin1`, `utf-16le`, `shift_jis`, …).
 fn parse_encoding(input: &str) -> Result<&'static Encoding, String> {
@@ -746,6 +721,8 @@ fn parse_output_encoding(input: &str) -> Result<&'static Encoding, String> {
     }
 }
 
+/// Parse a backup suffix: an empty one would name the file itself, so
+/// the backup would be the very file about to be overwritten.
 fn parse_suffix(input: &str) -> Result<String, String> {
     if input.is_empty() {
         return Err("The backup suffix cannot be empty".to_owned());
@@ -761,18 +738,29 @@ fn parse_codec(input: &str) -> Result<Codec, String> {
         .ok_or_else(|| format!("Unknown codec `{input}`: expected base64, hex or url"))
 }
 
-/// Parse a width (`--wrap`, `--pad-left`, `--pad-right`, a tab size,
-/// `--min-fields`): a wrapping
-/// width of 0 would cut the line into infinitely many empty chunks, and
-/// padding to 0 would do nothing, so at least one char is required.
+/// Parse a width (`--wrap`, `--pad-left`, `--pad-right`, a tab size): a
+/// wrapping width of 0 would cut the line into infinitely many empty
+/// chunks, and padding to 0 would do nothing, so at least one char is
+/// required.
 fn parse_width(input: &str) -> Result<usize, String> {
-    let width: usize = input
+    parse_at_least_one(input, "width")
+}
+
+/// Parse `--min-fields`: every row has at least one field (an empty line
+/// is one empty field), so 0 would filter nothing out.
+fn parse_field_count(input: &str) -> Result<usize, String> {
+    parse_at_least_one(input, "field count")
+}
+
+/// Parse a number that must be at least 1, naming what it is in errors.
+fn parse_at_least_one(input: &str, what: &str) -> Result<usize, String> {
+    let value: usize = input
         .parse()
-        .map_err(|_| format!("Width `{input}` isn't a number"))?;
-    if width < 1 {
-        return Err("The width must be at least 1".to_owned());
+        .map_err(|_| format!("The {what} `{input}` isn't a number"))?;
+    if value < 1 {
+        return Err(format!("The {what} must be at least 1"));
     }
-    Ok(width)
+    Ok(value)
 }
 
 fn parse_bound(value: &str) -> Result<RangeBound, String> {

@@ -10,20 +10,22 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 - `--keep-others`: rows the selection leaves out pass through unchanged instead of being dropped, so `fxt -i --keep-others -R 2-5 -f a -r b` edits rows 2-5 of a file and keeps the rest, like `sed -i '2,5s/a/b/'`.
 - `--grep` is repeatable: a row matches any of the patterns, or every one with `--all`.
 - `--min-fields <n>` and `--max-len <n>`: keep the rows with at least `n` fields, or at most `n` characters; content filters like `--grep`, with its exit codes.
-- `--encode <codec>` / `--decode <codec>`: base64, hex and URL percent encoding of the column range, each field on its own; invalid input fails the run, decoded bytes that are not UTF-8 too unless `--lossy`.
+- `--encode <codec>` / `--decode <codec>`: base64, hex and URL percent encoding of the column range, each field on its own; invalid input fails the run (base64 padding is all or nothing: `YQ==` or `YQ`, never `YQ=`), decoded bytes that are not UTF-8 too unless `--lossy`.
 - `--expand[=<tabsize>]` / `--unexpand[=<tabsize>]`: tabs to spaces and back within the column range, like `expand` and `unexpand -a`.
 - `--reverse-chars`: reverse the column range, like `rev` (grapheme clusters under `--graphemes`).
-- `--pad-left <width>` / `--pad-right <width>`: pad the column range with spaces to a width, right- or left-aligning it; in field mode each field on its own, empty ones too.
+- `--pad-left <width>` / `--pad-right <width>`: pad the column range with spaces to a width, right- or left-aligning it; in field mode each field on its own, empty ones too, and an empty line as well.
 
 ### Changed
 
+- `--fields` no longer requires a column option: without one every field is in the span, so `-F , --quoted --count` counts CSV records and `-F , --number` separates the number with a comma.
+- `--join ''` is accepted and runs the rows together, like `paste -s -d ''`.
+- `--min-fields 0` is refused with a message about the field count, not about a width.
 - `--in-place` no longer writes a file back empty when a filter matched nothing in it: the file is left as it was (exit code 1, with a note on stderr), and `--dry-run` reports it unchanged.
 
 ### Fixed
 
 - `--output-delimiter` stood only between the parts of a column list, not between the fields of one range: `-F , -C 1-3 --output-delimiter ;` printed `a,b,c`. It now rejoins every field.
 - In field mode, the transforms that rewrite text worked on a range of fields as one stretch, delimiters included: `-F , -C 1- --reverse-chars` turned `ab,cd` into `dc,ba`, `--trim` trimmed only the ends of the stretch, `--expand` counted tab stops from its start, and `--find` could match across a delimiter. Each field is now rewritten on its own (deleting fields still takes a stretch).
-
 - On Windows, a terminator `fxt` adds of its own was always `\r\n`, whatever the input used: `--join` ended in `\r\n` and an unterminated last line moved by `--tac` put a `\r\n` among `\n`s, while summaries wrote `\n` even into a CRLF file. The terminator now follows the input's lines, on every platform, and a `--join`ed row ends the way the input did (unterminated, if its last line was).
 - `--number --unique` kept every duplicate: the number was added before `--unique` compared the rows, so it made every row distinct. Rows are now numbered on their way out, after `--unique`.
 
