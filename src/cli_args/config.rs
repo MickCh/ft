@@ -67,6 +67,10 @@ pub struct SummarySpec {
     pub avg: Option<ColumnList>,
     pub min: Option<ColumnList>,
     pub max: Option<ColumnList>,
+    pub median: Option<ColumnList>,
+    pub distinct: Option<ColumnList>,
+    pub first: Option<ColumnList>,
+    pub last: Option<ColumnList>,
     pub group_by: Option<ColumnList>,
 }
 
@@ -359,6 +363,18 @@ impl TryFrom<ArgMatches> for Config {
                     .cloned(),
                 max: matches
                     .get_one::<ColumnList>("max")
+                    .cloned(),
+                median: matches
+                    .get_one::<ColumnList>("median")
+                    .cloned(),
+                distinct: matches
+                    .get_one::<ColumnList>("distinct")
+                    .cloned(),
+                first: matches
+                    .get_one::<ColumnList>("first")
+                    .cloned(),
+                last: matches
+                    .get_one::<ColumnList>("last")
                     .cloned(),
                 group_by: matches
                     .get_one::<ColumnList>("group-by")

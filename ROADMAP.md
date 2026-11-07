@@ -35,6 +35,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
 - ✅ **Quoted `--unique` keys** — `--unique` keys on `select_canonical` too, so under `--quoted` `"a"` and `a` are duplicates, as they are one `--group-by` group.
 - ✅ **Quoted text-sort keys** — the text sort reads `select_value` like the numeric one, so under `--quoted` `"b"` sorts between `a` and `c` instead of first, on its quote. With `--group-by`, `--unique` and the numeric sort, every key under `--quoted` now reads field values.
+- ✅ **More summaries** — `--median` (exact for integers: halves added back rather than a sum that may overflow), `--distinct`, `--first`, `--last`, per group too: four more `Aggregate`/`Accumulator` variants, no engine change. The text ones read `select_canonical`, like `--group-by`.
 - ✅ **Encodings** — `--encoding <label>` decodes the inputs from any WHATWG encoding (`encoding_rs`), a UTF-16/UTF-8 BOM settles it by itself, and `--output-encoding` writes the output in one. `--in-place` writes each file back as it was read (BOM included) unless `--output-encoding` converts it. Undecodable input and unmappable output are errors, never replacements. Done at the edges (`encoding::open`, `EncodeWriter`), so the engine stays UTF-8 only.
 - ✅ **Pattern-addressed rows** — `--from`/`--to`, `sed '/A/,/B/'` semantics (inclusive, end looked for from the next line, every block selected; `--to` alone like `sed 0,/B/`). Not a `RangeBound` variant after all: `RangeSpec` resolves up front, this cannot, so it is its own stateful `PatternRange`, told every line in order and intersected with `--rows`. Matched as bytes, so rows outside a block need not be UTF-8.
 - ✅ **Property tests** — `proptest` modules in `columns.rs` and `text.rs` check the field splitter against the char-by-char one it replaced and against `str::split`, quoted values round-tripping through CSV, and the char helpers against a `Vec<char>` reference (`select(R)` put back into `delete(R)` rebuilds the line), on lines of multi-byte chars, quotes and multi-char delimiters. Deliberately broken versions of the byte walk and of the ASCII fast path were caught at once.
@@ -54,7 +55,6 @@ Each is one new type plus one branch in `compose::build_pipeline`:
 ## 2. Still open
 
 - **Lossy/byte mode** — input in an unknown or mixed encoding is still a hard error (`--encoding` covers the known ones). A mode that passes undecodable bytes through, or replaces them, would make `fxt` usable on such files too.
-- **More reducers** — `--median`, `--distinct` (count of distinct keys), `--first`/`--last` per group. Now just implementations of an abstraction that exists.
 
 ## 3. From the 2026-11-06 comparison with grep/sed/sort/cut/awk
 

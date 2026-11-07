@@ -121,11 +121,15 @@ fn build_aggregates(config: &Config) -> Vec<Aggregate> {
     if summary.count {
         aggregates.push(Aggregate::Count);
     }
-    let statistics: [Statistic; 4] = [
+    let statistics: [Statistic; 8] = [
         (&summary.sum, Aggregate::Sum),
         (&summary.avg, Aggregate::Avg),
         (&summary.min, Aggregate::Min),
         (&summary.max, Aggregate::Max),
+        (&summary.median, Aggregate::Median),
+        (&summary.distinct, Aggregate::Distinct),
+        (&summary.first, Aggregate::First),
+        (&summary.last, Aggregate::Last),
     ];
     for (columns, aggregate) in statistics {
         if let Some(columns) = columns {

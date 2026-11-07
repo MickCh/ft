@@ -2,13 +2,14 @@
 //! [`crate::transform::LineTransform`] can: instead of turning a line
 //! into lines, it consumes every processed line and writes a summary
 //! once the input ends (`--count`, `--sum`, `--avg`, `--min`, `--max`,
+//! `--median`, `--distinct`, `--first`, `--last`,
 //! optionally per `--group-by` key).
 //!
 //! The engine writes the lines *or* hands them to a reducer, never both:
 //! a summary replaces the rows it summarizes.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use crate::columns::{ColumnSpan, SplitLine};
@@ -63,8 +64,8 @@ impl LineReducer for Join {
     }
 }
 
-/// One summary column: how many rows, or a statistic over the numbers
-/// found in a column span.
+/// One summary column: how many rows, a statistic over the numbers found
+/// in a column span, or something about the text there.
 #[derive(Debug, Clone)]
 pub enum Aggregate {
     Count,
@@ -72,16 +73,23 @@ pub enum Aggregate {
     Avg(ColumnSpan),
     Min(ColumnSpan),
     Max(ColumnSpan),
+    /// The middle number, or the mean of the two middle ones.
+    Median(ColumnSpan),
+    /// How many different values the span holds.
+    Distinct(ColumnSpan),
+    /// The span's value in the group's first row.
+    First(ColumnSpan),
+    /// The span's value in the group's last row.
+    Last(ColumnSpan),
 }
 
 impl Aggregate {
-    /// The number this aggregate reads from a line. `None` for `Count`,
-    /// which counts rows rather than values, and for a value that is not
-    /// a number — those rows are skipped rather than counted as zero,
-    /// which would bend both the sum and the average. The value is read
-    /// unquoted, so `"10"` in a `--quoted` CSV field counts as 10.
-    fn number(&self, line: &SplitLine<'_, '_>) -> Option<Number> {
-        Number::parse(&self.span()?.select_value_in(line))
+    /// The number this aggregate reads from a line. `None` for a value
+    /// that is not a number — those rows are skipped rather than counted
+    /// as zero, which would bend both the sum and the average. The value
+    /// is read unquoted, so `"10"` in a `--quoted` CSV field counts as 10.
+    fn number(span: &ColumnSpan, line: &SplitLine<'_, '_>) -> Option<Number> {
+        Number::parse(&span.select_value_in(line))
     }
 
     /// The columns this aggregate reads; `Count` reads none.
@@ -91,7 +99,11 @@ impl Aggregate {
             Aggregate::Sum(span)
             | Aggregate::Avg(span)
             | Aggregate::Min(span)
-            | Aggregate::Max(span) => Some(span),
+            | Aggregate::Max(span)
+            | Aggregate::Median(span)
+            | Aggregate::Distinct(span)
+            | Aggregate::First(span)
+            | Aggregate::Last(span) => Some(span),
         }
     }
 }
@@ -102,9 +114,17 @@ impl Aggregate {
 enum Accumulator {
     Count(u64),
     Sum(Number),
-    Avg { sum: Number, count: u64 },
+    Avg {
+        sum: Number,
+        count: u64,
+    },
     Min(Option<Number>),
     Max(Option<Number>),
+    /// A median needs every value: there is no running middle.
+    Median(Vec<Number>),
+    Distinct(HashSet<String>),
+    First(Option<String>),
+    Last(Option<String>),
 }
 
 impl Accumulator {
@@ -118,21 +138,63 @@ impl Accumulator {
             },
             Aggregate::Min(_) => Accumulator::Min(None),
             Aggregate::Max(_) => Accumulator::Max(None),
+            Aggregate::Median(_) => Accumulator::Median(Vec::new()),
+            Aggregate::Distinct(_) => Accumulator::Distinct(HashSet::new()),
+            Aggregate::First(_) => Accumulator::First(None),
+            Aggregate::Last(_) => Accumulator::Last(None),
         }
     }
 
     fn accept(&mut self, aggregate: &Aggregate, line: &SplitLine<'_, '_>) {
-        if let Accumulator::Count(rows) = self {
-            *rows += 1;
-            return;
-        }
-        //every other aggregate reads a number, and a row without one
-        //takes no part in it
-        let Some(value) = aggregate.number(line) else {
+        let Some(span) = aggregate.span() else {
+            //only Count reads no columns
+            if let Accumulator::Count(rows) = self {
+                *rows += 1;
+            }
             return;
         };
         match self {
-            Accumulator::Count(_) => unreachable!("counted above"),
+            Accumulator::Count(_) => {}
+            //the text aggregates take every row, whatever it holds: an
+            //empty value is a value too. They read it as --group-by does,
+            //so under --quoted `"a"` and `a` are the same value
+            Accumulator::Distinct(seen) => {
+                let value = span.select_canonical_in(line);
+                if !seen.contains(value.as_ref()) {
+                    seen.insert(value.into_owned());
+                }
+            }
+            Accumulator::First(first) => {
+                if first.is_none() {
+                    *first = Some(
+                        span.select_canonical_in(line)
+                            .into_owned(),
+                    );
+                }
+            }
+            Accumulator::Last(last) => {
+                let value = span.select_canonical_in(line);
+                //reuse the previous row's allocation
+                match last {
+                    Some(text) => {
+                        text.clear();
+                        text.push_str(&value);
+                    }
+                    None => *last = Some(value.into_owned()),
+                }
+            }
+            //every numeric aggregate skips a row without a number
+            numeric => {
+                let Some(value) = Aggregate::number(span, line) else {
+                    return;
+                };
+                numeric.accept_number(value);
+            }
+        }
+    }
+
+    fn accept_number(&mut self, value: Number) {
+        match self {
             Accumulator::Sum(sum) => *sum = *sum + value,
             Accumulator::Avg { sum, count } => {
                 *sum = *sum + value;
@@ -144,11 +206,16 @@ impl Accumulator {
             Accumulator::Max(greatest) => {
                 *greatest = Some(greatest.map_or(value, |current| current.max(value)))
             }
+            Accumulator::Median(values) => values.push(value),
+            Accumulator::Count(_)
+            | Accumulator::Distinct(_)
+            | Accumulator::First(_)
+            | Accumulator::Last(_) => {}
         }
     }
 
-    /// The value to print. A group with no numbers at all has no minimum
-    /// or maximum to show, and an average of nothing is nothing.
+    /// The value to print. A group with no numbers at all has no minimum,
+    /// maximum or median to show, and an average of nothing is nothing.
     fn value(&self) -> String {
         match self {
             Accumulator::Count(rows) => rows.to_string(),
@@ -158,8 +225,52 @@ impl Accumulator {
             Accumulator::Min(value) | Accumulator::Max(value) => value
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
+            Accumulator::Median(values) => median(values),
+            Accumulator::Distinct(seen) => seen.len().to_string(),
+            Accumulator::First(value) | Accumulator::Last(value) => {
+                value.clone().unwrap_or_default()
+            }
         }
     }
+}
+
+/// The middle of `values`: the middle one of an odd count, the mean of
+/// the two middle ones of an even count — kept an integer when it is
+/// one, so the median of 2 and 4 is `3`, of 2 and 3 `2.5`.
+fn median(values: &[Number]) -> String {
+    if values.is_empty() {
+        return String::new();
+    }
+    let mut sorted = values.to_vec();
+    let middle = sorted.len() / 2;
+    let (below, &mut upper, _) = sorted.select_nth_unstable(middle);
+    if values.len() % 2 == 1 {
+        return upper.to_string();
+    }
+    //the lower middle is the greatest of the values below the upper one
+    let lower = *below
+        .iter()
+        .max()
+        .expect("an even count has values below the middle");
+    midpoint(lower, upper)
+}
+
+fn midpoint(lower: Number, upper: Number) -> String {
+    if let (Number::Int(lower), Number::Int(upper)) = (lower, upper) {
+        //exact, without the sum, which may not fit: halve each value
+        //(rounding down) and add back what the halving dropped
+        let halves = lower.div_euclid(2) + upper.div_euclid(2);
+        return match lower.rem_euclid(2) + upper.rem_euclid(2) {
+            0 => halves.to_string(),
+            2 => (halves + 1).to_string(),
+            //`halves + 0.5`, written out: an f64 could not hold it once
+            //the integers grow past 2^53
+            _ if halves >= 0 => format!("{halves}.5"),
+            _ => format!("-{}.5", -(halves + 1)),
+        };
+    }
+    let (lower, upper) = (lower.as_f64(), upper.as_f64());
+    (lower + (upper - lower) / 2.0).to_string()
 }
 
 /// Summarizes the processed lines: one output row per `--group-by` key
@@ -422,5 +533,120 @@ mod tests {
         );
         let result = summarized(reducer, &["a,1", "b,2", "a,4"]);
         assert_eq!(result, "a,2,5\nb,1,2\n");
+    }
+
+    #[test]
+    fn median_takes_the_middle_of_an_odd_count() {
+        // Given / When
+        let reducer = Summarize::new(None, vec![Aggregate::Median(field(1))], ",");
+
+        // Then the values are ordered first, and a non-number is skipped
+        assert_eq!(
+            summarized(reducer, &["8", "x", "1", "3"]),
+            "3
+"
+        );
+    }
+
+    #[test]
+    fn median_of_an_even_count_is_the_mean_of_the_middle_two() {
+        // Given / When / Then: an integer while it is one
+        let median = |lines: &[&str]| {
+            summarized(
+                Summarize::new(None, vec![Aggregate::Median(field(1))], ","),
+                lines,
+            )
+        };
+        assert_eq!(
+            median(&["4", "2"]),
+            "3
+"
+        );
+        assert_eq!(
+            median(&["2", "3"]),
+            "2.5
+"
+        );
+        assert_eq!(
+            median(&["1.5", "2", "9", "-4"]),
+            "1.75
+"
+        );
+        assert_eq!(
+            median(&[]),
+            "
+"
+        );
+    }
+
+    #[test]
+    fn median_of_extreme_integers_does_not_overflow() {
+        // Given the two ends of i128
+        let lines = [i128::MIN.to_string(), i128::MAX.to_string()];
+        let lines: Vec<&str> = lines
+            .iter()
+            .map(String::as_str)
+            .collect();
+
+        // When
+        let reducer = Summarize::new(None, vec![Aggregate::Median(field(1))], ",");
+
+        // Then their midpoint is exact, not rounded by an f64
+        assert_eq!(
+            summarized(reducer, &lines),
+            "-0.5
+"
+        );
+    }
+
+    #[test]
+    fn distinct_counts_different_values_per_group() {
+        // Given / When
+        let reducer = Summarize::new(Some(field(1)), vec![Aggregate::Distinct(field(2))], ",");
+        let result = summarized(reducer, &["a,x", "b,y", "a,y", "a,x", "a,"]);
+
+        // Then an empty value counts as one too
+        assert_eq!(
+            result,
+            "a,3
+b,1
+"
+        );
+    }
+
+    #[test]
+    fn distinct_compares_quoted_values_by_value() {
+        // Given / When
+        let span = ColumnSpan::Fields(crate::columns::FieldSpan {
+            quoted: true,
+            ..crate::columns::FieldSpan::new(",", ColumnList::from(1..=1))
+        });
+        let reducer = Summarize::new(None, vec![Aggregate::Distinct(span)], ",");
+
+        // Then
+        assert_eq!(
+            summarized(reducer, &["\"a\"", "a", "b"]),
+            "2
+"
+        );
+    }
+
+    #[test]
+    fn first_and_last_take_the_ends_of_each_group() {
+        // Given / When
+        let reducer = Summarize::new(
+            Some(field(1)),
+            vec![Aggregate::First(field(2)), Aggregate::Last(field(2))],
+            ",",
+        );
+        let result = summarized(reducer, &["a,1", "b,2", "a,x", "a,3", "b,4"]);
+
+        // Then any text will do, not just numbers
+        assert_eq!(
+            result,
+            "a,1,3
+b,2,4
+"
+        );
     }
 }

@@ -324,6 +324,33 @@ fn group_by_summarizes_per_key() {
 }
 
 #[test]
+fn group_by_with_median_distinct_first_and_last() {
+    let input = TempFile::new(
+        "group-by-more",
+        "fruit,apple,3\nveg,leek,10\nfruit,pear,8\nfruit,apple,4\nveg,kale,x\n",
+    );
+    //printed in a fixed order, whatever the order of the flags
+    let stdout = run_fxt_stdout(&[
+        "-F",
+        ",",
+        "--group-by",
+        "1",
+        "--last",
+        "2",
+        "--first",
+        "2",
+        "--distinct",
+        "2",
+        "--median",
+        "3",
+        input.path_str(),
+    ]);
+    //key, median, distinct, first, last; the `x` is no number for the
+    //median but a value like any other for the rest
+    assert_eq!(stdout, "fruit,4,2,apple,apple\nveg,10,2,leek,kale\n");
+}
+
+#[test]
 fn quoted_unique_keys_compare_by_value() {
     //`"a"` and `a` are one value, so the second row is a duplicate; the
     //row that survives is written as it was read

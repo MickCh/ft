@@ -8,6 +8,7 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 - `--encoding <name>`: inputs in another encoding than UTF-8 (`windows-1250`, `latin1`, `utf-16le`, `shift_jis`, … — the WHATWG labels). A UTF-16 file with a byte order mark is recognized without it.
 - `--output-encoding <name>`: the output in another encoding. `--in-place` writes each file back in its own encoding and BOM, unless `--output-encoding` converts it.
+- `--median`, `--distinct`, `--first` and `--last` summaries, per `--group-by` group like the others.
 - Undecodable input and characters the output encoding cannot hold are errors (exit code 2), never silent replacements.
 
 ## [0.2.0] — 2026-11-07

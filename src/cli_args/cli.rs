@@ -69,6 +69,10 @@ pub fn cli() -> Command {
                     "avg",
                     "min",
                     "max",
+                    "median",
+                    "distinct",
+                    "first",
+                    "last",
                     "group-by",
                 ])
                 .multiple(true),
@@ -277,7 +281,10 @@ pub fn cli() -> Command {
                 //a reducer consumes the rows, and there is only one set of
                 //them: --join and a summary cannot both have it. Numbering
                 //them would number rows nobody ever sees
-                .conflicts_with_all(["count", "sum", "avg", "min", "max", "delete", "number"])
+                .conflicts_with_all([
+                    "count", "sum", "avg", "min", "max", "median", "distinct", "first", "last",
+                    "delete", "number",
+                ])
                 .value_parser(parse_delimiter)
                 .help("Join every row into a single row, separated by this (like paste -s)"),
         )
@@ -321,6 +328,38 @@ pub fn cli() -> Command {
                 .help("Summarize: the largest number in these columns"),
         )
         .arg(
+            Arg::new("median")
+                .long("median")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_list)
+                .help("Summarize: the middle number in these columns (the mean of the two middle ones)"),
+        )
+        .arg(
+            Arg::new("distinct")
+                .long("distinct")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_list)
+                .help("Summarize: how many different values these columns hold"),
+        )
+        .arg(
+            Arg::new("first")
+                .long("first")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_list)
+                .help("Summarize: these columns in the first row (of each --group-by group)"),
+        )
+        .arg(
+            Arg::new("last")
+                .long("last")
+                .required(false)
+                .allow_hyphen_values(true)
+                .value_parser(parse_column_list)
+                .help("Summarize: these columns in the last row (of each --group-by group)"),
+        )
+        .arg(
             Arg::new("group-by")
                 .long("group-by")
                 .required(false)
@@ -335,7 +374,9 @@ pub fn cli() -> Command {
         //`--sort --group-by` reports the groups in sorted order
         .group(
             ArgGroup::new("summary")
-                .args(["count", "sum", "avg", "min", "max"])
+                .args([
+                    "count", "sum", "avg", "min", "max", "median", "distinct", "first", "last",
+                ])
                 .multiple(true)
                 .conflicts_with_all(["delete", "number"]),
         )
