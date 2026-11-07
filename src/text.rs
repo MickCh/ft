@@ -206,21 +206,34 @@ pub fn expand_tabs(text: &str, tab: usize) -> String {
 
 /// Turn the blanks that reach a tab stop into tabs, like `unexpand -a`:
 /// a run of two or more spaces ending at a stop becomes one tab, spaces
-/// right before a tab go into it, and a lone space stays a space, so the
-/// gaps between words are not turned into tabs by accident. Whatever it
-/// writes [`expand_tabs`] expands to what the text expands to.
+/// right before a tab go into it, and a lone space stays a space — unless
+/// another blank follows it, as GNU has it — so the gaps between words
+/// are not turned into tabs by accident. Whatever it writes
+/// [`expand_tabs`] expands to what the text expands to.
 pub fn unexpand_tabs(text: &str, tab: usize) -> String {
     let mut result = String::with_capacity(text.len());
     let mut column = 0;
     //spaces read but not yet written: a stop may turn them into a tab
     let mut pending = 0;
+    //a lone space that reached a stop: a tab if a blank follows it
+    let mut lone_at_stop = false;
     for character in text.chars() {
+        if std::mem::take(&mut lone_at_stop) {
+            result.push(if matches!(character, ' ' | '\t') {
+                '\t'
+            } else {
+                ' '
+            });
+        }
         match character {
             ' ' => {
                 pending += 1;
                 column += 1;
                 if column % tab == 0 {
-                    result.push(if pending > 1 { '\t' } else { ' ' });
+                    match pending > 1 {
+                        true => result.push('\t'),
+                        false => lone_at_stop = true,
+                    }
                     pending = 0;
                 }
             }
@@ -236,6 +249,9 @@ pub fn unexpand_tabs(text: &str, tab: usize) -> String {
                 column = if character == '\n' { 0 } else { column + 1 };
             }
         }
+    }
+    if lone_at_stop {
+        result.push(' ');
     }
     result.extend(std::iter::repeat_n(' ', pending));
     result
@@ -544,6 +560,10 @@ mod tests {
         //a lone space at a stop stays a space; spaces before a tab go into it
         assert_eq!(unexpand_tabs("abc d", 4), "abc d");
         assert_eq!(unexpand_tabs("a  \tb", 4), "a\tb");
+        //unless another blank follows it (GNU `unexpand -a`)
+        assert_eq!(unexpand_tabs("abcdefg \tb", 8), "abcdefg\t\tb");
+        assert_eq!(unexpand_tabs("abc  d", 4), "abc\t d");
+        assert_eq!(unexpand_tabs("abc ", 4), "abc ");
         //trailing spaces that reach no stop stay as they are
         assert_eq!(unexpand_tabs("ab  ", 8), "ab  ");
     }

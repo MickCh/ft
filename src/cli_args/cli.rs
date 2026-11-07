@@ -495,6 +495,7 @@ pub fn cli() -> Command {
                 .long("find")
                 .required(false)
                 .action(ArgAction::Append)
+                .value_parser(parse_find)
                 .help("Substring to find (repeatable, paired with --replace)"),
         )
         .arg(
@@ -697,6 +698,15 @@ fn parse_range_part(part: &str) -> Result<(RangeBound, RangeBound), String> {
     }
 
     Ok((from, to))
+}
+
+/// Parse a `--find` pattern: an empty one matches between every two
+/// chars, so a replacement would be put in everywhere (`abc` → `xaxbxcx`).
+fn parse_find(input: &str) -> Result<String, String> {
+    if input.is_empty() {
+        return Err("The pattern to find cannot be empty".to_owned());
+    }
+    Ok(input.to_owned())
 }
 
 fn parse_delimiter(input: &str) -> Result<String, String> {

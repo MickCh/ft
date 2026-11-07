@@ -80,7 +80,7 @@ fn run() -> Result<Verdict, AppError> {
         //so each distinct file is edited once
         let mut seen = HashSet::new();
         for path in config.input_files() {
-            let identity = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            let identity = resolve(path).unwrap_or_else(|_| path.to_path_buf());
             if !seen.insert(identity) {
                 continue;
             }
@@ -181,7 +181,8 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
     let reader = BufReader::new(reader);
     //resolve symlinks so the rename below swaps out the link's target,
     //not the link itself (which would turn it into a regular file)
-    let path = &std::fs::canonicalize(path).map_err(|source| replace_error(path, source))?;
+    let given = path;
+    let path = &resolve(path).map_err(|source| replace_error(path, source))?;
     //capture the original permissions up front so the replacement keeps
     //them instead of the temporary file's umask-derived defaults
     let permissions = std::fs::metadata(path)
@@ -238,7 +239,7 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
     //that is never what an edit means, so the file is left as it was
     if leaves_nothing(config, outcome) {
         let _ = std::fs::remove_file(&temp_path);
-        eprintln!("{}: nothing matched, left unchanged", path.display());
+        eprintln!("{}: nothing matched, left unchanged", given.display());
         return Ok(outcome);
     }
 
@@ -279,11 +280,43 @@ fn replace_error(path: &Path, source: std::io::Error) -> AppError {
     }
 }
 
+/// The absolute path of an existing file, symlinks resolved. On Windows
+/// `canonicalize` answers with a verbatim path (`\\?\C:\…`), which would
+/// leak into messages and into the names of the temporary and backup
+/// files made next to it, so it is given back in its ordinary form.
+fn resolve(path: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(path).map(simplified)
+}
+
+/// A verbatim Windows path in its ordinary form: `\\?\C:\a` as `C:\a`,
+/// `\\?\UNC\server\share` as `\\server\share`. Anything else — a volume
+/// GUID path, or one too long for the ordinary form (`MAX_PATH`) — stays
+/// verbatim, since only the verbatim form can name it.
+fn simplified(path: PathBuf) -> PathBuf {
+    const MAX_PATH: usize = 260;
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    let ordinary = if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{share}")
+    } else if let Some(local) = text.strip_prefix(r"\\?\")
+        && local.as_bytes().get(1) == Some(&b':')
+    {
+        local.to_owned()
+    } else {
+        return path;
+    };
+    match ordinary.len() < MAX_PATH {
+        true => PathBuf::from(ordinary),
+        false => path,
+    }
+}
+
 /// Whether two paths point at the same existing file, resolving
 /// symlinks and relative components. A path that cannot be resolved
 /// (e.g. an output file that does not exist yet) aliases nothing.
 fn same_file(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+    match (resolve(a), resolve(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
@@ -495,5 +528,35 @@ fn temporary_sibling(path: &Path) -> PathBuf {
     match path.parent() {
         Some(dir) => dir.join(temp_name),
         None => PathBuf::from(temp_name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_verbatim_path_is_given_back_in_its_ordinary_form() {
+        // Given verbatim paths / When simplified / Then the prefix is gone
+        let simple = |text: &str| simplified(PathBuf::from(text));
+        assert_eq!(
+            simple(r"\\?\C:\data\a.txt"),
+            PathBuf::from(r"C:\data\a.txt")
+        );
+        assert_eq!(
+            simple(r"\\?\UNC\server\share\a"),
+            PathBuf::from(r"\\server\share\a")
+        );
+
+        // And what only the verbatim form can name is left as it was
+        assert_eq!(
+            simple(r"\\?\Volume{x}\a"),
+            PathBuf::from(r"\\?\Volume{x}\a")
+        );
+        let long = format!(r"\\?\C:\{}", "a".repeat(300));
+        assert_eq!(simple(&long), PathBuf::from(&long));
+
+        // And an ordinary path is no business of it
+        assert_eq!(simple("/home/a.txt"), PathBuf::from("/home/a.txt"));
     }
 }

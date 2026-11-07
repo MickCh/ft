@@ -326,6 +326,17 @@ fn padding_pads_an_empty_line_too() {
 }
 
 #[test]
+fn an_empty_find_is_refused() {
+    let output = run_fxt_with_stdin(&["-f", "", "-r", "x"], "abc\n");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("The pattern to find cannot be empty"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn join_takes_an_empty_separator() {
     let output = run_fxt_with_stdin(&["--join", ""], "a\nb\n");
     assert!(output.status.success());
@@ -1360,6 +1371,8 @@ fn in_place_leaves_a_file_nothing_matched_in_as_it_was() {
         stderr.contains("nothing matched, left unchanged"),
         "{stderr}"
     );
+    //the file is named as it was given, not as a verbatim Windows path
+    assert!(stderr.starts_with(input.path_str()), "{stderr}");
 
     let dry_run = run_fxt(&["-i", "--dry-run", "-g", "zz", input.path_str()]);
     let stdout = String::from_utf8_lossy(&dry_run.stdout);
