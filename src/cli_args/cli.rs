@@ -140,7 +140,7 @@ pub fn cli() -> Command {
                 .long("sort")
                 .required(false)
                 .action(ArgAction::SetTrue)
-                .help("Sort specified region (rows/columns)"),
+                .help("Sort the selected rows, using the column range as the sort key"),
         )
         .arg(
             Arg::new("numeric")
@@ -181,7 +181,7 @@ pub fn cli() -> Command {
                 .long("delete")
                 .required(false)
                 .action(ArgAction::SetTrue)
-                .help("Delete specified region (rows)"),
+                .help("Delete the selected rows, or the column range within them"),
         )
         .arg(
             Arg::new("unique")
@@ -294,7 +294,7 @@ pub fn cli() -> Command {
                 .required(false)
                 .action(ArgAction::SetTrue)
                 .conflicts_with_all(["upper", "lower", "delete"])
-                .help("Capitalize the first letter of every word in the column range"),
+                .help("Capitalize every word in the column range and lowercase the rest of it (wORLD -> World)"),
         )
         .arg(
             Arg::new("squeeze")
@@ -518,7 +518,7 @@ pub fn cli() -> Command {
                 .long("find")
                 .required(false)
                 .action(ArgAction::Append)
-                .help("Set substring to find (repeatable, pairing up with --replace)"),
+                .help("Substring to find (repeatable, paired with --replace)"),
         )
         .arg(
             Arg::new("replace")
@@ -554,7 +554,7 @@ pub fn cli() -> Command {
                 .long("ignore-case")
                 .required(false)
                 .action(ArgAction::SetTrue)
-                .help("Match the find/grep pattern case-insensitively"),
+                .help("Match the --find, --grep, --from and --to patterns case-insensitively"),
         )
         .arg(
             Arg::new("quiet")
@@ -566,7 +566,7 @@ pub fn cli() -> Command {
                 .conflicts_with_all(["output", "in-place"])
                 .help(
                     "Write nothing; exit 0 if any row matched, 1 if none did \
-                     (requires --grep, --from or --to)",
+                     (requires a content filter: --grep, --from, --to, --min-fields or --max-len)",
                 ),
         )
         .arg(

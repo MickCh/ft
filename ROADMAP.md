@@ -143,17 +143,7 @@ Usability and validation:
 - **An empty `--find ''`** inserts the replacement between every char (`abc` → `xaxbxcx`), as `str::replace` does; refuse it.
 - **`--unexpand` and a lone space before a tab** — `abcdefg \tb` keeps the space where GNU `unexpand -a` makes it a tab; the same on screen, but matching GNU costs nothing.
 
-Documentation:
-
-- `README.md` (*Order of operations*) advises "Use `-i` (ignore case)" — `-i` is `--in-place`, so following it overwrites the file. Say `--ignore-case`. **Fix first.**
-- `-q` "requires `--grep`, `--from` or `--to`" (README table, `--help`) — any content filter, `--min-fields` and `--max-len` too.
-- `--help` for `--ignore-case` says "find/grep pattern"; it applies to `--from`/`--to` as well.
-- `--title-case` lowercases the rest of each word (`wORLD` → `World`) and starts words after `-` and `'` (`Foo-Bar O'Neil`); the description says neither.
-- *Order of operations* lists `--upper` → `--lower`, `--expand`/`--unexpand` and `--pad-left`/`--pad-right` as if they combined; each pair excludes the other. `--number` with `--delete` is refused but undocumented.
-- Numeric sort: keys that are not numbers sort first — last with `--reverse`; say so.
-- The example "Sort only rows 2-100 (e.g. keep a header line first...)" suggests row 1 is kept; `-R` selects, so it is not.
-- The options table lacks `-v` for `--invert`.
-- `--help` texts for `-s` ("Sort specified region"), `-d` ("Delete specified region") and `-f` ("Set substring to find") predate the rest; align them with the README table.
+Documentation: ✅ all nine fixed — `-i` advised as "ignore case" (it is `--in-place`), what `-q` and `--ignore-case` apply to, what `--title-case` does, which neighbours in the order of operations exclude each other, where non-numbers sort under `--reverse`, the header example, `-v` in the table, and the old-style `--help` texts of `-s`, `-d` and `-f`.
 
 Observed and consistent with the documentation, noted for awareness: files without a final newline run into the next one in a concatenation (like `cat`); mixed-bound row ranges that resolve inverted (`~1-2`) select nothing, quietly; a `--to` that never matches selects everything (as `sed 0,/re/`); `-P` sends patterns without backtracking features to the linear engine; numbers accept `+5`, ` 7`, `1e3`, `inf` but not `0x10` or `NaN`, and floats print raw (`0.30000000000000004`).
 
