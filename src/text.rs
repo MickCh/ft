@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 use std::convert::Infallible;
-use std::ops::RangeInclusive;
+use std::ops::{Range, RangeInclusive};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Split a line into its content and line terminator ("\r\n", "\n" or none).
@@ -110,6 +110,14 @@ fn byte_range(line: &str, cols: &RangeInclusive<usize>) -> Option<(usize, usize)
         }
     }
     from.map(|from| (from, to))
+}
+
+/// The byte range `part` occupies in `line`, if it is a slice of it —
+/// as a borrowed selection usually is, though an empty one may be a
+/// `""` from anywhere. Plain address arithmetic, no `unsafe`.
+pub fn offset_in(line: &str, part: &str) -> Option<Range<usize>> {
+    let start = (part.as_ptr() as usize).wrapping_sub(line.as_ptr() as usize);
+    (start <= line.len() && part.len() <= line.len() - start).then(|| start..start + part.len())
 }
 
 /// Return only the characters within the column range, like `cut`:
@@ -362,6 +370,25 @@ mod tests {
             ["\u{1F469}\u{200D}\u{1F4BB}e\u{301}", "xy"]
         );
         assert_eq!(wrap_graphemes("", 3), [""]);
+    }
+
+    #[test]
+    fn offset_in_finds_a_slice_of_the_line() {
+        // Given / When / Then
+        let line = "zażółć gęślą";
+        assert_eq!(offset_in(line, &line[2..8]), Some(2..8));
+        assert_eq!(
+            offset_in(line, &line[line.len()..]),
+            Some(line.len()..line.len())
+        );
+        assert_eq!(offset_in(line, line), Some(0..line.len()));
+    }
+
+    #[test]
+    fn offset_in_rejects_text_from_elsewhere() {
+        // Given / When / Then
+        let elsewhere = String::from("elsewhere");
+        assert_eq!(offset_in("abc", &elsewhere), None);
     }
 
     #[test]

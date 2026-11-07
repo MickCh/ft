@@ -9,6 +9,7 @@
 //! transform here instead of branching inside the processing loop.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use regex::{NoExpand, Regex, RegexBuilder};
 use std::io;
@@ -25,6 +26,9 @@ pub enum LineOutcome {
     Keep,
     /// The line is rewritten.
     Replace(String),
+    /// The line is cut down to this byte range of itself — what a
+    /// selection usually is, so it needs no copy of its own.
+    Slice(Range<usize>),
     /// The line becomes several lines.
     Expand(Vec<String>),
     /// The line disappears.
@@ -54,6 +58,7 @@ impl<'a> Lines<'a> {
         Ok(match self {
             Lines::One(content) => match transform.apply(&content)? {
                 LineOutcome::Keep => Lines::One(content),
+                LineOutcome::Slice(range) => Lines::One(slice(content, range)),
                 LineOutcome::Replace(rewritten) => Lines::One(Cow::Owned(rewritten)),
                 LineOutcome::Expand(lines) => Lines::Several(lines),
                 LineOutcome::Drop => Lines::Several(Vec::new()),
@@ -63,6 +68,9 @@ impl<'a> Lines<'a> {
                 for content in contents {
                     match transform.apply(&content)? {
                         LineOutcome::Keep => lines.push(content),
+                        LineOutcome::Slice(range) => {
+                            lines.push(slice(Cow::Owned(content), range).into_owned())
+                        }
                         LineOutcome::Replace(rewritten) => lines.push(rewritten),
                         LineOutcome::Expand(expanded) => lines.extend(expanded),
                         LineOutcome::Drop => {}
@@ -71,6 +79,19 @@ impl<'a> Lines<'a> {
                 Lines::Several(lines)
             }
         })
+    }
+}
+
+/// Cut `content` down to the byte `range` of it: a borrowed line stays
+/// borrowed, an owned one is cut in place.
+fn slice(content: Cow<'_, str>, range: Range<usize>) -> Cow<'_, str> {
+    match content {
+        Cow::Borrowed(line) => Cow::Borrowed(&line[range]),
+        Cow::Owned(mut line) => {
+            line.truncate(range.end);
+            line.drain(..range.start);
+            Cow::Owned(line)
+        }
     }
 }
 
@@ -119,7 +140,16 @@ impl SelectColumns {
 
 impl LineTransform for SelectColumns {
     fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
-        Ok(LineOutcome::Replace(self.span.select(line).into_owned()))
+        //a selection borrowed from the line is a slice of it, so the line
+        //is only cut down; one joined from several parts is new text
+        Ok(match self.span.select(line) {
+            Cow::Borrowed(selected) => match text::offset_in(line, selected) {
+                Some(range) => LineOutcome::Slice(range),
+                //nothing selected: a `""` that is no part of the line
+                None => LineOutcome::Replace(selected.to_owned()),
+            },
+            Cow::Owned(joined) => LineOutcome::Replace(joined),
+        })
     }
 }
 
@@ -488,6 +518,7 @@ mod tests {
         match transform.apply(line).unwrap() {
             LineOutcome::Keep => line.to_owned(),
             LineOutcome::Replace(rewritten) => rewritten,
+            LineOutcome::Slice(range) => line[range].to_owned(),
             outcome => panic!("expected a single line, got {outcome:?}"),
         }
     }

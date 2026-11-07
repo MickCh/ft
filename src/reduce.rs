@@ -752,8 +752,11 @@ b,2,4
 
         // Then two spans are read per line, and each statistic is its own
         assert_eq!(readings.spans.len(), 2);
-        assert_eq!(result, "a,6,3,1,9,3,3
+        assert_eq!(
+            result,
+            "a,6,3,1,9,3,3
 b,4,1,4,,4,4
-");
+"
+        );
     }
 }
