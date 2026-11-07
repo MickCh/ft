@@ -6,7 +6,6 @@ pub mod cli_args;
 pub mod codec;
 pub mod columns;
 pub mod compose;
-pub mod constants;
 pub mod encoding;
 pub mod error;
 pub mod file_processor;

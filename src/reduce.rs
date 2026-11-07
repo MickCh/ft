@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
 use crate::columns::{ColumnSpan, SplitLine};
-use crate::constants::NEW_LINE;
 use crate::number::Number;
 
 /// Something computed over the processed lines as a whole.
@@ -23,8 +22,30 @@ pub trait LineReducer {
     /// writes each line as it arrives — rather than forcing every one of
     /// them to hoard the input until the end.
     fn accept(&mut self, line: &str, writer: &mut dyn Write) -> io::Result<()>;
-    /// Write what is left to write, once every line has been accepted.
-    fn finish(&mut self, writer: &mut dyn Write) -> io::Result<()>;
+    /// Write what is left to write, once every line has been accepted,
+    /// ending the rows it writes the way the input ended its own.
+    fn finish(&mut self, ending: InputEnding, writer: &mut dyn Write) -> io::Result<()>;
+}
+
+/// How the input ended its lines, for a reducer that writes rows of its
+/// own: with which terminator, and whether its last line had one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputEnding {
+    /// The terminator the input's lines end with ("\r\n" or "\n"; the
+    /// last one seen, and "\n" for an input that has none at all).
+    pub newline: &'static str,
+    /// Whether the input's last line was terminated.
+    pub terminated: bool,
+}
+
+impl Default for InputEnding {
+    /// An input with no lines: nothing says otherwise, so `\n`.
+    fn default() -> InputEnding {
+        InputEnding {
+            newline: "\n",
+            terminated: true,
+        }
+    }
 }
 
 /// Joins every processed line into a single row (`paste -s`). It has
@@ -54,11 +75,12 @@ impl LineReducer for Join {
         Ok(())
     }
 
-    fn finish(&mut self, writer: &mut dyn Write) -> io::Result<()> {
-        //the one row that was written still needs its terminator; with no
-        //rows at all there is nothing to terminate
-        if self.started {
-            writer.write_all(NEW_LINE.as_bytes())?;
+    fn finish(&mut self, ending: InputEnding, writer: &mut dyn Write) -> io::Result<()> {
+        //the one row that was written ends the way the input did: with
+        //its terminator, or with none when its last line had none. With
+        //no rows at all there is nothing to terminate
+        if self.started && ending.terminated {
+            writer.write_all(ending.newline.as_bytes())?;
         }
         Ok(())
     }
@@ -454,7 +476,9 @@ impl LineReducer for Summarize {
         Ok(())
     }
 
-    fn finish(&mut self, writer: &mut dyn Write) -> io::Result<()> {
+    /// Every summary row is terminated, in the input's style (`\r\n` for
+    /// a CRLF file), even when the input's last line was not.
+    fn finish(&mut self, ending: InputEnding, writer: &mut dyn Write) -> io::Result<()> {
         for (key, accumulators) in self.groups.in_order() {
             let mut columns: Vec<String> = Vec::with_capacity(accumulators.len() + 1);
             if self.key_span.is_some() {
@@ -466,7 +490,8 @@ impl LineReducer for Summarize {
                     .map(Accumulator::value),
             );
 
-            writeln!(writer, "{}", columns.join(&self.separator))?;
+            writer.write_all(columns.join(&self.separator).as_bytes())?;
+            writer.write_all(ending.newline.as_bytes())?;
         }
         Ok(())
     }
@@ -490,7 +515,7 @@ mod tests {
                 .expect("accepting a line failed");
         }
         reducer
-            .finish(&mut output)
+            .finish(InputEnding::default(), &mut output)
             .expect("writing the result failed");
         String::from_utf8(output).expect("the result is not valid UTF-8")
     }
@@ -501,14 +526,54 @@ mod tests {
 
     #[test]
     fn join_writes_the_rows_as_one_row() {
-        assert_eq!(
-            reduced(Join::new(","), &["a", "b", "c"]),
-            format!("a,b,c{NEW_LINE}")
-        );
-        assert_eq!(
-            reduced(Join::new(" | "), &["a", "b"]),
-            format!("a | b{NEW_LINE}")
-        );
+        assert_eq!(reduced(Join::new(","), &["a", "b", "c"]), "a,b,c\n");
+        assert_eq!(reduced(Join::new(" | "), &["a", "b"]), "a | b\n");
+    }
+
+    #[test]
+    fn join_ends_its_row_the_way_the_input_ended() {
+        // Given a CRLF input, and one whose last line has no terminator
+        let crlf = InputEnding {
+            newline: "\r\n",
+            terminated: true,
+        };
+        let unterminated = InputEnding {
+            newline: "\n",
+            terminated: false,
+        };
+
+        // When joining / Then the joined row ends the same way
+        let joined = |ending| {
+            let mut output = Vec::new();
+            let mut join = Join::new(",");
+            join.accept("a", &mut output).unwrap();
+            join.accept("b", &mut output).unwrap();
+            join.finish(ending, &mut output)
+                .unwrap();
+            String::from_utf8(output).unwrap()
+        };
+        assert_eq!(joined(crlf), "a,b\r\n");
+        assert_eq!(joined(unterminated), "a,b");
+    }
+
+    #[test]
+    fn a_summary_writes_its_rows_in_the_input_style() {
+        // Given a count over a CRLF input
+        let mut reducer = Summarize::new(None, vec![Aggregate::Count], ",");
+        let mut output = Vec::new();
+        reducer
+            .accept("a", &mut output)
+            .unwrap();
+
+        // When it finishes / Then its row ends in CRLF
+        let ending = InputEnding {
+            newline: "\r\n",
+            terminated: false,
+        };
+        reducer
+            .finish(ending, &mut output)
+            .unwrap();
+        assert_eq!(output, b"1\r\n");
     }
 
     #[test]

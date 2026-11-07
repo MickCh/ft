@@ -24,6 +24,8 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 - `--output-delimiter` stood only between the parts of a column list, not between the fields of one range: `-F , -C 1-3 --output-delimiter ;` printed `a,b,c`. It now rejoins every field.
 - In field mode, the transforms that rewrite text worked on a range of fields as one stretch, delimiters included: `-F , -C 1- --reverse-chars` turned `ab,cd` into `dc,ba`, `--trim` trimmed only the ends of the stretch, `--expand` counted tab stops from its start, and `--find` could match across a delimiter. Each field is now rewritten on its own (deleting fields still takes a stretch).
 
+- On Windows, a terminator `fxt` adds of its own was always `\r\n`, whatever the input used: `--join` ended in `\r\n` and an unterminated last line moved by `--tac` put a `\r\n` among `\n`s, while summaries wrote `\n` even into a CRLF file. The terminator now follows the input's lines, on every platform, and a `--join`ed row ends the way the input did (unterminated, if its last line was).
+
 ### Performance
 
 - Rows held back for reordering, and the input buffered for `~N` row bounds, are stored back to back in one allocation instead of one per row; reordering moves small records, not the text. `-R ~1000-~1` 1.4× faster, `--shuffle` 1.2×, `--tac`, `--sort` and a sort by a CSV field 1.1×.

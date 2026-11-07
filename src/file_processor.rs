@@ -5,13 +5,12 @@
 //! the CLI layer.
 
 use crate::columns::ColumnSpan;
-use crate::constants::NEW_LINE;
 use crate::number::Number;
 use crate::pattern_range::PatternRange;
 use crate::predicate::LinePredicate;
 use crate::ranges::{RangeSet, RangeSpec};
 use crate::records::Records;
-use crate::reduce::LineReducer;
+use crate::reduce::{InputEnding, LineReducer};
 use crate::text;
 use crate::transform::{Lines, Pipeline};
 
@@ -96,6 +95,9 @@ struct RunState {
     //the line just written carried no terminator (it was the input's
     //last), so anything written after it needs one put in between
     needs_separator: bool,
+    //how the input ends its lines, as far as it has been read: what a
+    //line that owes a terminator gets, and how a reducer ends its rows
+    ending: InputEnding,
     //at least one row was selected for processing (`RunOutcome::matched`)
     matched: bool,
 }
@@ -181,7 +183,9 @@ fn write_content<W: Write>(
 
 fn write_pending_separator<W: Write>(state: &mut RunState, writer: &mut W) -> io::Result<()> {
     if state.needs_separator {
-        writer.write_all(NEW_LINE.as_bytes())?;
+        //the terminator the input's other lines end with, not the
+        //platform's: a CRLF file stays CRLF, an LF one LF, everywhere
+        writer.write_all(state.ending.newline.as_bytes())?;
         state.needs_separator = false;
     }
     Ok(())
@@ -284,7 +288,7 @@ impl FileProcessor {
         //the summary replaces the rows it summarizes, so it is all the
         //output there is
         if let Some(reducer) = &mut self.reducer {
-            reducer.finish(writer)?;
+            reducer.finish(state.ending, writer)?;
         }
         writer.flush()?;
 
@@ -301,6 +305,13 @@ impl FileProcessor {
         state: &mut RunState,
         writer: &mut W,
     ) -> io::Result<()> {
+        //every line tells how the input ends its lines
+        let terminator = text::line_terminator_of(raw_line);
+        state.ending.terminated = !terminator.is_empty();
+        if state.ending.terminated {
+            state.ending.newline = terminator;
+        }
+
         //every line moves the pattern range along — also one outside
         //`--rows`, since it may open or close a block all the same
         let in_pattern_range = match &mut self.pattern_range {

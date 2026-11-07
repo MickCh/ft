@@ -25,6 +25,18 @@ pub fn split_line_terminator(line: &str) -> (&str, &'static str) {
     (line, "")
 }
 
+/// The terminator a raw line ends with: "\r\n", "\n", or "" for the
+/// input's last line when it has none.
+pub fn line_terminator_of(line: &[u8]) -> &'static str {
+    if line.ends_with(b"\r\n") {
+        "\r\n"
+    } else if line.ends_with(b"\n") {
+        "\n"
+    } else {
+        ""
+    }
+}
+
 /// The content of a raw line, its terminator ("\r\n" or "\n") cut off:
 /// [`split_line_terminator`] for bytes that need not be UTF-8.
 pub fn without_line_terminator(line: &[u8]) -> &[u8] {

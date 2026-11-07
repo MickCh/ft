@@ -1210,6 +1210,26 @@ fn field_mode_transforms_work_on_each_field() {
 }
 
 #[test]
+fn a_terminator_put_in_follows_the_input_not_the_platform() {
+    let stdout = |args: &[&str], input: &str| {
+        let output = run_fxt_with_stdin(args, input);
+        assert!(output.status.success(), "{args:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    //an unterminated last line moved up gets the input's terminator
+    assert_eq!(stdout(&["--tac"], "a\r\nb"), "b\r\na\r\n");
+    assert_eq!(stdout(&["--tac"], "a\nb"), "b\na\n");
+    assert_eq!(stdout(&["--wrap", "1"], "ab"), "a\nb");
+    //a joined row ends the way the input does
+    assert_eq!(stdout(&["--join", ","], "a\r\nb\r\n"), "a,b\r\n");
+    assert_eq!(stdout(&["--join", ","], "a\nb\n"), "a,b\n");
+    assert_eq!(stdout(&["--join", ","], "a\nb"), "a,b");
+    //a summary row is terminated, in the input's style
+    assert_eq!(stdout(&["--count"], "a\r\nb\r\n"), "2\r\n");
+    assert_eq!(stdout(&["--count"], "a\nb"), "2\n");
+}
+
+#[test]
 fn keep_others_edits_the_selection_and_keeps_the_rest() {
     let input = TempFile::new("keep-others", "h\nb\na\nb\n");
     //rows outside -R pass through, the selected ones are edited

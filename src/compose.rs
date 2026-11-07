@@ -330,7 +330,6 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
 mod tests {
     use super::*;
     use crate::columns::ColumnList;
-    use crate::constants::NEW_LINE;
     use crate::ranges::RangeSpec;
     use crate::transform::Lines;
     use std::io::{self, Cursor};
@@ -506,7 +505,7 @@ mod tests {
 
         //"a" has no trailing newline and sorts before "b"
         let result = run(config, "b\na");
-        assert_eq!(result, format!("a{}b\n", NEW_LINE));
+        assert_eq!(result, "a\nb\n");
     }
 
     #[test]
@@ -647,7 +646,7 @@ mod tests {
         config.reorder = Some(ReorderMode::Tac);
 
         let result = run(config, "b\na");
-        assert_eq!(result, format!("a{}b\n", NEW_LINE));
+        assert_eq!(result, "a\nb\n");
     }
 
     #[test]
@@ -792,7 +791,7 @@ mod tests {
         //the last chunk it expands into — but the chunks before it must
         //still be separated
         let result = run(config, "abcdef");
-        assert_eq!(result, format!("abc{NEW_LINE}def"));
+        assert_eq!(result, "abc\ndef");
     }
 
     #[test]
@@ -864,7 +863,7 @@ mod tests {
         config.join = Some(",".to_owned());
 
         let result = run(config, "a\nb\nc\n");
-        assert_eq!(result, format!("a,b,c{NEW_LINE}"));
+        assert_eq!(result, "a,b,c\n");
     }
 
     #[test]
@@ -875,7 +874,7 @@ mod tests {
 
         //split into rows, then folded back: the input, restored
         let result = run(config, "a,b\nc\n");
-        assert_eq!(result, format!("a,b,c{NEW_LINE}"));
+        assert_eq!(result, "a,b,c\n");
     }
 
     #[test]
@@ -887,7 +886,7 @@ mod tests {
         ];
 
         let result = run(config, "keep a\ndrop b\nkeep c\n");
-        assert_eq!(result, format!("keep a,keep c{NEW_LINE}"));
+        assert_eq!(result, "keep a,keep c\n");
     }
 
     #[test]
@@ -899,7 +898,7 @@ mod tests {
         config.join = Some(",".to_owned());
 
         let result = run(config, "c\na\nb\n");
-        assert_eq!(result, format!("a,b,c{NEW_LINE}"));
+        assert_eq!(result, "a,b,c\n");
     }
 
     #[test]
