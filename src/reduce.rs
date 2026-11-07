@@ -92,6 +92,22 @@ impl Aggregate {
         Number::parse(&span.select_value_in(line))
     }
 
+    /// The columns this aggregate reads a number from; `None` for the
+    /// count and the text aggregates.
+    fn number_span(&self) -> Option<&ColumnSpan> {
+        match self {
+            Aggregate::Sum(span)
+            | Aggregate::Avg(span)
+            | Aggregate::Min(span)
+            | Aggregate::Max(span)
+            | Aggregate::Median(span) => Some(span),
+            Aggregate::Count
+            | Aggregate::Distinct(_)
+            | Aggregate::First(_)
+            | Aggregate::Last(_) => None,
+        }
+    }
+
     /// The columns this aggregate reads; `Count` reads none.
     fn span(&self) -> Option<&ColumnSpan> {
         match self {
@@ -183,13 +199,13 @@ impl Accumulator {
                     None => *last = Some(value.into_owned()),
                 }
             }
-            //every numeric aggregate skips a row without a number
-            numeric => {
-                let Some(value) = Aggregate::number(span, line) else {
-                    return;
-                };
-                numeric.accept_number(value);
-            }
+            //the numeric ones are handed their number, read once per span
+            //for all of them (`accept_number`)
+            Accumulator::Sum(_)
+            | Accumulator::Avg { .. }
+            | Accumulator::Min(_)
+            | Accumulator::Max(_)
+            | Accumulator::Median(_) => {}
         }
     }
 
@@ -281,6 +297,58 @@ pub struct Summarize {
     aggregates: Vec<Aggregate>,
     separator: String,
     groups: Groups,
+    /// The numbers a line holds, read once per distinct span however many
+    /// aggregates ask for it (`--sum 3 --avg 3 --max 3` reads column 3
+    /// once), and where each numeric aggregate finds its own.
+    readings: NumberReadings,
+}
+
+/// The distinct spans the numeric aggregates read, and per aggregate the
+/// one it reads — `None` for the count and the text aggregates.
+struct NumberReadings {
+    spans: Vec<ColumnSpan>,
+    slots: Vec<Option<usize>>,
+    /// The current line's numbers, one per span; kept to reuse its room.
+    numbers: Vec<Option<Number>>,
+}
+
+impl NumberReadings {
+    fn new(aggregates: &[Aggregate]) -> NumberReadings {
+        let mut spans: Vec<ColumnSpan> = Vec::new();
+        let slots = aggregates
+            .iter()
+            .map(|aggregate| {
+                let span = aggregate.number_span()?;
+                Some(
+                    match spans
+                        .iter()
+                        .position(|known| known == span)
+                    {
+                        Some(slot) => slot,
+                        None => {
+                            spans.push(span.clone());
+                            spans.len() - 1
+                        }
+                    },
+                )
+            })
+            .collect();
+        NumberReadings {
+            spans,
+            slots,
+            numbers: Vec::new(),
+        }
+    }
+
+    /// Read every span's number from the line, once each.
+    fn read(&mut self, line: &SplitLine<'_, '_>) {
+        self.numbers.clear();
+        self.numbers.extend(
+            self.spans
+                .iter()
+                .map(|span| Aggregate::number(span, line)),
+        );
+    }
 }
 
 /// The running accumulators per group key, kept in the order the keys
@@ -337,6 +405,7 @@ impl Summarize {
         }
         Summarize {
             key_span,
+            readings: NumberReadings::new(&aggregates),
             aggregates,
             separator: separator.into(),
             groups,
@@ -363,11 +432,24 @@ impl LineReducer for Summarize {
             None => Cow::Borrowed(""),
         };
 
+        self.readings.read(&split);
         let accumulators = self
             .groups
             .get_or_start(&key, &self.aggregates);
-        for (aggregate, accumulator) in self.aggregates.iter().zip(accumulators) {
-            accumulator.accept(aggregate, &split);
+        let aggregates = self
+            .aggregates
+            .iter()
+            .zip(&self.readings.slots);
+        for ((aggregate, slot), accumulator) in aggregates.zip(accumulators) {
+            match slot {
+                //every numeric aggregate skips a row without a number
+                Some(slot) => {
+                    if let Some(value) = self.readings.numbers[*slot] {
+                        accumulator.accept_number(value);
+                    }
+                }
+                None => accumulator.accept(aggregate, &split),
+            }
         }
         Ok(())
     }
@@ -648,5 +730,30 @@ b,1
 b,2,4
 "
         );
+    }
+
+    #[test]
+    fn aggregates_sharing_a_span_read_it_once_and_agree() {
+        // Given four statistics over column 2, one over column 3, and the
+        // reading table that serves them
+        let aggregates = vec![
+            Aggregate::Sum(field(2)),
+            Aggregate::Count,
+            Aggregate::Min(field(2)),
+            Aggregate::Max(field(3)),
+            Aggregate::Avg(field(2)),
+            Aggregate::Median(field(2)),
+        ];
+        let readings = NumberReadings::new(&aggregates);
+
+        // When
+        let reducer = Summarize::new(Some(field(1)), aggregates, ",");
+        let result = summarized(reducer, &["a,1,9", "a,x,7", "b,4,y", "a,5,8"]);
+
+        // Then two spans are read per line, and each statistic is its own
+        assert_eq!(readings.spans.len(), 2);
+        assert_eq!(result, "a,6,3,1,9,3,3
+b,4,1,4,,4,4
+");
     }
 }

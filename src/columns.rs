@@ -59,7 +59,7 @@ impl From<RangeInclusive<usize>> for ColumnList {
 
 /// Field mode: which delimited fields to address, and how they are
 /// delimited on the way in and on the way out.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldSpan {
     pub delimiter: String,
     /// What joins the selected fields on output; `None` reuses the
@@ -86,7 +86,7 @@ impl FieldSpan {
 
 /// How a column list addresses a line: by character positions, by
 /// user-perceived characters (grapheme clusters), or by delimited fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColumnSpan {
     Chars(ColumnList),
     /// Columns counted in grapheme clusters (`--graphemes`): `e` plus a
