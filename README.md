@@ -128,7 +128,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 
 The flags describe *what* to do, not in which order: whatever order they are written in, `fxt` always runs the same pipeline.
 
-1. **Row range** (`--rows` and the `--from`/`--to` blocks), then the **content filter** (`--grep`/`--invert`) — on the line *as it was read*, before any transform.
+1. **Row range** (`--rows` and the `--from`/`--to` blocks), then the **content filters** (`--grep`/`--all`/`--invert`, `--min-fields`, `--max-len`) — on the line *as it was read*, before any transform.
 2. **Transforms**, in this fixed order: column delete → `--decode` → find/replace pairs → `--upper` → `--lower` → `--title-case` → `--expand`/`--unexpand` → `--squeeze` → `--trim` → `--reverse-chars` → `--pad-left`/`--pad-right` → `--encode` → `--split-on` → `--wrap` → `--drop-empty` → `--number`.
 3. **`--unique`**, on the transformed line.
 4. **Reordering** (`--sort`/`--tac`/`--shuffle`), then a **reducer** (`--join` or a summary) instead of writing the rows.
@@ -356,9 +356,9 @@ fxt --completions powershell | Out-String | Invoke-Expression
 - `src/compose.rs` — turns a `Config` into a processor; the only place that knows how options map onto engine parts
 - `src/file_processor.rs` — the streaming engine, generic over `BufRead`/`Write`: row selection, filtering, reordering
 - `src/transform.rs` — `LineTransform` trait and the per-line operations (one line in, zero or more out)
-- `src/predicate.rs`, `src/pattern_range.rs` — `--grep`, and `--from`/`--to` blocks
+- `src/predicate.rs`, `src/pattern_range.rs` — the row filters (`--grep`, `--min-fields`, `--max-len`), and `--from`/`--to` blocks
 - `src/reduce.rs` — `LineReducer`: `--join` and the summaries
 - `src/columns.rs`, `src/ranges.rs`, `src/records.rs` — column spans (chars, graphemes, fields, quoted CSV), row ranges, multi-line CSV records
-- `src/text.rs`, `src/number.rs`, `src/pattern.rs`, `src/encoding.rs` — char-indexed text helpers, exact numbers, the two regex engines, text encodings
+- `src/text.rs`, `src/number.rs`, `src/pattern.rs`, `src/encoding.rs`, `src/codec.rs` — char-indexed text helpers, exact numbers, the two regex engines, text encodings, base64/hex/url
 - `tests/cli.rs` — end-to-end tests running the real binary; property tests (`proptest`) sit next to the parsers and text helpers
 - `benches/engine.rs` — `criterion` benchmarks of the engine

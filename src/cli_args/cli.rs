@@ -26,8 +26,9 @@ pub fn cli() -> Command {
              \x20                                        keeping a backup\n\
              \n\
              Exit codes (like grep):\n\
-             \x20 0  rows matched (a run without --grep always matches)\n\
-             \x20 1  --grep matched nothing\n\
+             \x20 0  rows matched (a run without a content filter always matches)\n\
+             \x20 1  a content filter (--grep, --from, --to, --min-fields,\n\
+             \x20    --max-len) matched nothing\n\
              \x20 2  the run failed",
         )
         .arg(
