@@ -654,9 +654,13 @@ fn parse_bound(value: &str) -> Result<RangeBound, String> {
         Some(rest) => (RangeBound::FromEnd, rest),
         None => (RangeBound::FromStart, value),
     };
+    //digits only: `usize::from_str` would take a leading `+` as well
     let bound: usize = digits
-        .parse()
-        .map_err(|_| format!("Range value `{value}` isn't a number"))?;
+        .bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then(|| digits.parse().ok())
+        .flatten()
+        .ok_or_else(|| format!("Range value `{value}` isn't a number"))?;
     if bound < 1 {
         return Err("Ranges are 1-based, values must be at least 1".to_owned());
     }
@@ -784,7 +788,198 @@ mod tests {
     }
 
     #[test]
+    fn a_sign_is_no_part_of_a_number() {
+        // Given / When / Then
+        assert!(parse_row_ranges("+2").is_err());
+        assert!(parse_row_ranges("~+1").is_err());
+        assert!(parse_column_list("1-+3").is_err());
+    }
+
+    #[test]
     fn column_list_rejects_an_empty_part() {
         assert!(parse_column_list("1,").is_err());
+    }
+}
+
+/// The range parsers fuzzed: whatever the input, they answer rather than
+/// panic, and a spec they accept means what it says.
+#[cfg(test)]
+mod properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// One bound as a user writes it: a row number, or `~k` from the end.
+    #[derive(Debug, Clone, Copy)]
+    enum Bound {
+        Start(usize),
+        End(usize),
+    }
+
+    impl Bound {
+        fn text(self) -> String {
+            match self {
+                Bound::Start(n) => n.to_string(),
+                Bound::End(k) => format!("~{k}"),
+            }
+        }
+
+        /// The row it names, by definition: `~1` is the last of `total`.
+        fn row(self, total: usize) -> i64 {
+            match self {
+                Bound::Start(n) => n as i64,
+                Bound::End(k) => total as i64 + 1 - k as i64,
+            }
+        }
+    }
+
+    /// One part of a row spec, in each of the forms it may take.
+    #[derive(Debug, Clone, Copy)]
+    enum Part {
+        Single(Bound),
+        Between(Bound, Bound),
+        From(Bound),
+        To(Bound),
+    }
+
+    impl Part {
+        fn text(self) -> String {
+            match self {
+                Part::Single(b) => b.text(),
+                Part::Between(a, b) => format!("{}-{}", a.text(), b.text()),
+                Part::From(a) => format!("{}-", a.text()),
+                Part::To(b) => format!("-{}", b.text()),
+            }
+        }
+
+        /// Whether `row` of `total` lies in the part.
+        fn holds(self, row: usize, total: usize) -> bool {
+            let row = row as i64;
+            let (from, to) = match self {
+                Part::Single(b) => (b.row(total), b.row(total)),
+                Part::Between(a, b) => (a.row(total), b.row(total)),
+                Part::From(a) => (a.row(total), i64::MAX),
+                Part::To(b) => (1, b.row(total)),
+            };
+            from <= row && row <= to
+        }
+
+        /// Inverted with both bounds on the same side, which the parser
+        /// rejects; mixed sides only invert once the length is known.
+        fn inverted(self) -> bool {
+            match self {
+                Part::Between(Bound::Start(a), Bound::Start(b)) => a > b,
+                Part::Between(Bound::End(a), Bound::End(b)) => a < b,
+                _ => false,
+            }
+        }
+    }
+
+    fn bounds() -> impl Strategy<Value = Bound> {
+        prop_oneof![
+            (1usize..30).prop_map(Bound::Start),
+            (1usize..30).prop_map(Bound::End)
+        ]
+    }
+
+    fn parts() -> impl Strategy<Value = Part> {
+        prop_oneof![
+            bounds().prop_map(Part::Single),
+            (bounds(), bounds()).prop_map(|(a, b)| Part::Between(a, b)),
+            bounds().prop_map(Part::From),
+            bounds().prop_map(Part::To),
+        ]
+    }
+
+    /// Text made of what range specs are made of, and of what they are not.
+    fn nasty() -> impl Strategy<Value = String> {
+        let pieces = prop::sample::select(vec![
+            "0",
+            "1",
+            "7",
+            "42",
+            "-",
+            "~",
+            ",",
+            " ",
+            "+",
+            "~0",
+            "--",
+            ",,",
+            "ż",
+            "18446744073709551616",
+            "99999999999999999999999",
+        ]);
+        prop::collection::vec(pieces, 0..12).prop_map(|pieces| pieces.concat())
+    }
+
+    proptest! {
+        #[test]
+        fn row_parsing_never_panics(input in prop_oneof![nasty(), any::<String>()], total in 0usize..50) {
+            // Given / When anything at all is parsed
+            if let Ok(spec) = parse_row_ranges(&input) {
+                // Then only spec characters got through, and whatever was
+                // accepted resolves for any length
+                prop_assert!(input.chars().all(|c| c.is_ascii_digit() || "~-,".contains(c)), "{:?}", input);
+                let rows = spec.resolve(total);
+                prop_assert!(rows.parts().iter().all(|part| *part.start() >= 1));
+                if spec.is_absolute() {
+                    let _ = spec.resolve(usize::MAX);
+                }
+            }
+        }
+
+        #[test]
+        fn column_parsing_never_panics(input in prop_oneof![nasty(), any::<String>()]) {
+            // Given / When / Then it answers, and never with a `~`
+            if let Ok(columns) = parse_column_list(&input) {
+                prop_assert!(input.chars().all(|c| c.is_ascii_digit() || "-,".contains(c)), "{:?}", input);
+                prop_assert!(columns.written().iter().all(|part| part.start() <= part.end()));
+            }
+        }
+
+        #[test]
+        fn a_row_spec_selects_the_rows_it_names(
+            spec in prop::collection::vec(parts(), 1..5),
+            total in 0usize..40,
+        ) {
+            // Given a spec written out the way a user would
+            let text: Vec<String> = spec.iter().map(|part| part.text()).collect();
+            let text = text.join(",");
+
+            // When
+            let parsed = parse_row_ranges(&text);
+
+            // Then an inversion on one side is refused, all else means
+            // exactly the rows the definition names
+            if spec.iter().any(|part| part.inverted()) {
+                prop_assert!(parsed.is_err(), "{text} should be refused");
+            } else {
+                let rows = parsed.map_err(|e| TestCaseError::fail(format!("{text}: {e}")))?.resolve(total);
+                for row in 1..=total + 2 {
+                    let expected = spec.iter().any(|part| part.holds(row, total));
+                    prop_assert_eq!(rows.contains(row), expected, "{} row {} of {}", text, row, total);
+                }
+            }
+        }
+
+        #[test]
+        fn a_column_list_normalizes_to_what_it_covers(
+            parts in prop::collection::vec((1usize..40, 0usize..10), 1..6),
+        ) {
+            // Given parts written in any order, overlapping or not
+            let text: Vec<String> = parts.iter().map(|(from, length)| format!("{from}-{}", from + length)).collect();
+            let columns = parse_column_list(&text.join(",")).unwrap();
+
+            // When / Then the written order is kept, and the normalized
+            // parts ascend, never touch, and cover the same columns
+            prop_assert_eq!(columns.written().len(), parts.len());
+            let normalized = columns.normalized();
+            prop_assert!(normalized.windows(2).all(|pair| pair[0].end() + 1 < *pair[1].start()));
+            for column in 1..60 {
+                let written = parts.iter().any(|(from, length)| (*from..=from + length).contains(&column));
+                let covered = normalized.iter().any(|part| part.contains(&column));
+                prop_assert_eq!(written, covered, "column {}", column);
+            }
+        }
     }
 }

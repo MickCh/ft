@@ -9,6 +9,10 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 - `-P`, `--perl-regexp`: every regex may use backreferences (`(.)\1`) and lookaround, through a backtracking engine (`fancy-regex`). A pattern that backtracks without end fails the run (exit code 2).
 - `--graphemes`: columns and `--wrap` widths count user-perceived characters (grapheme clusters), so `e` with a combining accent or a ZWJ emoji sequence is one column and is never cut in half.
 
+### Fixed
+
+- A row or column bound with a `+` sign (`-R +2`, `-R ~+1`, `-C 1-+3`) is rejected; it used to be read as the plain number.
+
 ### Performance
 
 - Selecting columns copies nothing when the selection is one piece of the line, and field mode no longer allocates per line for field positions: `-F , -C 1` 1.9× faster, `-C 1-6` 1.5×, a summary over a field 1.3–1.4×.

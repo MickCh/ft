@@ -97,4 +97,4 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 
 ## 4. Tool maturity (cheap, highly visible)
 
-- Fuzzing the range parser
+- ✅ Fuzzing the range parser — property tests in `cli_args::cli` (`properties`): arbitrary and hostile input never panics and only spec characters get through (`+2` and `~+1` used to be accepted, via `usize::from_str`; this property now holds that out); generated specs, written out, select exactly the rows their definition names; column lists normalize to what they cover. Property tests rather than `cargo fuzz`, so they run in CI on every platform.

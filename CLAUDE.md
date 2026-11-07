@@ -52,7 +52,7 @@ Key processing concept: transforms stream (each line written immediately), but r
 
 All column/row semantics are 1-based inclusive, and column indexing is by `char`, not by byte (by grapheme cluster under `--graphemes`, which also makes `--wrap` use `text::wrap_graphemes`). End-relative rows count `~1` as the last line. Column lists keep their written order for reading operations (select, sort/unique key, `--grep`) and are normalized for writing ones (delete, case/trim, find/replace).
 
-Tests: unit tests live next to the code; `properties` modules (`proptest`) in `columns.rs` and `text.rs` check the splitter and the char helpers against obviously-right references — extend them when touching that code, and delete `proptest-regressions/` files that come from deliberately broken code; end-to-end CLI tests in `tests/cli.rs` run the real binary via `env!("CARGO_BIN_EXE_fxt")` — extend those whenever CLI behavior changes.
+Tests: unit tests live next to the code; `properties` modules (`proptest`) in `columns.rs` and `text.rs` check the splitter, grapheme columns and the char helpers against obviously-right references, and the one in `cli_args/cli.rs` fuzzes the range parsers (no panics, only spec characters accepted, generated specs select what their definition names) — extend them when touching that code, and delete `proptest-regressions/` files that come from deliberately broken code; end-to-end CLI tests in `tests/cli.rs` run the real binary via `env!("CARGO_BIN_EXE_fxt")` — extend those whenever CLI behavior changes.
 
 ## Conventions
 
