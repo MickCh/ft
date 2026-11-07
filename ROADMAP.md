@@ -121,6 +121,29 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 
   `fxt` leads every case but `tail`; the two items under *Still open* are what these numbers point at.
 
+  Measured once more on 2026-11-07, for 0.4.1 — after the functional-test fixes, the ring for `~N` and the text mappings that write into the line (same file and method; "installed" is the build before those two optimizations; ms):
+
+  | Case | `fxt` 0.4.1 | before | installed | `ft` 0.1.0 | Reference |
+  |---|---:|---:|---:|---:|---:|
+  | `-g ERROR` | 39 | 40 | 41 | 59 | `grep` 42 |
+  | `-f foo -r bar` | 163 | 138 | 162 | 181 | `sed` 619 |
+  | `-s` | 172 | 163 | 172 | 281 | `sort -s` 226 |
+  | `-g ERROR -f foo -r bar --upper` | 50 | 52 | 54 | 75 | `awk` 406 |
+  | the same, against a pipeline | 54 | 59 | 53 | 78 | `grep \| sed \| tr` 121 |
+  | `--tac` | 124 | 120 | 128 | 146 | `tac` 123 |
+  | `-R '~1000-~1'` | 22 | 38 | 36 | 50 | `tail -n 1000` 16 |
+  | `--reverse-chars` | 148 | 269 | | | — |
+  | `-F , -C 2 --pad-left 8` | 132 | 214 | | | `awk` `sprintf` 261 |
+  | `--expand` | 133 | 192 | | | `expand` 350 |
+  | `--unexpand` | 116 | 161 | | | `unexpand -a` 420 |
+  | `-F , -C 3 --encode base64` | 147 | 191 | | | — |
+  | `-g ERROR -g 99999` | 47 | 49 | | | `grep -e … -e …` 50 |
+  | `-g ERROR -g '^00' --all` | 39 | 41 | | | `awk '/ERROR/ && /^00/'` 281 |
+  | `-F , --min-fields 3` | 69 | 66 | | | `awk -F, 'NF >= 3'` 131 |
+  | `--max-len 20` | 36 | 35 | | | `awk 'length($0) <= 20'` 95 |
+
+  "Before" is the HEAD column of the tables above. The replacement and the sort came out slower, but the installed build — the same code there — did too, as did `sed`: a slower machine that day, not a regression. What did change: `~N` 1.7× faster, close to `tail`, and the text mappings 1.35–1.8×; `--unexpand` now gives GNU's output byte for byte. `fxt` leads every case but `tail`, which seeks from the end of the file.
+
 ## 3a. From the 2026-11-07 functional tests
 
 A black-box run of 525 cases against the documentation (report `fxt-testy-funkcjonalne-2026-11-07.md`, scripts in `fxt-testy-funkcjonalne/`, both next to the repository; `FXT=<binary> bash t3_transforms.sh` runs one file against a given build). On HEAD: 505 pass, 20 fail, every failure one of the items below. When fixing one, carry its cases over into `tests/cli.rs`.

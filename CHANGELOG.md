@@ -4,6 +4,8 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-11-07
+
 ### Added
 
 - `--lossy`: input that is not valid in its encoding no longer fails the run; each malformed sequence becomes U+FFFD. Invalid UTF-8 is repaired only in the rows `fxt` actually rewrites — a row passed through, filtered in, or left as it was by every transform keeps its bytes, so `--lossy -i` changes no more of a file than the edit itself.
@@ -96,7 +98,8 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 The first version, as `ft`: row and column ranges (lists, open and end-relative bounds, field mode with `--quoted` CSV), sort/tac/shuffle, `--grep` with grep-like exit codes and `--quiet`, `--unique`, case and whitespace transforms, `--number`, `--wrap`, `--split-on`/`--join`, `--drop-empty`, summaries per `--group-by`, find/replace, and in-place editing of many files with `--backup` and `--dry-run`.
 
-[Unreleased]: https://github.com/MickCh/ft/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/MickCh/ft/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/MickCh/ft/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/MickCh/ft/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MickCh/ft/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MickCh/ft/compare/5d06433...v0.2.0
