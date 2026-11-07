@@ -159,36 +159,35 @@ impl ColumnSpan {
     }
 
     /// The char ranges to write into: normalized, so they are ascending
-    /// and never overlap and the line can be rebuilt in one pass.
+    /// and never overlap and the line can be rebuilt in one pass. In field
+    /// mode every field of the span is written on its own — `-C 1-3` is
+    /// three ranges, not one stretch with the delimiters inside it — so a
+    /// transform (trimming, reversing, a replacement) never reaches across
+    /// a delimiter. An empty field is the inverted range `n..=n-1`, which
+    /// the rewriting helpers pass over and [`text::map_cells`] writes into.
     pub fn write_ranges(&self, line: &str) -> SpanRanges<'_> {
         match self {
             ColumnSpan::Chars(list) => SpanRanges::Borrowed(list.normalized()),
             ColumnSpan::Graphemes(list) => resolve_graphemes(line, list.normalized()),
             ColumnSpan::Fields(spec) => {
-                SpanRanges::Resolved(resolve_fields(line, spec, spec.fields.normalized(), false))
+                let parts = spec.fields.normalized();
+                let positions = field_positions(line, spec, fields_needed(parts));
+                let fields = parts
+                    .iter()
+                    .flat_map(|part| each_field(&positions, part))
+                    .cloned()
+                    .collect();
+                SpanRanges::Resolved(fields)
             }
         }
     }
 
     /// The char ranges of the span's *cells* on this line, ascending: what
-    /// a transform writing into each piece of the span on its own works
-    /// on (padding). In field mode every field of the span is a cell —
-    /// `-C 2-3` is two cells, not one stretch with a delimiter inside —
-    /// and so is an empty field, as the inverted range `n..=n-1` that
-    /// stands for the point before column `n` (see [`text::map_cells`]).
-    /// Otherwise the cells are the write ranges.
+    /// a transform that writes something into every piece of the span,
+    /// empty ones too, works on (padding, the codecs). They are the write
+    /// ranges, empty fields included (see [`text::map_cells`]).
     pub fn cell_ranges(&self, line: &str) -> SpanRanges<'_> {
-        let ColumnSpan::Fields(spec) = self else {
-            return self.write_ranges(line);
-        };
-        let parts = spec.fields.normalized();
-        let positions = field_positions(line, spec, fields_needed(parts));
-        let cells = parts
-            .iter()
-            .flat_map(|part| each_field(&positions, part))
-            .cloned()
-            .collect();
-        SpanRanges::Resolved(cells)
+        self.write_ranges(line)
     }
 
     /// Like [`ColumnSpan::write_ranges`], but in field mode each part

@@ -1166,6 +1166,50 @@ fn output_delimiter_rejoins_the_fields_inside_a_range() {
 }
 
 #[test]
+fn field_mode_transforms_work_on_each_field() {
+    let input = TempFile::new("per-field", " a , b , c \n");
+    for (args, expected) in [
+        (vec!["-C", "1-", "--trim"], "a,b,c\n"),
+        (vec!["-C", "1,2,3", "--trim"], "a,b,c\n"),
+        (vec!["-C", "2-3", "--trim"], " a ,b,c\n"),
+        (vec!["-C", "1-", "--title-case"], " A , B , C \n"),
+    ] {
+        let mut full = vec!["-F", ","];
+        full.extend(args.iter());
+        full.push(input.path_str());
+        assert_eq!(run_fxt_stdout(&full), expected, "{args:?}");
+    }
+
+    let words = TempFile::new("per-field-reverse", "ab,cd\na,a\n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "-C", "1-", "--reverse-chars", words.path_str()]),
+        "ba,dc\na,a\n"
+    );
+    //a replacement does not match across a delimiter either
+    assert_eq!(
+        run_fxt_stdout(&[
+            "-F",
+            ",",
+            "-C",
+            "1-",
+            "-f",
+            "a,a",
+            "-r",
+            "X",
+            words.path_str()
+        ]),
+        "ab,cd\na,a\n"
+    );
+
+    //tab stops count from the start of each field
+    let tabbed = TempFile::new("per-field-expand", "a\tb,\tc\n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "-C", "1-", "--expand=4", tabbed.path_str()]),
+        "a   b,    c\n"
+    );
+}
+
+#[test]
 fn keep_others_edits_the_selection_and_keeps_the_rest() {
     let input = TempFile::new("keep-others", "h\nb\na\nb\n");
     //rows outside -R pass through, the selected ones are edited
