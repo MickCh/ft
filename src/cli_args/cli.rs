@@ -28,7 +28,7 @@ pub fn cli() -> Command {
              Exit codes (like grep):\n\
              \x20 0  rows matched (a run without a content filter always matches)\n\
              \x20 1  a content filter (--grep, --from, --to, --min-fields,\n\
-             \x20    --max-len) matched nothing\n\
+             \x20    --max-fields, --min-len, --max-len) matched nothing\n\
              \x20 2  the run failed",
         )
         .arg(
@@ -206,6 +206,23 @@ pub fn cli() -> Command {
                 .help("Keep only rows with at least N fields (requires --fields)"),
         )
         .arg(
+            Arg::new("max-fields")
+                .long("max-fields")
+                .required(false)
+                .value_name("N")
+                .requires("fields")
+                .value_parser(parse_field_count)
+                .help("Keep only rows with at most N fields (requires --fields)"),
+        )
+        .arg(
+            Arg::new("min-len")
+                .long("min-len")
+                .required(false)
+                .value_name("N")
+                .value_parser(parse_length)
+                .help("Keep only rows at least N characters long"),
+        )
+        .arg(
             Arg::new("max-len")
                 .long("max-len")
                 .required(false)
@@ -232,7 +249,7 @@ pub fn cli() -> Command {
         //what --quiet can ask about: a filter by content
         .group(
             ArgGroup::new("content-filters")
-                .args(["grep", "from", "to", "min-fields", "max-len"])
+                .args(["grep", "from", "to", "min-fields", "max-fields", "min-len", "max-len"])
                 .multiple(true),
         )
         .arg(
@@ -335,6 +352,14 @@ pub fn cli() -> Command {
                 .help("Reverse the characters in the column range, like rev"),
         )
         .arg(
+            Arg::new("rot13")
+                .long("rot13")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .conflicts_with("delete")
+                .help("Rotate the ASCII letters in the column range by 13 places (applied twice, it undoes itself)"),
+        )
+        .arg(
             Arg::new("pad-left")
                 .long("pad-left")
                 .required(false)
@@ -351,6 +376,15 @@ pub fn cli() -> Command {
                 .conflicts_with("delete")
                 .value_parser(parse_width)
                 .help("Pad the column range with spaces on the right to this width (left-aligns it; each field on its own)"),
+        )
+        .arg(
+            Arg::new("center")
+                .long("center")
+                .required(false)
+                .value_name("WIDTH")
+                .conflicts_with_all(["delete", "pad-left", "pad-right"])
+                .value_parser(parse_width)
+                .help("Pad the column range with spaces on both sides to this width (centers it; each field on its own)"),
         )
         .arg(
             Arg::new("number")
@@ -548,7 +582,8 @@ pub fn cli() -> Command {
                 .conflicts_with_all(["output", "in-place"])
                 .help(
                     "Write nothing; exit 0 if any row matched, 1 if none did \
-                     (requires a content filter: --grep, --from, --to, --min-fields or --max-len)",
+                     (requires a content filter: --grep, --from, --to, --min-fields, --max-fields, \
+                     --min-len or --max-len)",
                 ),
         )
         .arg(
@@ -770,10 +805,17 @@ fn parse_width(input: &str) -> Result<usize, String> {
     parse_at_least_one(input, "width")
 }
 
-/// Parse `--min-fields`: every row has at least one field (an empty line
-/// is one empty field), so 0 would filter nothing out.
+/// Parse `--min-fields`/`--max-fields`: every row has at least one field
+/// (an empty line is one empty field), so 0 would filter nothing out, or
+/// everything.
 fn parse_field_count(input: &str) -> Result<usize, String> {
     parse_at_least_one(input, "field count")
+}
+
+/// Parse `--min-len`: every row is at least 0 characters long, so 0 would
+/// filter nothing out.
+fn parse_length(input: &str) -> Result<usize, String> {
+    parse_at_least_one(input, "length")
 }
 
 /// Parse a number that must be at least 1, naming what it is in errors.

@@ -4,6 +4,12 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Added
+
+- `--max-fields <n>` and `--min-len <n>`, the other bounds of `--min-fields` and `--max-len`: content filters like them, and given both bounds a row must lie between them (a lower bound above the upper one is refused).
+- `--center <width>` pads the column range on both sides, each field on its own, the odd space on the right.
+- `--rot13` rotates the ASCII letters in the column range by 13 places.
+
 ## [0.5.0] — 2026-11-07
 
 ### Changed

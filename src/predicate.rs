@@ -4,6 +4,7 @@
 //! the positional row range with a content filter.
 
 use std::io;
+use std::ops::RangeInclusive;
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -77,54 +78,69 @@ impl LinePredicate for GrepPredicate {
     }
 }
 
-/// Matches lines with at least `min` fields (`--min-fields`), split the
-/// way `--fields` splits them (`--quoted` included). An empty line is
-/// one empty field.
-pub struct MinFields {
+/// How far a count within `bounds` must go to answer: one past the upper
+/// bound, or, without one, up to the lower bound.
+fn count_limit(bounds: &RangeInclusive<usize>) -> usize {
+    bounds
+        .end()
+        .checked_add(1)
+        .unwrap_or(*bounds.start())
+}
+
+/// Matches lines whose number of fields lies within `bounds`
+/// (`--min-fields`, `--max-fields`), split the way `--fields` splits
+/// them (`--quoted` included). An empty line is one empty field.
+pub struct FieldCount {
     spec: FieldSpan,
-    min: usize,
+    bounds: RangeInclusive<usize>,
 }
 
-impl MinFields {
+impl FieldCount {
     /// `spec` says how fields are split; its own field list is ignored.
-    pub fn new(spec: FieldSpan, min: usize) -> MinFields {
-        MinFields { spec, min }
+    pub fn new(spec: FieldSpan, bounds: RangeInclusive<usize>) -> FieldCount {
+        FieldCount { spec, bounds }
     }
 }
 
-impl LinePredicate for MinFields {
+impl LinePredicate for FieldCount {
     fn matches(&self, line: &str) -> io::Result<bool> {
-        Ok(self.spec.count_fields(line, self.min) >= self.min)
+        let count = self
+            .spec
+            .count_fields(line, count_limit(&self.bounds));
+        Ok(self.bounds.contains(&count))
     }
 }
 
-/// Matches lines at most `max` characters long (`--max-len`), or grapheme
-/// clusters under `--graphemes`.
-pub struct MaxLength {
-    max: usize,
+/// Matches lines whose length lies within `bounds` (`--min-len`,
+/// `--max-len`), in characters, or grapheme clusters under `--graphemes`.
+pub struct Length {
+    bounds: RangeInclusive<usize>,
     graphemes: bool,
 }
 
-impl MaxLength {
-    pub fn new(max: usize, graphemes: bool) -> MaxLength {
-        MaxLength { max, graphemes }
+impl Length {
+    pub fn new(bounds: RangeInclusive<usize>, graphemes: bool) -> Length {
+        Length { bounds, graphemes }
     }
 }
 
-impl LinePredicate for MaxLength {
+impl LinePredicate for Length {
     fn matches(&self, line: &str) -> io::Result<bool> {
-        //no line has more chars than bytes, so a short one needs no count
-        if line.len() <= self.max {
+        let (min, max) = (*self.bounds.start(), *self.bounds.end());
+        //no line has more chars (or clusters) than bytes, so a line with
+        //few bytes needs no count
+        if line.len() < min {
+            return Ok(false);
+        }
+        if line.len() <= max && min == 0 {
             return Ok(true);
         }
+        let limit = count_limit(&self.bounds);
         let length = match self.graphemes {
-            true => line
-                .graphemes(true)
-                .take(self.max + 1)
-                .count(),
-            false => line.chars().take(self.max + 1).count(),
+            true => line.graphemes(true).take(limit).count(),
+            false => line.chars().take(limit).count(),
         };
-        Ok(length <= self.max)
+        Ok(self.bounds.contains(&length))
     }
 }
 
@@ -256,12 +272,12 @@ mod tests {
     }
 
     #[test]
-    fn min_fields_counts_the_way_fields_split() {
+    fn field_count_counts_the_way_fields_split() {
         // Given
-        let plain = MinFields::new(FieldSpan::new(",", ColumnList::from(1..=1)), 3);
+        let plain = FieldCount::new(FieldSpan::new(",", ColumnList::from(1..=1)), 3..=usize::MAX);
         let mut quoted_spec = FieldSpan::new(",", ColumnList::from(1..=1));
         quoted_spec.quoted = true;
-        let quoted = MinFields::new(quoted_spec, 3);
+        let quoted = FieldCount::new(quoted_spec, 3..=usize::MAX);
 
         // When / Then
         assert!(plain.matches("a,b,c").unwrap());
@@ -272,36 +288,64 @@ mod tests {
     }
 
     #[test]
-    fn max_length_counts_chars_or_clusters() {
+    fn length_counts_chars_or_clusters() {
         // Given a decomposed accent: two chars, one cluster
         let line = "e\u{301}";
 
         // When / Then
         assert!(
-            MaxLength::new(2, false)
+            Length::new(0..=2, false)
                 .matches(line)
                 .unwrap()
         );
         assert!(
-            !MaxLength::new(1, false)
+            !Length::new(0..=1, false)
                 .matches(line)
                 .unwrap()
         );
         assert!(
-            MaxLength::new(1, true)
+            Length::new(0..=1, true)
                 .matches(line)
                 .unwrap()
         );
         assert!(
-            MaxLength::new(3, false)
+            Length::new(0..=3, false)
                 .matches("żół")
                 .unwrap()
         );
         assert!(
-            !MaxLength::new(2, false)
+            !Length::new(0..=2, false)
                 .matches("żół")
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn field_count_holds_both_bounds() {
+        // Given rows of one to four fields, kept with two or three
+        let between = FieldCount::new(FieldSpan::new(",", ColumnList::from(1..=1)), 2..=3);
+
+        // When / Then
+        let kept: Vec<bool> = ["a", "a,b", "a,b,c", "a,b,c,d", ""]
+            .iter()
+            .map(|line| between.matches(line).unwrap())
+            .collect();
+        assert_eq!(kept, [false, true, true, false, false]);
+    }
+
+    #[test]
+    fn length_holds_both_bounds() {
+        // Given a lower bound of two chars, measured in chars, not bytes
+        let at_least_two = Length::new(2..=usize::MAX, false);
+        let two_to_three = Length::new(2..=3, false);
+
+        // When / Then
+        assert!(!at_least_two.matches("").unwrap());
+        assert!(!at_least_two.matches("ż").unwrap());
+        assert!(at_least_two.matches("żó").unwrap());
+        assert!(two_to_three.matches("abc").unwrap());
+        assert!(!two_to_three.matches("abcd").unwrap());
+        assert!(!two_to_three.matches("a").unwrap());
     }
 
     #[test]
@@ -309,7 +353,7 @@ mod tests {
         // Given
         let both = AllOf(vec![
             Box::new(GrepPredicate::new(pattern("a"), 1..=usize::MAX, false)),
-            Box::new(MaxLength::new(3, false)),
+            Box::new(Length::new(0..=3, false)),
         ]);
 
         // When / Then

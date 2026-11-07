@@ -46,7 +46,7 @@ Implemented in the order suggested below, one commit per item:
 
 ## 1. Free slots: a new `LineTransform` / `LinePredicate` (no engine changes)
 
-Each is one new type plus one branch in `compose::build_pipeline` (or `build_predicate`). None are queued at the moment; candidates that would fit: `--min-len`/`--max-fields` (the other bounds), `--center`, `--rot13`.
+Each is one new type plus one branch in `compose::build_pipeline` (or `build_predicate`). None are queued at the moment. Done this way: `--min-len`/`--max-fields` (the other bounds, folded with theirs into `FieldCount` and `Length`), `--center` (`PadSide::Both`), `--rot13` (a `MapColumns` constructor).
 
 ## 2. Still open
 

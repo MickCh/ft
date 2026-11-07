@@ -5,13 +5,21 @@ use std::fmt::Formatter;
 pub enum ConfigError {
     MissingFindForReplace,
     MissingReplaceForFind,
-    FindReplaceCountMismatch { finds: usize, replaces: usize },
+    FindReplaceCountMismatch {
+        finds: usize,
+        replaces: usize,
+    },
     ReplaceWithDelete,
     DeleteWithReorder,
     DeleteWithoutRange,
     IgnoreCaseWithoutPattern,
     InPlaceWithoutFile,
     QuoteInOutputDelimiter,
+    MinAboveMax {
+        option: &'static str,
+        min: usize,
+        max: usize,
+    },
     InvalidRegex(String),
 }
 
@@ -63,6 +71,10 @@ impl fmt::Display for ConfigError {
             ConfigError::QuoteInOutputDelimiter => write!(
                 f,
                 "Under --quoted the output delimiter cannot contain a quote: the output would not be CSV"
+            ),
+            ConfigError::MinAboveMax { option, min, max } => write!(
+                f,
+                "--min-{option} {min} is above --max-{option} {max}: no row could pass"
             ),
             ConfigError::InvalidRegex(error) => write!(f, "Invalid regular expression: {error}"),
         }

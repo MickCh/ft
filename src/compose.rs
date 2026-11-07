@@ -4,11 +4,13 @@
 //! here, so the engine modules never depend on the CLI layer and the
 //! CLI layer never constructs engine internals itself.
 
+use std::ops::RangeInclusive;
+
 use crate::cli_args::{Config, FindPattern, ReorderMode, Replacement};
 use crate::columns::{ColumnList, ColumnSpan, FieldSpan};
 use crate::file_processor::{FileProcessor, Reorder, RowMode, SortSpec};
 use crate::pattern_range::PatternRange;
-use crate::predicate::{AllOf, GrepPredicate, LinePredicate, MaxLength, MinFields};
+use crate::predicate::{AllOf, FieldCount, GrepPredicate, Length, LinePredicate};
 use crate::reduce::{Aggregate, Join, LineReducer, Summarize};
 use crate::transform::{
     CodecColumns, DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, PadColumns,
@@ -180,6 +182,12 @@ fn build_reorder(config: &Config, cols: &mut ColumnClaims) -> Option<Reorder> {
 
 /// Build the row filter implied by the configuration, if any: every
 /// filter given, each narrowing the others.
+/// The bounds a pair of `--min-*`/`--max-*` options give, if either is
+/// given; a missing one leaves that side open.
+fn bounds(min: Option<usize>, max: Option<usize>) -> Option<RangeInclusive<usize>> {
+    (min.is_some() || max.is_some()).then(|| min.unwrap_or(0)..=max.unwrap_or(usize::MAX))
+}
+
 fn build_predicate(config: &Config, cols: &mut ColumnClaims) -> Option<Box<dyn LinePredicate>> {
     let mut predicates: Vec<Box<dyn LinePredicate>> = Vec::new();
     if !config.grep.is_empty() {
@@ -190,13 +198,15 @@ fn build_predicate(config: &Config, cols: &mut ColumnClaims) -> Option<Box<dyn L
             false => GrepPredicate::any_of(patterns, span, config.invert),
         }));
     }
-    if let (Some(min), Some(delimiter)) = (config.min_fields, &config.field_delimiter) {
+    if let Some(bounds) = bounds(config.min_fields, config.max_fields)
+        && let Some(delimiter) = &config.field_delimiter
+    {
         let mut spec = FieldSpan::new(delimiter.clone(), ColumnList::from(1..=1));
         spec.quoted = config.quoted;
-        predicates.push(Box::new(MinFields::new(spec, min)));
+        predicates.push(Box::new(FieldCount::new(spec, bounds)));
     }
-    if let Some(max) = config.max_len {
-        predicates.push(Box::new(MaxLength::new(max, config.graphemes)));
+    if let Some(bounds) = bounds(config.min_len, config.max_len) {
+        predicates.push(Box::new(Length::new(bounds, config.graphemes)));
     }
     match predicates.len() {
         0 => None,
@@ -302,11 +312,15 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
             false => MapColumns::reverse_chars(cols.claim()),
         }));
     }
+    if config.rot13 {
+        pipeline.push(Box::new(MapColumns::rot13(cols.claim())));
+    }
     //padding comes after trimming, so `--trim --pad-left 8` aligns the
     //trimmed text rather than whatever whitespace surrounded it
     let padding = [
         (config.pad_left, PadSide::Left),
         (config.pad_right, PadSide::Right),
+        (config.center, PadSide::Both),
     ];
     for (width, side) in padding {
         if let Some(width) = width {

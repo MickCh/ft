@@ -123,9 +123,13 @@ pub struct Config {
     pub unexpand: Option<usize>,
     //`--reverse-chars`, like `rev`
     pub reverse_chars: bool,
-    //`--pad-left`/`--pad-right`: the width to pad the column range to
+    //`--rot13`
+    pub rot13: bool,
+    //`--pad-left`/`--pad-right`/`--center`: the width to pad the column
+    //range to
     pub pad_left: Option<usize>,
     pub pad_right: Option<usize>,
+    pub center: Option<usize>,
     //number the output rows, like `nl`
     pub number: bool,
     //--fields splits on the delimiter even inside quotes unless set
@@ -157,9 +161,13 @@ pub struct Config {
     //`--keep-others`: rows outside the selection pass through unchanged
     //instead of being dropped
     pub keep_others: bool,
-    //`--min-fields`: rows with fewer fields are filtered out
+    //`--min-fields`/`--max-fields`: rows with fewer or more fields are
+    //filtered out
     pub min_fields: Option<usize>,
-    //`--max-len`: rows longer than this are filtered out
+    pub max_fields: Option<usize>,
+    //`--min-len`/`--max-len`: rows shorter or longer than this are
+    //filtered out
+    pub min_len: Option<usize>,
     pub max_len: Option<usize>,
     //`--from`/`--to`: rows addressed by content, matched as bytes so the
     //rows outside them never need to be UTF-8
@@ -254,7 +262,11 @@ impl Config {
     /// `--to`) — and so whether a run can find nothing to match, which
     /// the exit code reports, like grep's.
     pub fn filters_by_content(&self) -> bool {
-        self.has_patterns() || self.min_fields.is_some() || self.max_len.is_some()
+        self.has_patterns()
+            || self.min_fields.is_some()
+            || self.max_fields.is_some()
+            || self.min_len.is_some()
+            || self.max_len.is_some()
     }
 
     /// Whether rows outside the selection are dropped from the output —
@@ -396,11 +408,15 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<usize>("unexpand")
                 .copied(),
             reverse_chars: matches.get_flag("reverse-chars"),
+            rot13: matches.get_flag("rot13"),
             pad_left: matches
                 .get_one::<usize>("pad-left")
                 .copied(),
             pad_right: matches
                 .get_one::<usize>("pad-right")
+                .copied(),
+            center: matches
+                .get_one::<usize>("center")
                 .copied(),
             number: matches.get_flag("number"),
             quoted: matches.get_flag("quoted"),
@@ -458,6 +474,12 @@ impl TryFrom<ArgMatches> for Config {
             min_fields: matches
                 .get_one::<usize>("min-fields")
                 .copied(),
+            max_fields: matches
+                .get_one::<usize>("max-fields")
+                .copied(),
+            min_len: matches
+                .get_one::<usize>("min-len")
+                .copied(),
             max_len: matches
                 .get_one::<usize>("max-len")
                 .copied(),
@@ -514,6 +536,20 @@ impl TryFrom<ArgMatches> for Config {
                 .is_some_and(|delimiter| delimiter.contains('"'))
         {
             return Err(ConfigError::QuoteInOutputDelimiter);
+        }
+
+        //a lower bound above the upper one lets no row through, which is
+        //surely not what was meant
+        let bounds = [
+            ("fields", config.min_fields, config.max_fields),
+            ("len", config.min_len, config.max_len),
+        ];
+        for (option, min, max) in bounds {
+            if let (Some(min), Some(max)) = (min, max)
+                && min > max
+            {
+                return Err(ConfigError::MinAboveMax { option, min, max });
+            }
         }
 
         //--in-place rewrites its inputs, and standard input cannot be

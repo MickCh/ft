@@ -699,6 +699,103 @@ fn min_fields_and_max_len_filter_rows() {
 }
 
 #[test]
+fn max_fields_and_min_len_are_the_other_bounds() {
+    let input = TempFile::new("max-fields", "a,b,c\na,b\n\"x,y\",z\nlonger line\n");
+    //under --quoted "x,y" is one field
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "--quoted", "--max-fields", "2", input.path_str()]),
+        "a,b\n\"x,y\",z\nlonger line\n"
+    );
+    //together they keep the rows between the bounds
+    assert_eq!(
+        run_fxt_stdout(&[
+            "-F",
+            ",",
+            "--min-fields",
+            "2",
+            "--max-fields",
+            "2",
+            input.path_str()
+        ]),
+        "a,b\n"
+    );
+    //lengths count chars, not bytes
+    let input = TempFile::new("min-len", "ab\nżół\nabcd\n\n");
+    assert_eq!(
+        run_fxt_stdout(&["--min-len", "3", input.path_str()]),
+        "żół\nabcd\n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&["--min-len", "2", "--max-len", "3", input.path_str()]),
+        "ab\nżół\n"
+    );
+    //--delete with --min-len drops the long ones, like -v
+    assert_eq!(
+        run_fxt_stdout(&["-d", "--min-len", "3", input.path_str()]),
+        "ab\n\n"
+    );
+    //content filters: a --quiet run answers with the exit code
+    let output = run_fxt(&["-q", "--min-len", "10", input.path_str()]);
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn a_lower_bound_above_the_upper_one_is_refused() {
+    let output = run_fxt_with_stdin(&["--min-len", "5", "--max-len", "3"], "a\n");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--min-len 5 is above --max-len 3"),
+        "{stderr}"
+    );
+
+    let output = run_fxt_with_stdin(
+        &["-F", ",", "--min-fields", "3", "--max-fields", "2"],
+        "a\n",
+    );
+    assert_eq!(output.status.code(), Some(2));
+    //a bound of 0 says nothing (--min-len) or keeps nothing (--max-fields)
+    for option in ["--min-len", "--max-fields"] {
+        let output = run_fxt_with_stdin(&["-F", ",", option, "0"], "a\n");
+        assert_eq!(output.status.code(), Some(2), "{option}");
+    }
+    assert_eq!(
+        run_fxt_with_stdin(&["--max-fields", "2"], "a\n")
+            .status
+            .code(),
+        Some(2)
+    );
+}
+
+#[test]
+fn center_pads_each_field_on_both_sides() {
+    let input = TempFile::new("center", "a,bb,ccc\n,x,\n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "--center", "4", input.path_str()]),
+        " a  , bb ,ccc \n    , x  ,    \n"
+    );
+    //a decomposed accent is one cluster under --graphemes
+    let output = run_fxt_with_stdin(&["--graphemes", "--center", "3"], "e\u{301}\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), " e\u{301} \n");
+}
+
+#[test]
+fn rot13_rotates_the_column_range_and_undoes_itself() {
+    let input = TempFile::new("rot13", "Hello, World!\nfxt,Zebra\n");
+    assert_eq!(
+        run_fxt_stdout(&["--rot13", input.path_str()]),
+        "Uryyb, Jbeyq!\nskg,Mroen\n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "-C", "2", "--rot13", input.path_str()]),
+        "Hello, Jbeyq!\nfxt,Mroen\n"
+    );
+    let once = run_fxt_with_stdin(&["--rot13"], "Hello, World!\n");
+    let twice = run_fxt_with_stdin(&["--rot13"], &String::from_utf8_lossy(&once.stdout));
+    assert_eq!(String::from_utf8_lossy(&twice.stdout), "Hello, World!\n");
+}
+
+#[test]
 fn min_fields_requires_fields_and_all_requires_grep() {
     assert_eq!(
         run_fxt_with_stdin(&["--min-fields", "2"], "a\n")

@@ -268,6 +268,22 @@ impl MapColumns {
     pub fn squeeze(span: impl Into<ColumnSpan>) -> MapColumns {
         MapColumns::with(span, squeeze_whitespace)
     }
+
+    /// Rotates every ASCII letter within the span by 13 places (`rot13`);
+    /// anything else, other letters included, stays as it is.
+    pub fn rot13(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns::with(span, |within, out| out.extend(within.chars().map(rot13)))
+    }
+}
+
+/// One char rotated by 13 places, if it is an ASCII letter.
+fn rot13(character: char) -> char {
+    let base = match character {
+        'a'..='z' => b'a',
+        'A'..='Z' => b'A',
+        _ => return character,
+    };
+    char::from(base + (character as u8 - base + 13) % 26)
 }
 
 /// Title-case a piece of text: a letter starts a word when the char
@@ -423,11 +439,14 @@ impl LineTransform for CodecColumns {
 }
 
 /// Which side of a cell the padding goes on: `--pad-left` right-aligns
-/// the text, `--pad-right` left-aligns it.
+/// the text, `--pad-right` left-aligns it, `--center` splits it between
+/// the two sides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PadSide {
     Left,
     Right,
+    /// Half on each side; an odd space goes on the right.
+    Both,
 }
 
 /// Pads every cell of a span with spaces to at least `width` (chars, or
@@ -462,17 +481,15 @@ impl PadColumns {
             true => cell.graphemes(true).count(),
             false => cell.chars().count(),
         };
-        let padding = std::iter::repeat_n(' ', self.width.saturating_sub(length));
-        match self.side {
-            PadSide::Left => {
-                out.extend(padding);
-                out.push_str(cell);
-            }
-            PadSide::Right => {
-                out.push_str(cell);
-                out.extend(padding);
-            }
-        }
+        let padding = self.width.saturating_sub(length);
+        let left = match self.side {
+            PadSide::Left => padding,
+            PadSide::Right => 0,
+            PadSide::Both => padding / 2,
+        };
+        out.extend(std::iter::repeat_n(' ', left));
+        out.push_str(cell);
+        out.extend(std::iter::repeat_n(' ', padding - left));
     }
 }
 
@@ -729,6 +746,43 @@ mod tests {
             LineOutcome::Slice(range) => line[range].to_owned(),
             outcome => panic!("expected a single line, got {outcome:?}"),
         }
+    }
+
+    #[test]
+    fn rot13_rotates_ascii_letters_only() {
+        // Given
+        let mut transform = MapColumns::rot13(1..=usize::MAX);
+
+        // When / Then: other chars, Polish letters too, stay as they are
+        assert_eq!(
+            applied(&mut transform, "Hello, World! zażółć 123"),
+            "Uryyb, Jbeyq! mnżółć 123"
+        );
+        assert_eq!(applied(&mut transform, "Uryyb"), "Hello");
+        assert_eq!(applied(&mut transform, "AMNZamnz"), "NZAMnzam");
+    }
+
+    #[test]
+    fn center_splits_the_padding_with_an_odd_space_on_the_right() {
+        // Given
+        let mut transform = PadColumns::new(1..=usize::MAX, 6, PadSide::Both);
+
+        // When / Then
+        assert_eq!(applied(&mut transform, "ab"), "  ab  ");
+        assert_eq!(applied(&mut transform, "abc"), " abc  ");
+        assert_eq!(applied(&mut transform, "żółw"), " żółw ");
+        assert_eq!(applied(&mut transform, "abcdefgh"), "abcdefgh");
+        assert_eq!(applied(&mut transform, ""), "      ");
+    }
+
+    #[test]
+    fn center_pads_each_field_on_its_own() {
+        // Given
+        let span = FieldSpan::new(",", ColumnList::from(1..=2));
+        let mut transform = PadColumns::new(ColumnSpan::Fields(span), 3, PadSide::Both);
+
+        // When / Then
+        assert_eq!(applied(&mut transform, "a,,c"), " a ,   ,c");
     }
 
     #[test]
