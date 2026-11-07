@@ -113,6 +113,9 @@ pub struct Config {
     pub trim: bool,
     pub title_case: bool,
     pub squeeze: bool,
+    //`--expand`/`--unexpand`: the tab size
+    pub expand: Option<usize>,
+    pub unexpand: Option<usize>,
     //`--reverse-chars`, like `rev`
     pub reverse_chars: bool,
     //`--pad-left`/`--pad-right`: the width to pad the column range to
@@ -350,6 +353,12 @@ impl TryFrom<ArgMatches> for Config {
             trim: matches.get_flag("trim"),
             title_case: matches.get_flag("title-case"),
             squeeze: matches.get_flag("squeeze"),
+            expand: matches
+                .get_one::<usize>("expand")
+                .copied(),
+            unexpand: matches
+                .get_one::<usize>("unexpand")
+                .copied(),
             reverse_chars: matches.get_flag("reverse-chars"),
             pad_left: matches
                 .get_one::<usize>("pad-left")

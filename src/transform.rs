@@ -180,68 +180,66 @@ impl LineTransform for DeleteColumns {
 /// mapping keeps `build_pipeline` readable.
 pub struct MapColumns {
     span: ColumnSpan,
-    map: fn(&str) -> String,
+    map: Box<dyn Fn(&str) -> String>,
 }
 
 impl MapColumns {
-    /// Uppercases the characters within the span.
-    pub fn uppercase(span: impl Into<ColumnSpan>) -> MapColumns {
+    fn with(span: impl Into<ColumnSpan>, map: impl Fn(&str) -> String + 'static) -> MapColumns {
         MapColumns {
             span: span.into(),
-            map: str::to_uppercase,
+            map: Box::new(map),
         }
+    }
+
+    /// Replaces each tab within the span with spaces up to the next tab
+    /// stop, every `tab` columns from the start of the span (`expand`).
+    pub fn expand_tabs(span: impl Into<ColumnSpan>, tab: usize) -> MapColumns {
+        MapColumns::with(span, move |within| text::expand_tabs(within, tab))
+    }
+
+    /// Turns runs of spaces within the span that reach a tab stop into
+    /// tabs (`unexpand -a`).
+    pub fn unexpand_tabs(span: impl Into<ColumnSpan>, tab: usize) -> MapColumns {
+        MapColumns::with(span, move |within| text::unexpand_tabs(within, tab))
+    }
+
+    /// Uppercases the characters within the span.
+    pub fn uppercase(span: impl Into<ColumnSpan>) -> MapColumns {
+        MapColumns::with(span, str::to_uppercase)
     }
 
     /// Lowercases the characters within the span.
     pub fn lowercase(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns {
-            span: span.into(),
-            map: str::to_lowercase,
-        }
+        MapColumns::with(span, str::to_lowercase)
     }
 
     /// Trims whitespace at both ends of the span (with the full span,
     /// this trims the whole line).
     pub fn trim(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns {
-            span: span.into(),
-            map: |within| within.trim().to_owned(),
-        }
+        MapColumns::with(span, |within| within.trim().to_owned())
     }
 
     /// Uppercases the first letter of every word within the span and
     /// lowercases the rest of it.
     pub fn title_case(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns {
-            span: span.into(),
-            map: title_case,
-        }
+        MapColumns::with(span, title_case)
     }
 
     /// Reverses the characters within the span, like `rev`.
     pub fn reverse_chars(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns {
-            span: span.into(),
-            map: |within| within.chars().rev().collect(),
-        }
+        MapColumns::with(span, |within| within.chars().rev().collect())
     }
 
     /// Reverses the grapheme clusters within the span (`--graphemes`), so
     /// an accent stays on its letter and an emoji sequence stays whole.
     pub fn reverse_graphemes(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns {
-            span: span.into(),
-            map: |within| within.graphemes(true).rev().collect(),
-        }
+        MapColumns::with(span, |within| within.graphemes(true).rev().collect())
     }
 
     /// Collapses every run of whitespace within the span into a single
     /// space (the ends are left to `--trim`).
     pub fn squeeze(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns {
-            span: span.into(),
-            map: squeeze_whitespace,
-        }
+        MapColumns::with(span, squeeze_whitespace)
     }
 }
 
@@ -294,7 +292,7 @@ impl LineTransform for MapColumns {
         Ok(LineOutcome::Replace(text::map_ranges(
             line,
             &self.span.write_ranges(line),
-            self.map,
+            &self.map,
         )))
     }
 }

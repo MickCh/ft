@@ -217,6 +217,12 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
     if config.title_case {
         pipeline.push(Box::new(MapColumns::title_case(cols.claim())));
     }
+    if let Some(tab) = config.expand {
+        pipeline.push(Box::new(MapColumns::expand_tabs(cols.claim(), tab)));
+    }
+    if let Some(tab) = config.unexpand {
+        pipeline.push(Box::new(MapColumns::unexpand_tabs(cols.claim(), tab)));
+    }
     //squeezing runs before trimming, so a run of whitespace at the ends
     //collapses to one space and is then removed altogether
     if config.squeeze {

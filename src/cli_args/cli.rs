@@ -267,6 +267,30 @@ pub fn cli() -> Command {
                 .help("Collapse runs of whitespace in the column range into single spaces"),
         )
         .arg(
+            Arg::new("expand")
+                .long("expand")
+                .required(false)
+                .value_name("TABSIZE")
+                .num_args(0..=1)
+                .require_equals(true)
+                .default_missing_value("8")
+                .conflicts_with_all(["delete", "unexpand"])
+                .value_parser(parse_width)
+                .help("Turn tabs in the column range into spaces, with a tab stop every TABSIZE columns (default 8; like expand)"),
+        )
+        .arg(
+            Arg::new("unexpand")
+                .long("unexpand")
+                .required(false)
+                .value_name("TABSIZE")
+                .num_args(0..=1)
+                .require_equals(true)
+                .default_missing_value("8")
+                .conflicts_with("delete")
+                .value_parser(parse_width)
+                .help("Turn runs of spaces in the column range that reach a tab stop into tabs (default 8; like unexpand -a)"),
+        )
+        .arg(
             Arg::new("reverse-chars")
                 .long("reverse-chars")
                 .required(false)
@@ -673,7 +697,7 @@ fn parse_suffix(input: &str) -> Result<String, String> {
     Ok(input.to_owned())
 }
 
-/// Parse a width (`--wrap`, `--pad-left`, `--pad-right`): a wrapping
+/// Parse a width (`--wrap`, `--pad-left`, `--pad-right`, a tab size): a wrapping
 /// width of 0 would cut the line into infinitely many empty chunks, and
 /// padding to 0 would do nothing, so at least one char is required.
 fn parse_width(input: &str) -> Result<usize, String> {

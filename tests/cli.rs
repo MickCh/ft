@@ -162,6 +162,37 @@ fn wrap_rejects_a_zero_width() {
 }
 
 #[test]
+fn expand_and_unexpand_convert_tabs_and_spaces() {
+    let tabbed = TempFile::new("expand", "a\tbc\td\n");
+    assert_eq!(
+        run_fxt_stdout(&["--expand", tabbed.path_str()]),
+        "a       bc      d\n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&["--expand=4", tabbed.path_str()]),
+        "a   bc  d\n"
+    );
+
+    let spaced = TempFile::new("unexpand", "a   bc  d\n");
+    assert_eq!(
+        run_fxt_stdout(&["--unexpand=4", spaced.path_str()]),
+        "a\tbc\td\n"
+    );
+}
+
+#[test]
+fn expand_takes_its_tab_size_only_after_an_equals_sign() {
+    //a bare --expand must not swallow the file name that follows
+    let tabbed = TempFile::new("expand-bare", "a\tb\n");
+    assert_eq!(
+        run_fxt_stdout(&["--expand", tabbed.path_str()]),
+        "a       b\n"
+    );
+    let output = run_fxt_with_stdin(&["--expand=0"], "a\tb\n");
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
 fn reverse_chars_reverses_the_column_range() {
     let input = TempFile::new("reverse-chars", "abc,żółw\ne\u{301}x\n");
     assert_eq!(

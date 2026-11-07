@@ -166,6 +166,69 @@ where
     })
 }
 
+/// Replace each tab with spaces up to the next tab stop, one every `tab`
+/// columns counted from the start of `text`, like `expand -t`. A line
+/// break inside the text (a multi-line CSV record) starts the count over.
+pub fn expand_tabs(text: &str, tab: usize) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut column = 0;
+    for character in text.chars() {
+        match character {
+            '\t' => {
+                let spaces = tab - column % tab;
+                result.extend(std::iter::repeat_n(' ', spaces));
+                column += spaces;
+            }
+            '\n' => {
+                result.push(character);
+                column = 0;
+            }
+            _ => {
+                result.push(character);
+                column += 1;
+            }
+        }
+    }
+    result
+}
+
+/// Turn the blanks that reach a tab stop into tabs, like `unexpand -a`:
+/// a run of two or more spaces ending at a stop becomes one tab, spaces
+/// right before a tab go into it, and a lone space stays a space, so the
+/// gaps between words are not turned into tabs by accident. Whatever it
+/// writes [`expand_tabs`] expands to what the text expands to.
+pub fn unexpand_tabs(text: &str, tab: usize) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut column = 0;
+    //spaces read but not yet written: a stop may turn them into a tab
+    let mut pending = 0;
+    for character in text.chars() {
+        match character {
+            ' ' => {
+                pending += 1;
+                column += 1;
+                if column % tab == 0 {
+                    result.push(if pending > 1 { '\t' } else { ' ' });
+                    pending = 0;
+                }
+            }
+            '\t' => {
+                pending = 0;
+                result.push('\t');
+                column += tab - column % tab;
+            }
+            _ => {
+                result.extend(std::iter::repeat_n(' ', pending));
+                pending = 0;
+                result.push(character);
+                column = if character == '\n' { 0 } else { column + 1 };
+            }
+        }
+    }
+    result.extend(std::iter::repeat_n(' ', pending));
+    result
+}
+
 /// Rebuild the line with each cell's text put through `map`. A cell is a
 /// char range as [`crate::columns::ColumnSpan::cell_ranges`] gives them:
 /// ascending, and an empty one (`n..=n-1`) is the point before column
@@ -441,6 +504,27 @@ mod tests {
     }
 
     #[test]
+    fn expand_tabs_fills_to_the_next_stop() {
+        // Given / When / Then
+        assert_eq!(expand_tabs("a\tbc\td", 4), "a   bc  d");
+        assert_eq!(expand_tabs("abcd\te", 4), "abcd    e");
+        assert_eq!(expand_tabs("\t\tx", 2), "    x");
+        assert_eq!(expand_tabs("ż\tx\n\ty", 4), "ż   x\n    y");
+    }
+
+    #[test]
+    fn unexpand_tabs_turns_blanks_at_a_stop_into_tabs() {
+        // Given / When / Then
+        assert_eq!(unexpand_tabs("a   bc  d", 4), "a\tbc\td");
+        assert_eq!(unexpand_tabs("        x", 4), "\t\tx");
+        //a lone space at a stop stays a space; spaces before a tab go into it
+        assert_eq!(unexpand_tabs("abc d", 4), "abc d");
+        assert_eq!(unexpand_tabs("a  \tb", 4), "a\tb");
+        //trailing spaces that reach no stop stay as they are
+        assert_eq!(unexpand_tabs("ab  ", 8), "ab  ");
+    }
+
+    #[test]
     fn map_cells_writes_into_empty_cells_too() {
         // Given "a,,ż" with its fields as cells: 1..=1, an empty 3..=2, 4..=4
         let line = "a,,ż";
@@ -546,6 +630,18 @@ mod properties {
     }
 
     proptest! {
+        #[test]
+        fn unexpanding_keeps_what_the_text_expands_to(text in "[a-cż \t]{0,30}", tab in 1usize..9) {
+            prop_assert_eq!(expand_tabs(&unexpand_tabs(&text, tab), tab), expand_tabs(&text, tab));
+        }
+
+        #[test]
+        fn expanding_leaves_no_tab_and_unexpanding_adds_no_space(text in "[a-c \t]{0,30}", tab in 1usize..9) {
+            prop_assert!(!expand_tabs(&text, tab).contains('\t'));
+            let spaces = |text: &str| text.matches(' ').count();
+            prop_assert!(spaces(&unexpand_tabs(&text, tab)) <= spaces(&text));
+        }
+
         #[test]
         fn map_cells_marks_each_field_where_it_lies(line in "[a-zż]{0,3}(,[a-zż]{0,3}){0,4}") {
             //the fields of a comma-split line as cells (empty ones
