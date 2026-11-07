@@ -144,6 +144,33 @@ Open findings of an external black-box comparison (the fixed ones are under *Don
 
   "Before" is the HEAD column of the tables above. The replacement and the sort came out slower, but the installed build — the same code there — did too, as did `sed`: a slower machine that day, not a regression. What did change: `~N` 1.7× faster, close to `tail`, and the text mappings 1.35–1.8×; `--unexpand` now gives GNU's output byte for byte. `fxt` leads every case but `tail`, which seeks from the end of the file.
 
+  Measured again on 2026-11-07 after 0.5.0, with `--max-fields`, `--min-len`, `--center` and `--rot13` added (same file and method, every tool's output identical; ms):
+
+  | Case | `fxt` HEAD | `fxt` 0.5.0 | Reference |
+  |---|---:|---:|---:|
+  | `-g ERROR` | 45 | 46 | `grep` 45 |
+  | `-f foo -r bar` | 159 (141) | 148 (140) | `sed` 590 |
+  | `-s` | 155 | 160 | `sort -s` 222 |
+  | `-g ERROR -f foo -r bar --upper` | 70 (52) | 61 (54) | `awk` 502 |
+  | the same, against a pipeline | 64 | 62 | `grep \| sed \| tr` 137 |
+  | `--tac` | 122 | 122 | `tac` 124 |
+  | `-R '~1000-~1'` | 27 | 26 | `tail -n 1000` 19 |
+  | `-g ERROR -g 99999` | 49 | 48 | `grep -e … -e …` 52 |
+  | `-g ERROR -g '^00' --all` | 42 | 41 | `awk '/ERROR/ && /^00/'` 311 |
+  | `-F , --min-fields 3` | 72 | 74 | `awk -F, 'NF >= 3'` 128 |
+  | `--max-len 20` | 36 | 35 | `awk 'length($0) <= 20'` 93 |
+  | `--reverse-chars` | 138 | 133 | — |
+  | `--expand` | 139 | 140 | `expand` 375 |
+  | `--unexpand` | 115 | 113 | `unexpand -a` 416 |
+  | `-F , -C 3 --encode base64` | 147 | 144 | — |
+  | `-F , -C 2 --pad-left 8` | 133 | 130 | `awk` `sprintf` 235 |
+  | `--min-len 20` | 56 | | `awk 'length($0) >= 20'` 122 |
+  | `-F , --max-fields 2` | 40 | | `awk -F, 'NF <= 2'` 71 |
+  | `--rot13` | 152 | | `tr A-Za-z N-ZA-Mn-za-m` 166 |
+  | `-F , -C 2 --center 8` | 136 | | `awk` `sprintf("%*s%s%*s")` 339 |
+
+  HEAD and 0.5.0 differ by noise: the two outliers, re-run 21 times interleaved, came out even (in brackets). The new options lead their counterparts too; `fxt` still leads every case but `tail`.
+
 ## 3a. From the 2026-11-07 functional tests
 
 A black-box run of 525 cases against the documentation (report `fxt-testy-funkcjonalne-2026-11-07.md`, scripts in `fxt-testy-funkcjonalne/`, both next to the repository; `FXT=<binary> bash t3_transforms.sh` runs one file against a given build). On HEAD: 505 pass, 20 fail, every failure one of the items below. When fixing one, carry its cases over into `tests/cli.rs`.
