@@ -4,6 +4,8 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-07
+
 ### Added
 
 - `-P`, `--perl-regexp`: every regex may use backreferences (`(.)\1`) and lookaround, through a backtracking engine (`fancy-regex`). A pattern that backtracks without end fails the run (exit code 2).
@@ -61,6 +63,7 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 The first version, as `ft`: row and column ranges (lists, open and end-relative bounds, field mode with `--quoted` CSV), sort/tac/shuffle, `--grep` with grep-like exit codes and `--quiet`, `--unique`, case and whitespace transforms, `--number`, `--wrap`, `--split-on`/`--join`, `--drop-empty`, summaries per `--group-by`, find/replace, and in-place editing of many files with `--backup` and `--dry-run`.
 
-[Unreleased]: https://github.com/MickCh/ft/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/MickCh/ft/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MickCh/ft/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MickCh/ft/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MickCh/ft/compare/5d06433...v0.2.0
