@@ -4,6 +4,8 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-07
+
 ### Added
 
 - `--encoding <name>`: inputs in another encoding than UTF-8 (`windows-1250`, `latin1`, `utf-16le`, `shift_jis`, … — the WHATWG labels). A UTF-16 file with a byte order mark is recognized without it.
@@ -44,5 +46,6 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 The first version, as `ft`: row and column ranges (lists, open and end-relative bounds, field mode with `--quoted` CSV), sort/tac/shuffle, `--grep` with grep-like exit codes and `--quiet`, `--unique`, case and whitespace transforms, `--number`, `--wrap`, `--split-on`/`--join`, `--drop-empty`, summaries per `--group-by`, find/replace, and in-place editing of many files with `--backup` and `--dry-run`.
 
-[Unreleased]: https://github.com/MickCh/ft/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/MickCh/ft/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MickCh/ft/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MickCh/ft/compare/5d06433...v0.2.0
