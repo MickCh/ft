@@ -48,6 +48,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 | `--number` | Number the output rows, like `nl` |
 | `--split-on <sep>` | Split every line at each occurrence of `<sep>`, one row per piece |
 | `--wrap <width>` | Wrap every line into chunks of at most `<width>` characters (like `fold -w`) |
+| `--graphemes` | Count columns and `--wrap` widths in user-perceived characters (grapheme clusters) |
 | `--drop-empty` | Drop lines that are empty after the other transforms ran |
 | `--join <sep>` | Join every row into a single row, separated by `<sep>` (like `paste -s`) |
 | `--count` | Summarize: how many rows |
@@ -65,7 +66,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 
 ### Semantics
 
-- Row and column ranges are **1-based and inclusive**; columns are counted in characters (Unicode code points), not bytes, so multi-byte UTF-8 text is never cut inside a character. They are not grapheme clusters, though: a letter followed by a combining accent (`e\u0301`) or an emoji joined with ZWJ (`👩\u200d💻`) counts as several columns, and a range may split it.
+- Row and column ranges are **1-based and inclusive**; columns are counted in characters (Unicode code points), not bytes, so multi-byte UTF-8 text is never cut inside a character. They are not grapheme clusters, though: a letter followed by a combining accent (`e\u0301`) or an emoji joined with ZWJ (`👩\u200d💻`) counts as several columns, and a range may split it — unless `--graphemes` is given, which counts grapheme clusters instead: an accented letter, a flag or a ZWJ emoji sequence is then one column, and `--wrap` never cuts inside one. It costs a pass over each non-ASCII line, so it is opt-in; field mode is unaffected (fields are found by their delimiter), apart from `--wrap`.
 - A range can be a single number (`3`), open-ended (`10-` to the end, `-5` from the start) or closed (`2-5`). Rows and columns both accept a comma-separated list of ranges (`1-5,10-20`).
 - A **column list keeps the order written**, so operations that *read* the columns — selecting them, the `--sort`/`--unique` key, `--grep` — read the parts in that order: `-F , -C 3,1,2` is an `awk`-style projection that reorders the fields, and `--output-delimiter` chooses what rejoins them. Operations that *write into* the line — `--delete`, `--upper`/`--lower`/`--trim`, find/replace — work on the same columns as a set (sorted, overlaps merged), where order carries no meaning; each part is written on its own, so a match straddling two parts is not replaced.
 - A row bound prefixed with `~` counts from the **end** of the input: `~1` is the last row, `~10-~1` the last ten, `2-~2` everything but the first and last row. Because the total line count must be known first, end-relative ranges buffer the whole input instead of streaming; columns do not accept `~`.

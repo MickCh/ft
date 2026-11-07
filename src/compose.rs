@@ -234,7 +234,10 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
     //wrapping comes last of the rewriting transforms, so the chunks are
     //cut from the finished line rather than from the raw one
     if let Some(width) = config.wrap {
-        pipeline.push(Box::new(WrapLines::new(width)));
+        pipeline.push(Box::new(match config.graphemes {
+            true => WrapLines::graphemes(width),
+            false => WrapLines::new(width),
+        }));
     }
     //and dropping empties comes last of all, so it sees what the line
     //became — `--trim --drop-empty` drops whitespace-only lines

@@ -1902,3 +1902,33 @@ fn from_to_matches_lines_without_their_crlf() {
     let stdout = run_fxt_stdout(&["--from", "^START$", "--to", "^END$", input.path_str()]);
     assert_eq!(stdout, "START\r\nb\r\nEND\r\n");
 }
+
+/// A decomposed accent (`e` + U+0301) and a ZWJ emoji sequence.
+const CLUSTERS: &str = "e\u{301}tude\n\u{1F469}\u{200D}\u{1F4BB}xy\n";
+
+#[test]
+fn graphemes_count_user_perceived_characters() {
+    let input = TempFile::new("graphemes", CLUSTERS);
+    //by code point, the first column tears each cluster apart
+    assert_eq!(
+        run_fxt_stdout(&["-C", "1", input.path_str()]),
+        "e\n\u{1F469}\n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&["--graphemes", "-C", "1", input.path_str()]),
+        "e\u{301}\n\u{1F469}\u{200D}\u{1F4BB}\n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&["--graphemes", "-d", "-C", "1", input.path_str()]),
+        "tude\nxy\n"
+    );
+}
+
+#[test]
+fn graphemes_wrap_without_splitting_a_cluster() {
+    let input = TempFile::new("graphemes-wrap", CLUSTERS);
+    assert_eq!(
+        run_fxt_stdout(&["--graphemes", "--wrap", "2", input.path_str()]),
+        "e\u{301}t\nud\ne\n\u{1F469}\u{200D}\u{1F4BB}x\ny\n"
+    );
+}

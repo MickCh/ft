@@ -365,17 +365,33 @@ impl LineTransform for RegexReplaceInColumns {
 /// `fold -w`: the first transform to turn one line into several.
 pub struct WrapLines {
     width: usize,
+    /// Count grapheme clusters rather than chars (`--graphemes`).
+    graphemes: bool,
 }
 
 impl WrapLines {
     pub fn new(width: usize) -> WrapLines {
-        WrapLines { width }
+        WrapLines {
+            width,
+            graphemes: false,
+        }
+    }
+
+    /// Wrap at `width` grapheme clusters, never inside one.
+    pub fn graphemes(width: usize) -> WrapLines {
+        WrapLines {
+            width,
+            graphemes: true,
+        }
     }
 }
 
 impl LineTransform for WrapLines {
     fn apply(&mut self, line: &str) -> LineOutcome {
-        let chunks = text::wrap_chars(line, self.width);
+        let chunks = match self.graphemes {
+            true => text::wrap_graphemes(line, self.width),
+            false => text::wrap_chars(line, self.width),
+        };
         match chunks.as_slice() {
             //a line that already fits is left alone, allocating nothing
             [_] => LineOutcome::Keep,

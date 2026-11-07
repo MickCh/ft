@@ -12,6 +12,7 @@
 
 use std::borrow::Cow;
 use std::ops::RangeInclusive;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::ranges::RangeSet;
 use crate::text;
@@ -83,11 +84,14 @@ impl FieldSpan {
     }
 }
 
-/// How a column list addresses a line: by character positions, or by
-/// delimited fields.
+/// How a column list addresses a line: by character positions, by
+/// user-perceived characters (grapheme clusters), or by delimited fields.
 #[derive(Debug, Clone)]
 pub enum ColumnSpan {
     Chars(ColumnList),
+    /// Columns counted in grapheme clusters (`--graphemes`): `e` plus a
+    /// combining accent, or emoji joined by ZWJ, are one column each.
+    Graphemes(ColumnList),
     Fields(FieldSpan),
 }
 
@@ -104,6 +108,7 @@ impl ColumnSpan {
     pub fn read_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
         match self {
             ColumnSpan::Chars(list) => Cow::Borrowed(list.written()),
+            ColumnSpan::Graphemes(list) => resolve_graphemes(line, list.written()),
             ColumnSpan::Fields(spec) => {
                 Cow::Owned(resolve_fields(line, spec, spec.fields.written(), false))
             }
@@ -115,6 +120,7 @@ impl ColumnSpan {
     pub fn write_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
         match self {
             ColumnSpan::Chars(list) => Cow::Borrowed(list.normalized()),
+            ColumnSpan::Graphemes(list) => resolve_graphemes(line, list.normalized()),
             ColumnSpan::Fields(spec) => {
                 Cow::Owned(resolve_fields(line, spec, spec.fields.normalized(), false))
             }
@@ -128,6 +134,7 @@ impl ColumnSpan {
     pub fn delete_ranges(&self, line: &str) -> Cow<'_, [RangeInclusive<usize>]> {
         match self {
             ColumnSpan::Chars(list) => Cow::Borrowed(list.normalized()),
+            ColumnSpan::Graphemes(list) => resolve_graphemes(line, list.normalized()),
             ColumnSpan::Fields(spec) => {
                 Cow::Owned(resolve_fields(line, spec, spec.fields.normalized(), true))
             }
@@ -165,7 +172,7 @@ impl ColumnSpan {
     /// [`ColumnSpan::select`] from a line already split.
     fn select_in<'a>(&self, split: &SplitLine<'a, '_>) -> Cow<'a, str> {
         match self {
-            ColumnSpan::Chars(_) => self.select(split.line),
+            ColumnSpan::Chars(_) | ColumnSpan::Graphemes(_) => self.select(split.line),
             ColumnSpan::Fields(spec) => {
                 let parts = spec.fields.written();
                 let positions = split.positions_for(spec, parts);
@@ -222,7 +229,7 @@ impl ColumnSpan {
     /// char mode, where columns are adjacent by definition.
     pub fn joiner(&self) -> &str {
         match self {
-            ColumnSpan::Chars(_) => "",
+            ColumnSpan::Chars(_) | ColumnSpan::Graphemes(_) => "",
             ColumnSpan::Fields(spec) => spec
                 .output_delimiter
                 .as_deref()
@@ -241,6 +248,39 @@ impl From<ColumnList> for ColumnSpan {
     fn from(list: ColumnList) -> ColumnSpan {
         ColumnSpan::Chars(list)
     }
+}
+
+/// Resolve grapheme-column parts to the char ranges they occupy on
+/// `line`, in the order given, dropping parts that lie beyond it. Where
+/// every char is a grapheme of its own — ASCII without a CRLF, which is
+/// one cluster — the parts already are char ranges and are borrowed.
+fn resolve_graphemes<'a>(
+    line: &str,
+    parts: &'a [RangeInclusive<usize>],
+) -> Cow<'a, [RangeInclusive<usize>]> {
+    if line.is_ascii() && !line.contains("\r\n") {
+        return Cow::Borrowed(parts);
+    }
+    //the char index each grapheme starts at, plus the total at the end
+    let mut starts = Vec::new();
+    let mut chars = 0usize;
+    for grapheme in line.graphemes(true) {
+        starts.push(chars);
+        chars += grapheme.chars().count();
+    }
+    starts.push(chars);
+    let graphemes = starts.len() - 1;
+
+    Cow::Owned(
+        parts
+            .iter()
+            .filter_map(|part| {
+                let first = (*part.start()).max(1);
+                let last = (*part.end()).min(graphemes);
+                (first <= last).then(|| starts[first - 1] + 1..=starts[last])
+            })
+            .collect(),
+    )
 }
 
 /// Resolve every field part to the char range it occupies, dropping the
@@ -565,6 +605,48 @@ mod tests {
             ..FieldSpan::new(",", list(&[1..=2]))
         });
         assert_eq!(span.joiner(), ";");
+    }
+
+    fn graphemes(parts: &[RangeInclusive<usize>]) -> ColumnSpan {
+        ColumnSpan::Graphemes(list(parts))
+    }
+
+    #[test]
+    fn grapheme_columns_keep_clusters_whole() {
+        // Given a decomposed accent and a ZWJ emoji sequence
+        let line = "e\u{301}tude \u{1F469}\u{200D}\u{1F4BB}!";
+
+        // When / Then each counts as one column
+        assert_eq!(graphemes(&[1..=1]).select(line), "e\u{301}");
+        assert_eq!(
+            graphemes(&[7..=7]).select(line),
+            "\u{1F469}\u{200D}\u{1F4BB}"
+        );
+        assert_eq!(
+            graphemes(&[7..=8]).select(line),
+            "\u{1F469}\u{200D}\u{1F4BB}!"
+        );
+        assert_eq!(chars(&[1..=1]).select(line), "e");
+    }
+
+    #[test]
+    fn grapheme_columns_keep_the_written_order_and_drop_parts_beyond() {
+        // Given / When / Then
+        let line = "a\u{301}bc";
+        assert_eq!(graphemes(&[3..=3, 1..=1]).select(line), "ca\u{301}");
+        assert_eq!(graphemes(&[9..=12]).select(line), "");
+        assert_eq!(graphemes(&[2..=usize::MAX]).select(line), "bc");
+    }
+
+    #[test]
+    fn grapheme_columns_on_ascii_borrow_the_parts() {
+        // Given / When
+        let span = graphemes(&[2..=3]);
+
+        // Then no resolution was needed
+        assert!(matches!(span.read_ranges("abcd"), Cow::Borrowed(_)));
+        // except where CRLF makes two chars one cluster: `b` is column 3
+        assert_eq!(graphemes(&[3..=3]).select("a\r\nb"), "b");
     }
 
     fn quoted_fields(parts: &[RangeInclusive<usize>]) -> ColumnSpan {
@@ -1021,6 +1103,27 @@ mod properties {
                     quote_if_needed(Cow::Borrowed(value), ",")
                 );
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn grapheme_columns_read_like_the_cluster_list(
+            line in lines(),
+            first in 0usize..10,
+            length in 0usize..6,
+        ) {
+            // Given the clusters, listed outright
+            let clusters: Vec<&str> = line.graphemes(true).collect();
+            let range = first..=first + length;
+            let span = ColumnSpan::Graphemes(ColumnList::from(range.clone()));
+
+            // When / Then selecting reads those clusters, deleting keeps the rest
+            let from = first.max(1).min(clusters.len() + 1) - 1;
+            let to = (first + length).min(clusters.len()).max(from);
+            prop_assert_eq!(span.select(&line), clusters[from..to].concat());
+            let rest = text::remove_ranges(&line, &span.delete_ranges(&line));
+            prop_assert_eq!(rest, [&clusters[..from], &clusters[to..]].concat().concat());
         }
     }
 }

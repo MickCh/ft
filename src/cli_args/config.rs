@@ -116,6 +116,8 @@ pub struct Config {
     pub number: bool,
     //--fields splits on the delimiter even inside quotes unless set
     pub quoted: bool,
+    //count char columns (and --wrap) in grapheme clusters
+    pub graphemes: bool,
     //`--encoding`: what inputs without a byte order mark are decoded
     //from; `None` is UTF-8
     pub encoding: Option<&'static Encoding>,
@@ -202,6 +204,7 @@ impl Config {
                 quoted: self.quoted,
                 fields: columns,
             }),
+            None if self.graphemes => ColumnSpan::Graphemes(columns),
             None => ColumnSpan::Chars(columns),
         }
     }
@@ -334,6 +337,7 @@ impl TryFrom<ArgMatches> for Config {
             squeeze: matches.get_flag("squeeze"),
             number: matches.get_flag("number"),
             quoted: matches.get_flag("quoted"),
+            graphemes: matches.get_flag("graphemes"),
             encoding: matches
                 .get_one::<&'static Encoding>("encoding")
                 .copied(),
@@ -493,7 +497,7 @@ mod tests {
     /// The column parts a span addresses, in the order written.
     fn written(span: &ColumnSpan) -> Vec<RangeInclusive<usize>> {
         match span {
-            ColumnSpan::Chars(list) => list.written().to_vec(),
+            ColumnSpan::Chars(list) | ColumnSpan::Graphemes(list) => list.written().to_vec(),
             ColumnSpan::Fields(spec) => spec.fields.written().to_vec(),
         }
     }

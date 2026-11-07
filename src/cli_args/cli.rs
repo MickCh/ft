@@ -86,6 +86,16 @@ pub fn cli() -> Command {
                 .help("Respect \"quoted\" fields: a delimiter inside quotes does not split, a newline does not end the record (requires --fields)"),
         )
         .arg(
+            Arg::new("graphemes")
+                .long("graphemes")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Count columns and --wrap widths in user-perceived characters \
+                     (grapheme clusters): an accented letter or a joined emoji is one column",
+                ),
+        )
+        .arg(
             Arg::new("output-delimiter")
                 .long("output-delimiter")
                 .required(false)

@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::ops::RangeInclusive;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Split a line into its content and line terminator ("\r\n", "\n" or none).
 pub fn split_line_terminator(line: &str) -> (&str, &'static str) {
@@ -49,6 +50,28 @@ pub fn wrap_chars(line: &str, width: usize) -> Vec<&str> {
             chars = 0;
         }
         chars += 1;
+    }
+    chunks.push(&line[start..]);
+
+    chunks
+}
+
+/// [`wrap_chars`] counting grapheme clusters instead (`--graphemes`), so
+/// a chunk boundary never falls inside a user-perceived character.
+pub fn wrap_graphemes(line: &str, width: usize) -> Vec<&str> {
+    debug_assert!(width > 0, "wrapping needs a width of at least one");
+
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let mut count = 0usize;
+
+    for (offset, _) in line.grapheme_indices(true) {
+        if count == width {
+            chunks.push(&line[start..offset]);
+            start = offset;
+            count = 0;
+        }
+        count += 1;
     }
     chunks.push(&line[start..]);
 
@@ -293,6 +316,17 @@ mod tests {
         //each of these is multi-byte, so a byte-based split would tear
         //them apart mid-character
         assert_eq!(wrap_chars("ąłć😊😍😁", 2), ["ął", "ć😊", "😍😁"]);
+    }
+
+    #[test]
+    fn wrap_graphemes_never_splits_a_cluster() {
+        // Given / When / Then a ZWJ sequence and a decomposed accent stay whole
+        let line = "\u{1F469}\u{200D}\u{1F4BB}e\u{301}xy";
+        assert_eq!(
+            wrap_graphemes(line, 2),
+            ["\u{1F469}\u{200D}\u{1F4BB}e\u{301}", "xy"]
+        );
+        assert_eq!(wrap_graphemes("", 3), [""]);
     }
 
     #[test]
