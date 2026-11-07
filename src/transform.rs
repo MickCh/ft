@@ -15,6 +15,7 @@ use regex::{NoExpand, Regex, RegexBuilder};
 use std::io;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::case;
 use crate::codec::Codec;
 use crate::pattern::Pattern;
 
@@ -291,7 +292,7 @@ fn title_case(within: &str, result: &mut String) {
     for character in within.chars() {
         if character.is_alphanumeric() {
             match starts_word {
-                true => result.extend(character.to_uppercase()),
+                true => case::push_titlecase(character, result),
                 false => result.extend(character.to_lowercase()),
             }
             starts_word = false;
@@ -1084,7 +1085,7 @@ mod properties {
         let mut result = String::new();
         for character in line.chars() {
             match (character.is_alphanumeric(), starts_word) {
-                (true, true) => result.extend(character.to_uppercase()),
+                (true, true) => case::push_titlecase(character, &mut result),
                 (true, false) => result.extend(character.to_lowercase()),
                 (false, _) => result.push(character),
             }

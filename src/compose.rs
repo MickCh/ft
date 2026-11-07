@@ -27,7 +27,8 @@ pub fn build_processor(config: &Config) -> FileProcessor {
         .unique
         .then(|| cols.key_or_cols(&config.unique_key));
     let transforms = build_pipeline(config, &mut cols);
-    let outgoing = build_outgoing(config);
+    let reducer = build_reducer(config);
+    let outgoing = build_outgoing(config, &cols, reducer.is_some());
 
     FileProcessor {
         rows: config.rows_or_full(),
@@ -39,7 +40,7 @@ pub fn build_processor(config: &Config) -> FileProcessor {
         unique_key_span,
         transforms,
         outgoing,
-        reducer: build_reducer(config),
+        reducer,
         stop_when_matched: config.quiet,
         quoted_records: config.quoted,
         lossy: config.lossy,
@@ -79,9 +80,10 @@ impl<'a> ColumnClaims<'a> {
         }
     }
 
-    /// Whether some operation took `--cols` as its scope or key.
-    fn cols_claimed(&self) -> bool {
-        self.claimed
+    /// Whether `--cols` selects (cuts) the columns: it was given, and no
+    /// operation took it as its scope or key.
+    fn selects_bare(&self) -> bool {
+        !self.claimed && self.config.cols.is_some()
     }
 }
 
@@ -206,8 +208,24 @@ fn build_predicate(config: &Config, cols: &mut ColumnClaims) -> Option<Box<dyn L
 /// has let it pass: numbering, which comes after every row is settled —
 /// after expansion, after the empties and the duplicates are gone — so
 /// the numbers count what is written and come out contiguous.
-fn build_outgoing(config: &Config) -> Pipeline {
+///
+/// It also gives a row the output delimiter when nothing else would: a
+/// bare `--cols` selection rejoins the fields it cuts out with it, but a
+/// row no selection cut (no `--cols`, or `--cols` taken by an operation)
+/// is rejoined here, every field, once its keys have been read with the
+/// input delimiter. Not for a reducer, whose rows are its own to split,
+/// and whose columns the output delimiter already separates.
+fn build_outgoing(config: &Config, cols: &ColumnClaims, reduces: bool) -> Pipeline {
     let mut outgoing: Vec<Box<dyn LineTransform>> = Vec::new();
+    let rejoins = config
+        .output_delimiter
+        .as_ref()
+        .zip(config.field_delimiter.as_ref())
+        .is_some_and(|(output, input)| output != input);
+    if rejoins && !cols.selects_bare() && !reduces {
+        let every_field = config.span_for(ColumnList::from(1..=usize::MAX));
+        outgoing.push(Box::new(SelectColumns::new(every_field)));
+    }
     if config.number {
         outgoing.push(Box::new(NumberLines::new(config.output_separator())));
     }
@@ -324,7 +342,7 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
     //the range, mirroring how `--rows` alone selects lines. Everything in
     //the pipeline at this point is line-wide (a column-scoped transform
     //would have claimed `--cols`), so the selection goes first
-    if !cols.cols_claimed() && config.cols.is_some() {
+    if cols.selects_bare() {
         pipeline.insert(0, Box::new(SelectColumns::new(config.col_span())));
     }
 

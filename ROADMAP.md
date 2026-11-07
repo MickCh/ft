@@ -170,6 +170,15 @@ Documentation: ✅ all nine fixed — `-i` advised as "ignore case" (it is `--in
 
 Observed and consistent with the documentation, noted for awareness: files without a final newline run into the next one in a concatenation (like `cat`); mixed-bound row ranges that resolve inverted (`~1-2`) select nothing, quietly; a `--to` that never matches selects everything (as `sed 0,/re/`); `-P` sends patterns without backtracking features to the linear engine; numbers accept `+5`, ` 7`, `1e3`, `inf` but not `0x10` or `NaN`, and floats print raw (`0.30000000000000004`).
 
+## 3b. From the 0.4.1 functional tests
+
+A second run, 1038 cases, all passing on 0.4.1 (report `fxt-testy-funkcjonalne-0.4.1.md`, next to the repository), noted four small things:
+
+- ✅ **N1 — `-F , --output-delimiter ';'` did nothing** — the output delimiter only joined selected fields, so without a selection (or with `--cols` taken by `--upper` or `-d`) it was silently ignored. Now `compose::build_outgoing` rejoins every field of such a row, after its keys were read and before `--number`; not for a reducer.
+- ✅ **N2 — `-i -R 5` on a shorter file emptied it** — the 0.4.1 guard covered content filters only. Now any selection that takes no row of a non-empty file leaves it as it was (`leaves_nothing`, which says "no row selected" or "nothing matched").
+- ✅ **N3 — empty separators** — `--output-delimiter ''` is accepted, like `--join ''`; `--split-on ''` is still refused, with its own message.
+- ✅ **N4 — `--title-case` on ligatures** — titlecase now comes from a table (`case.rs`, generated from Unicode's titlecase mappings) for the 135 chars where it differs from the uppercase: `ﬁ` → `Fi`, `ǆ` → `ǅ`, `ß` → `Ss`.
+
 ## 4. Tool maturity (cheap, highly visible)
 
 - ✅ Fuzzing the range parser — property tests in `cli_args::cli` (`properties`): arbitrary and hostile input never panics and only spec characters get through (`+2` and `~+1` used to be accepted, via `usize::from_str`; this property now holds that out); generated specs, written out, select exactly the rows their definition names; column lists normalize to what they cover. Property tests rather than `cargo fuzz`, so they run in CI on every platform.

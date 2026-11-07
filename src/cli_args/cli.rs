@@ -80,8 +80,12 @@ pub fn cli() -> Command {
                 .long("output-delimiter")
                 .required(false)
                 .requires("fields")
-                .value_parser(parse_delimiter)
-                .help("Join the selected fields with this delimiter instead of the input one (requires --fields)"),
+                //an empty one is fine: the fields are run together
+                .value_parser(value_parser!(String))
+                .help(
+                    "Write fields separated by this instead of the input delimiter \
+                     (requires --fields; may be empty)",
+                ),
         )
         .arg(
             Arg::new("sort-key")
@@ -363,7 +367,7 @@ pub fn cli() -> Command {
                 .long("split-on")
                 .required(false)
                 .conflicts_with("delete")
-                .value_parser(parse_delimiter)
+                .value_parser(parse_split_separator)
                 .help("Split every line at each occurrence of this separator, one row per piece"),
         )
         .arg(
@@ -705,6 +709,15 @@ fn parse_range_part(part: &str) -> Result<(RangeBound, RangeBound), String> {
 fn parse_find(input: &str) -> Result<String, String> {
     if input.is_empty() {
         return Err("The pattern to find cannot be empty".to_owned());
+    }
+    Ok(input.to_owned())
+}
+
+/// Parse `--split-on`: an empty separator occurs between every two
+/// chars, which is no place to split a row.
+fn parse_split_separator(input: &str) -> Result<String, String> {
+    if input.is_empty() {
+        return Err("The separator to split on cannot be empty".to_owned());
     }
     Ok(input.to_owned())
 }

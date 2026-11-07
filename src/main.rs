@@ -112,16 +112,19 @@ fn report_changes(config: &Config, path: &Path) -> Result<RunOutcome, AppError> 
     let mut writer = encoded(target, comparison);
     let outcome = process(config, BufReader::new(reader), &mut writer)?;
 
-    let verdict = if leaves_nothing(config, outcome) {
-        "unchanged (nothing matched)"
+    let original_size = std::fs::metadata(path)
+        .map_err(|source| open_error(path, source))?
+        .len();
+    let verdict = if let Some(reason) = leaves_nothing(config, outcome, original_size) {
+        format!("unchanged ({reason})")
     } else if writer
         .get_mut()
         .differs()
         .map_err(AppError::Processing)?
     {
-        "would change"
+        "would change".to_owned()
     } else {
-        "unchanged"
+        "unchanged".to_owned()
     };
     writeln!(std::io::stdout(), "{}: {verdict}", path.display()).map_err(AppError::Processing)?;
 
@@ -185,9 +188,8 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
     let path = &resolve(path).map_err(|source| replace_error(path, source))?;
     //capture the original permissions up front so the replacement keeps
     //them instead of the temporary file's umask-derived defaults
-    let permissions = std::fs::metadata(path)
-        .map_err(|source| replace_error(path, source))?
-        .permissions();
+    let metadata = std::fs::metadata(path).map_err(|source| replace_error(path, source))?;
+    let permissions = metadata.permissions();
     let temp_path = temporary_sibling(path);
 
     //create_new refuses to open a pre-existing file or symlink, so a
@@ -235,11 +237,11 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
         }
     };
 
-    //a selection that matched nothing would write the file back empty:
-    //that is never what an edit means, so the file is left as it was
-    if leaves_nothing(config, outcome) {
+    //a selection that took no row would write the file back empty: that
+    //is never what an edit means, so the file is left as it was
+    if let Some(reason) = leaves_nothing(config, outcome, metadata.len()) {
         let _ = std::fs::remove_file(&temp_path);
-        eprintln!("{}: nothing matched, left unchanged", given.display());
+        eprintln!("{}: {reason}, left unchanged", given.display());
         return Ok(outcome);
     }
 
@@ -251,11 +253,23 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
     Ok(outcome)
 }
 
-/// Whether an in-place edit came out with nothing left of the file: a
-/// filter matched no row, and the selection drops the rows it leaves out.
-/// Such a file is not written back (and `--dry-run` reports it unchanged).
-fn leaves_nothing(config: &Config, outcome: RunOutcome) -> bool {
-    config.filters_by_content() && !outcome.matched && config.drops_unselected()
+/// Why an in-place edit would leave nothing of a file that had something
+/// in it, if it would: no row was selected — a filter matched none, or
+/// `--rows`/`--from`/`--to` lie past them — and the selection drops the
+/// rows it leaves out. Such a file is not written back (and `--dry-run`
+/// reports it unchanged). An empty file has nothing to lose.
+fn leaves_nothing(
+    config: &Config,
+    outcome: RunOutcome,
+    original_size: u64,
+) -> Option<&'static str> {
+    if outcome.matched || !config.drops_unselected() || original_size == 0 {
+        return None;
+    }
+    Some(match config.filters_by_content() {
+        true => "nothing matched",
+        false => "no row selected",
+    })
 }
 
 /// Copy the file about to be edited to a sibling named after it plus

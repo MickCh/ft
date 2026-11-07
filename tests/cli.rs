@@ -337,6 +337,118 @@ fn an_empty_find_is_refused() {
 }
 
 #[test]
+fn in_place_leaves_a_file_no_row_was_selected_in_as_it_was() {
+    let input = TempFile::new("in-place-no-row", "a\n");
+    let output = run_fxt(&["-i", "-R", "5", input.path_str()]);
+    //no filter, so nothing failed to match: exit 0, the file intact
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(fs::read_to_string(&input.path).unwrap(), "a\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no row selected, left unchanged"),
+        "{stderr}"
+    );
+
+    let dry_run = run_fxt(&["-i", "--dry-run", "--from", "zz", input.path_str()]);
+    let stdout = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(stdout.contains("unchanged (nothing matched)"), "{stdout}");
+
+    //an empty file has nothing to lose, and nothing to say about it
+    let empty = TempFile::new("in-place-empty", "");
+    let output = run_fxt(&["-i", "-R", "5", empty.path_str()]);
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn output_delimiter_rewrites_rows_no_selection_cut() {
+    let stdout = |args: &[&str], input: &str| {
+        let output = run_fxt_with_stdin(args, input);
+        assert!(output.status.success(), "{args:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    //a plain conversion, and with the fields' quotes kept
+    assert_eq!(
+        stdout(&["-F", ",", "--output-delimiter", ";"], "a,b,c\n"),
+        "a;b;c\n"
+    );
+    assert_eq!(
+        stdout(
+            &["-F", ",", "--quoted", "--output-delimiter", ";"],
+            "a,\"x,y\"\n"
+        ),
+        "a;\"x,y\"\n"
+    );
+    //after a transform that took -C, and after deleting a field
+    assert_eq!(
+        stdout(
+            &["-F", ",", "-C", "2", "--upper", "--output-delimiter", ";"],
+            "a,b\n"
+        ),
+        "a;B\n"
+    );
+    assert_eq!(
+        stdout(
+            &["-F", ",", "-d", "-C", "2", "--output-delimiter", ";"],
+            "a,b,c\n"
+        ),
+        "a;c\n"
+    );
+    //keys are still read with the input delimiter, and numbering comes after
+    assert_eq!(
+        stdout(
+            &["-F", ",", "-s", "-C", "2", "--output-delimiter", ";"],
+            "x,2\ny,1\n"
+        ),
+        "y;1\nx;2\n"
+    );
+    assert_eq!(
+        stdout(&["-F", ",", "--number", "--output-delimiter", ";"], "a,b\n"),
+        "1;a;b\n"
+    );
+    //a selection rejoins once, and an empty delimiter runs fields together
+    assert_eq!(
+        stdout(
+            &["-F", ",", "-C", "3,1", "--output-delimiter", ";"],
+            "a,b,c\n"
+        ),
+        "c;a\n"
+    );
+    assert_eq!(
+        stdout(&["-F", ",", "--output-delimiter", ""], "a,b\n"),
+        "ab\n"
+    );
+    //a summary's columns take it, its rows are not rewritten
+    assert_eq!(
+        stdout(
+            &[
+                "-F",
+                ",",
+                "--group-by",
+                "1",
+                "--sum",
+                "2",
+                "--output-delimiter",
+                ";"
+            ],
+            "a,1\na,2\n"
+        ),
+        "a;3\n"
+    );
+}
+
+#[test]
+fn an_empty_split_separator_is_named_for_what_it_is() {
+    let output = run_fxt_with_stdin(&["--split-on", ""], "a\n");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("The separator to split on cannot be empty"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn join_takes_an_empty_separator() {
     let output = run_fxt_with_stdin(&["--join", ""], "a\nb\n");
     assert!(output.status.success());
@@ -516,6 +628,17 @@ fn title_case_and_squeeze_clean_up_text() {
     let input = TempFile::new("tidy", "  hello   WIDE world  \n");
     let stdout = run_fxt_stdout(&["--title-case", "--squeeze", "--trim", input.path_str()]);
     assert_eq!(stdout, "Hello Wide World\n");
+}
+
+#[test]
+fn title_case_capitalizes_only_the_first_letter_of_a_ligature() {
+    //titlecase, not uppercase: "fi" ligature, the "dz" digraph, sharp s
+    let input = TempFile::new(
+        "title-ligature",
+        "\u{fb01}sh \u{1c6}ungla stra\u{df}e \u{df}\n",
+    );
+    let stdout = run_fxt_stdout(&["--title-case", input.path_str()]);
+    assert_eq!(stdout, "Fish \u{1c5}ungla Stra\u{df}e Ss\n");
 }
 
 #[test]

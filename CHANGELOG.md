@@ -4,6 +4,16 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Changed
+
+- `--output-delimiter` also rewrites rows nothing selected fields from: `fxt -F , --output-delimiter ';'` converts a CSV to semicolons (it printed the rows unchanged), and `-F , -d -C 2 --output-delimiter ';'` writes `a;c`. Keys are still read with the input delimiter; rows passed through unchanged keep it.
+- `--in-place` leaves a file untouched, with a note, whenever the selection takes no row of it — also for `--rows` past the end of a short file or a `--from` that never matches, not only for a content filter.
+- `--output-delimiter ''` is accepted and runs the fields together; an empty `--split-on` is refused with a message about the separator, not about a field delimiter.
+
+### Fixed
+
+- `--title-case` capitalized all of a ligature or a digraph (`ﬁsh` → `FIsh`, `ǆ` → `Ǆ`) and turned a word-initial `ß` into `SS`; the first letter now gets its titlecase (`Fish`, `ǅ`, `Ss`).
+
 ## [0.4.1] — 2026-11-07
 
 ### Added
