@@ -394,10 +394,12 @@ impl FileProcessor {
     fn sort_lines(buffer: &mut [Line], spec: &SortSpec) {
         //`Reverse` keeps the sort stable in descending order too
         use std::cmp::Reverse;
-        //a key span beyond the line yields an empty key, like `cut`
+        //a key span beyond the line yields an empty key, like `cut`; under
+        //`--quoted` the key is the fields' values, so `"b"` sorts after
+        //`a` rather than first, on its quote
         let text_key = |line: &Line| {
             spec.key_span
-                .select(&line.content)
+                .select_value(&line.content)
                 .into_owned()
         };
         //a numeric key reads the field's value (unquoted under `--quoted`);

@@ -1366,6 +1366,27 @@ fn quoted_csv_numbers_count_in_a_summary() {
 }
 
 #[test]
+fn quoted_csv_text_sorts_by_value() {
+    //the quote is not part of the value, so `"b"` sorts between a and c;
+    //the rows themselves come out as they were written
+    let input = TempFile::new("csv-quoted-text-sort", "\"b\",1\nc,2\na,3\n");
+    let args = [
+        "-F",
+        ",",
+        "--quoted",
+        "-s",
+        "--sort-key",
+        "1",
+        input.path_str(),
+    ];
+    assert_eq!(run_fxt_stdout(&args), "a,3\n\"b\",1\nc,2\n");
+
+    //without --quoted a quote is just a character, and sorts first
+    let stdout = run_fxt_stdout(&["-F", ",", "-s", "--sort-key", "1", input.path_str()]);
+    assert_eq!(stdout, "\"b\",1\na,3\nc,2\n");
+}
+
+#[test]
 fn quoted_csv_numbers_sort_numerically() {
     let input = TempFile::new("csv-quoted-sort", "x,\"10\"\ny,\"9\"\n");
     let stdout = run_fxt_stdout(&[
