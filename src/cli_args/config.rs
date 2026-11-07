@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::codec::Codec;
 use crate::encoding::Malformed;
 use crate::pattern::{BytePattern, Pattern, Syntax};
 use clap::ArgMatches;
@@ -113,6 +114,10 @@ pub struct Config {
     pub trim: bool,
     pub title_case: bool,
     pub squeeze: bool,
+    //`--encode`/`--decode`: the codec the column range is written in or
+    //read from
+    pub encode: Option<Codec>,
+    pub decode: Option<Codec>,
     //`--expand`/`--unexpand`: the tab size
     pub expand: Option<usize>,
     pub unexpand: Option<usize>,
@@ -353,6 +358,12 @@ impl TryFrom<ArgMatches> for Config {
             trim: matches.get_flag("trim"),
             title_case: matches.get_flag("title-case"),
             squeeze: matches.get_flag("squeeze"),
+            encode: matches
+                .get_one::<Codec>("encode")
+                .copied(),
+            decode: matches
+                .get_one::<Codec>("decode")
+                .copied(),
             expand: matches
                 .get_one::<usize>("expand")
                 .copied(),

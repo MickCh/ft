@@ -32,6 +32,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Regex backreferences** — `-P`/`--perl-regexp` compiles every regex with `fancy-regex` (backreferences, lookaround); the default stays the linear-time `regex`. Behind `pattern::Pattern`/`BytePattern`, so `--grep`, `--find`, `--from`/`--to` share it. A backtracking match can fail at run time, so `LinePredicate::matches`, `LineTransform::apply` and `PatternRange::admits` now return `io::Result` — the failure ends the run instead of reading as a miss. *(2026-11-06 comparison)*
 - ✅ **Grapheme columns** — `--graphemes` counts char columns and `--wrap` widths in grapheme clusters (`unicode-segmentation`). A `ColumnSpan::Graphemes` resolves its columns to char ranges per line, as field mode does, so not one char helper in `text.rs` changed; ASCII lines without a CRLF borrow the ranges as they are. *(2026-11-06 comparison)*
 - ✅ **More summaries** — `--median` (exact for integers: halves added back rather than a sum that may overflow), `--distinct`, `--first`, `--last`, per group too: four more `Aggregate`/`Accumulator` variants, no engine change. The text ones read `select_canonical`, like `--group-by`.
+- ✅ **`--encode` / `--decode`** — `codec::Codec` (base64, hex, url, by hand: a few lines each, held by a round-trip property), applied per cell by `CodecColumns` through `text::try_map_cells`. Decoding is fallible twice over: the codec, then UTF-8, which `--lossy` repairs.
 - ✅ **`--expand` / `--unexpand`** — two more `MapColumns` constructors; the mapping became a boxed closure so it can carry the tab size. A property holds `unexpand` to changing nothing `expand` would show.
 - ✅ **`--reverse-chars`** — one more `MapColumns` constructor (two: by chars, by grapheme clusters).
 - ✅ **Padding** — `--pad-left`/`--pad-right` (`PadColumns`). Padding writes into each field separately, which neither the write ranges (adjacent fields merge into one stretch) nor the char helpers (an empty field resolves to nothing) could do, so a span now also resolves to *cells* (`ColumnSpan::cell_ranges`: every field of the span, empty ones as inverted ranges) and `text::map_cells` writes into those, empty ones included.
@@ -46,7 +47,6 @@ Implemented in the order suggested below, one commit per item:
 
 Each is one new type plus one branch in `compose::build_pipeline`:
 
-- `--encode base64|url|hex` / `--decode …`, scoped to the column range
 - New predicates: `--min-fields N`, `--max-len N`, a repeatable `--grep` with AND/OR
 
 ## 2. Still open

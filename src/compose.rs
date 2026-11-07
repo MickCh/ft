@@ -11,9 +11,9 @@ use crate::pattern_range::PatternRange;
 use crate::predicate::{GrepPredicate, LinePredicate};
 use crate::reduce::{Aggregate, Join, LineReducer, Summarize};
 use crate::transform::{
-    DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, PadColumns, PadSide,
-    Pipeline, RegexReplaceInColumns, ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns,
-    SplitLines, WrapLines,
+    CodecColumns, DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, PadColumns,
+    PadSide, Pipeline, RegexReplaceInColumns, ReplaceInColumns, ReplaceInColumnsIgnoreCase,
+    SelectColumns, SplitLines, WrapLines,
 };
 
 /// Assemble the streaming processor implied by the configuration.
@@ -188,6 +188,15 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
         pipeline.push(Box::new(DeleteColumns::new(cols.claim())));
     }
 
+    //decoding comes first, so the transforms after it see the text
+    if let Some(codec) = config.decode {
+        pipeline.push(Box::new(CodecColumns::decode(
+            cols.claim(),
+            codec,
+            config.lossy,
+        )));
+    }
+
     //the find/replace pairs run in order, so a later one can rewrite
     //an earlier result
     for Replacement { find, replace } in &config.replacements {
@@ -251,6 +260,12 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
                 false => pad,
             }));
         }
+    }
+
+    //and encoding last of the column-scoped ones, so it writes down what
+    //the column became; `--decode base64 --encode hex` converts
+    if let Some(codec) = config.encode {
+        pipeline.push(Box::new(CodecColumns::encode(cols.claim(), codec)));
     }
 
     //splitting comes after the rewriting transforms (they are scoped to

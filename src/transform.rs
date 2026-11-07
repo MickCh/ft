@@ -15,6 +15,7 @@ use regex::{NoExpand, Regex, RegexBuilder};
 use std::io;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::codec::Codec;
 use crate::pattern::Pattern;
 
 use crate::columns::ColumnSpan;
@@ -294,6 +295,69 @@ impl LineTransform for MapColumns {
             &self.span.write_ranges(line),
             &self.map,
         )))
+    }
+}
+
+/// Writes each cell of a span in a codec (`--encode`) or reads it back
+/// from one (`--decode`) — every field on its own in field mode. Text is
+/// encoded as its UTF-8 bytes, and decoded bytes must be UTF-8 again;
+/// under `--lossy` they are repaired instead.
+pub struct CodecColumns {
+    span: ColumnSpan,
+    codec: Codec,
+    direction: CodecDirection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodecDirection {
+    Encode,
+    Decode { lossy: bool },
+}
+
+impl CodecColumns {
+    pub fn encode(span: impl Into<ColumnSpan>, codec: Codec) -> CodecColumns {
+        CodecColumns {
+            span: span.into(),
+            codec,
+            direction: CodecDirection::Encode,
+        }
+    }
+
+    /// Decode, repairing decoded bytes that are not UTF-8 when `lossy`.
+    pub fn decode(span: impl Into<ColumnSpan>, codec: Codec, lossy: bool) -> CodecColumns {
+        CodecColumns {
+            span: span.into(),
+            codec,
+            direction: CodecDirection::Decode { lossy },
+        }
+    }
+
+    fn convert(&self, cell: &str) -> io::Result<String> {
+        let lossy = match self.direction {
+            CodecDirection::Encode => return Ok(self.codec.encode(cell.as_bytes())),
+            CodecDirection::Decode { lossy } => lossy,
+        };
+        let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
+        let bytes = self
+            .codec
+            .decode(cell)
+            .map_err(|error| invalid(error.to_string()))?;
+        match String::from_utf8(bytes) {
+            Ok(text) => Ok(text),
+            Err(error) if lossy => Ok(String::from_utf8_lossy(error.as_bytes()).into_owned()),
+            Err(_) => Err(invalid(format!(
+                "`{cell}` decodes from {} to bytes that are not UTF-8 (--lossy replaces them)",
+                self.codec.name()
+            ))),
+        }
+    }
+}
+
+impl LineTransform for CodecColumns {
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
+        let cells = self.span.cell_ranges(line);
+        let converted = text::try_map_cells(line, &cells, |cell| self.convert(cell))?;
+        Ok(LineOutcome::Replace(converted))
     }
 }
 

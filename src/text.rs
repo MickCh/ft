@@ -238,6 +238,18 @@ pub fn map_cells<F>(line: &str, cells: &[RangeInclusive<usize>], map: F) -> Stri
 where
     F: Fn(&str) -> String,
 {
+    let mapped = try_map_cells(line, cells, |cell| Ok::<_, Infallible>(map(cell)));
+    match mapped {
+        Ok(result) => result,
+        Err(never) => match never {},
+    }
+}
+
+/// [`map_cells`] with a mapping that may fail, which fails the whole line.
+pub fn try_map_cells<F, E>(line: &str, cells: &[RangeInclusive<usize>], map: F) -> Result<String, E>
+where
+    F: Fn(&str) -> Result<String, E>,
+{
     let mut result = String::with_capacity(line.len());
     let mut cursor = 0usize;
 
@@ -253,11 +265,11 @@ where
             continue;
         }
         result.push_str(&line[cursor..from]);
-        result.push_str(&map(&line[from..to]));
+        result.push_str(&map(&line[from..to])?);
         cursor = to;
     }
     result.push_str(&line[cursor..]);
-    result
+    Ok(result)
 }
 
 /// The byte offset at which the 1-based char `column` starts — the

@@ -162,6 +162,75 @@ fn wrap_rejects_a_zero_width() {
 }
 
 #[test]
+fn encode_and_decode_each_field() {
+    let input = TempFile::new("encode", "id,żółw a/b\n2,\n");
+    assert_eq!(
+        run_fxt_stdout(&["-F", ",", "-C", "2", "--encode", "url", input.path_str()]),
+        "id,%C5%BC%C3%B3%C5%82w%20a%2Fb\n2,\n"
+    );
+    //fields 1-2 are encoded one by one, the empty one too
+    assert_eq!(
+        run_fxt_stdout(&[
+            "-F",
+            ",",
+            "-C",
+            "1-2",
+            "--encode",
+            "base64",
+            input.path_str()
+        ]),
+        "aWQ=,xbzDs8WCdyBhL2I=\nMg==,\n"
+    );
+
+    let encoded = TempFile::new("decode", "1,Zm9v\n2,YmFy\n");
+    assert_eq!(
+        run_fxt_stdout(&[
+            "-F",
+            ",",
+            "-C",
+            "2",
+            "--decode",
+            "base64",
+            encoded.path_str()
+        ]),
+        "1,foo\n2,bar\n"
+    );
+    //decoding, then encoding again, converts between codecs
+    assert_eq!(
+        run_fxt_stdout(&[
+            "-F",
+            ",",
+            "-C",
+            "2",
+            "--decode",
+            "base64",
+            "--encode",
+            "hex",
+            encoded.path_str()
+        ]),
+        "1,666f6f\n2,626172\n"
+    );
+}
+
+#[test]
+fn decoding_fails_on_invalid_input_and_lossy_repairs_bad_utf8() {
+    let invalid = TempFile::new("decode-invalid", "%zz\n");
+    let output = run_fxt(&["--decode", "url", invalid.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("`%zz` is not valid url"), "{stderr}");
+
+    //0xFF is no UTF-8: an error, unless --lossy repairs it
+    let not_utf8 = TempFile::new("decode-not-utf8", "61ff62\n");
+    let output = run_fxt(&["--decode", "hex", not_utf8.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        run_fxt_stdout(&["--lossy", "--decode", "hex", not_utf8.path_str()]),
+        "a\u{FFFD}b\n"
+    );
+}
+
+#[test]
 fn expand_and_unexpand_convert_tabs_and_spaces() {
     let tabbed = TempFile::new("expand", "a\tbc\td\n");
     assert_eq!(

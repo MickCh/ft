@@ -1,3 +1,4 @@
+use crate::codec::Codec;
 use clap::{Arg, ArgAction, ArgGroup, Command, crate_name, crate_version, value_parser};
 use clap_complete::Shell;
 use std::ops::RangeInclusive;
@@ -265,6 +266,24 @@ pub fn cli() -> Command {
                 .action(ArgAction::SetTrue)
                 .conflicts_with("delete")
                 .help("Collapse runs of whitespace in the column range into single spaces"),
+        )
+        .arg(
+            Arg::new("encode")
+                .long("encode")
+                .required(false)
+                .value_name("CODEC")
+                .conflicts_with("delete")
+                .value_parser(parse_codec)
+                .help("Encode the column range as base64, hex or url (percent encoding); each field on its own"),
+        )
+        .arg(
+            Arg::new("decode")
+                .long("decode")
+                .required(false)
+                .value_name("CODEC")
+                .conflicts_with("delete")
+                .value_parser(parse_codec)
+                .help("Decode the column range from base64, hex or url; each field on its own"),
         )
         .arg(
             Arg::new("expand")
@@ -695,6 +714,14 @@ fn parse_suffix(input: &str) -> Result<String, String> {
         return Err("The backup suffix cannot be empty".to_owned());
     }
     Ok(input.to_owned())
+}
+
+/// Parse a codec name (`--encode`, `--decode`).
+fn parse_codec(input: &str) -> Result<Codec, String> {
+    [Codec::Base64, Codec::Hex, Codec::Url]
+        .into_iter()
+        .find(|codec| codec.name().eq_ignore_ascii_case(input))
+        .ok_or_else(|| format!("Unknown codec `{input}`: expected base64, hex or url"))
 }
 
 /// Parse a width (`--wrap`, `--pad-left`, `--pad-right`, a tab size): a wrapping

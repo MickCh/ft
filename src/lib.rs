@@ -3,6 +3,7 @@
 #![cfg_attr(test, allow(clippy::single_range_in_vec_init))]
 
 pub mod cli_args;
+pub mod codec;
 pub mod columns;
 pub mod compose;
 pub mod constants;

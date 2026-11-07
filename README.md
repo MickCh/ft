@@ -46,6 +46,8 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 | `--trim` | Trim whitespace at both ends of the column range |
 | `--title-case` | Capitalize the first letter of every word in the column range |
 | `--squeeze` | Collapse runs of whitespace in the column range into single spaces |
+| `--encode <codec>` | Encode the column range as `base64`, `hex` or `url` (percent encoding); each field on its own |
+| `--decode <codec>` | Decode the column range from `base64`, `hex` or `url`; each field on its own |
 | `--expand[=<tabsize>]` | Turn tabs in the column range into spaces, a tab stop every `<tabsize>` columns (default 8; like `expand`) |
 | `--unexpand[=<tabsize>]` | Turn runs of spaces in the column range that reach a tab stop into tabs (default 8; like `unexpand -a`) |
 | `--reverse-chars` | Reverse the characters in the column range, like `rev` |
@@ -93,6 +95,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 - Regular expressions (`--grep`, `--regex --find`, `--from`, `--to`) use the `regex` crate by default, which matches in time linear in the input whatever the pattern — and so has no backreferences or lookaround. `-P` switches all of them to a backtracking engine (`fancy-regex`) that has both: `(.)\1`, `(?<=\$)\d+`, `(?!draft)`. Capture groups in a replacement are written `$1` or `${name}` either way. A pattern that backtracks without end gives up after a million steps; that is an error (exit code 2), never a silent miss.
 - `--from`/`--to` address rows by content, like `sed '/START/,/END/'`: a block runs from a line matching `--from` through the next line matching `--to`, both included. The end is looked for from the line *after* the start, so `--from '^\[db' --to '^\['` takes the `[db]` section up to and including the next header, and once a block ends the next `--from` match opens another — every block is selected. `--from` alone runs to the end of the input; `--to` alone runs from the first line through the first match (which may be the first line itself, like `sed 0,/END/`). Blocks combine with the other filters: a row is processed when it lies in `--rows` *and* in a block *and* matches `--grep`, so `--rows` and `--grep` narrow a block rather than extend it. The patterns see whole lines (not the column range), honour `--ignore-case`, and are matched as bytes, so rows outside every block pass through even if they are not valid UTF-8.
 - `--upper`, `--lower`, `--title-case`, `--squeeze` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`. `--squeeze` runs before `--trim`, so `--squeeze --trim` normalizes the whitespace of a line completely.
+- `--encode <codec>` writes the column range (the whole line without one) as `base64` (RFC 4648, padded), `hex` (lowercase) or `url` (RFC 3986 percent encoding: everything but `A-Z a-z 0-9 - . _ ~` as `%XX`), taking the text as its UTF-8 bytes; `--decode <codec>` reads it back. In field mode each field is converted on its own, empty ones too. Decoding accepts base64 without its padding and hex in either case, and leaves a `+` alone (only HTML forms mean a space by it); anything else that is not valid in the codec fails the run with exit code 2, and so do decoded bytes that are not UTF-8 — unless `--lossy`, which repairs those. Decoding runs first, before find/replace, and encoding last of the column transforms, so `--decode base64 --encode hex` converts from one to the other.
 - `--expand` replaces every tab in the column range with spaces up to the next tab stop, and `--unexpand` turns the blanks that reach a stop back into tabs: a run of two or more spaces ending at one, or spaces right before a tab (a lone space stays a space, so the gaps between words survive). Stops come every 8 columns, or every `<tabsize>` given as `--expand=4` — with the `=`, so a bare `--expand` never takes the file name after it. The stops are counted from the start of the column range, which is the line without one; columns are characters.
 - `--reverse-chars` reverses the column range (the whole line without one), like `rev`; in field mode each field is reversed in place, so `-F , -C 2 --reverse-chars` turns `abc,żółw` into `abc,włóż`. It counts characters, so a combining accent ends up on the letter before it; under `--graphemes` it reverses grapheme clusters and the accent stays where it belongs. It runs after `--trim`, before padding.
 - `--pad-left <width>` and `--pad-right <width>` pad the column range with spaces to at least `<width>` characters (grapheme clusters under `--graphemes`), on the left (right-aligning the text) or on the right; text already that wide is left whole, never cut. In field mode every field of the range is padded on its own, empty ones included, so `fxt -F , -C 2-3 --pad-left 8` right-aligns two columns of numbers; under `--quoted` the quotes count as part of the field. Padding runs after `--trim`, so `--trim --pad-left 8` aligns the trimmed text.
@@ -121,7 +124,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 The flags describe *what* to do, not in which order: whatever order they are written in, `fxt` always runs the same pipeline.
 
 1. **Row range** (`--rows` and the `--from`/`--to` blocks), then the **content filter** (`--grep`/`--invert`) — on the line *as it was read*, before any transform.
-2. **Transforms**, in this fixed order: column delete → find/replace pairs → `--upper` → `--lower` → `--title-case` → `--expand`/`--unexpand` → `--squeeze` → `--trim` → `--reverse-chars` → `--pad-left`/`--pad-right` → `--split-on` → `--wrap` → `--drop-empty` → `--number`.
+2. **Transforms**, in this fixed order: column delete → `--decode` → find/replace pairs → `--upper` → `--lower` → `--title-case` → `--expand`/`--unexpand` → `--squeeze` → `--trim` → `--reverse-chars` → `--pad-left`/`--pad-right` → `--encode` → `--split-on` → `--wrap` → `--drop-empty` → `--number`.
 3. **`--unique`**, on the transformed line.
 4. **Reordering** (`--sort`/`--tac`/`--shuffle`), then a **reducer** (`--join` or a summary) instead of writing the rows.
 
@@ -227,6 +230,10 @@ fxt -f cat -r dog -f red -r blue input.txt
 # Uppercase columns 1-3, trim whitespace around every line
 fxt --upper -C 1-3 input.txt
 fxt --trim input.txt
+
+# Decode a base64 field; percent-encode a URL path
+fxt -F , -C 3 --decode base64 data.csv
+fxt --encode url paths.txt
 
 # Right-align the numbers in fields 2-3 to a width of 8
 fxt -F , -C 2-3 --pad-left 8 data.csv
