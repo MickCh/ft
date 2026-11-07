@@ -130,6 +130,16 @@ impl Aggregate {
         }
     }
 
+    /// The aggregate with the span it compares values by read with the
+    /// input delimiter (`--distinct`), so values with different fields
+    /// never count as one.
+    fn compared_as_read(self) -> Aggregate {
+        match self {
+            Aggregate::Distinct(span) => Aggregate::Distinct(span.keyed()),
+            other => other,
+        }
+    }
+
     /// The columns this aggregate reads; `Count` reads none.
     fn span(&self) -> Option<&ColumnSpan> {
         match self {
@@ -315,7 +325,10 @@ fn midpoint(lower: Number, upper: Number) -> String {
 /// (in the order the keys first appear, so the summary follows the
 /// input), or a single row when there is nothing to group by.
 pub struct Summarize {
+    /// The `--group-by` key, as it is compared (fields as read).
     key_span: Option<ColumnSpan>,
+    /// The same key, as it is printed (`--output-delimiter`).
+    key_label_span: Option<ColumnSpan>,
     aggregates: Vec<Aggregate>,
     separator: String,
     groups: Groups,
@@ -378,36 +391,44 @@ impl NumberReadings {
 /// map.
 #[derive(Default)]
 struct Groups {
-    order: Vec<String>,
-    accumulators: HashMap<String, Vec<Accumulator>>,
+    //per group in first-seen order: the key as it is printed, and its
+    //accumulators
+    groups: Vec<(String, Vec<Accumulator>)>,
+    //where each key, as it is compared, has its group
+    index: HashMap<String, usize>,
 }
 
 impl Groups {
     /// The accumulators of the group `key`, started for `aggregates` the
-    /// first time the key appears. The key is looked up borrowed; only a
-    /// new group takes a copy of it.
-    fn get_or_start(&mut self, key: &str, aggregates: &[Aggregate]) -> &mut Vec<Accumulator> {
-        if !self.accumulators.contains_key(key) {
-            self.order.push(key.to_owned());
-            let started = aggregates
-                .iter()
-                .map(Accumulator::start)
-                .collect();
-            self.accumulators
-                .insert(key.to_owned(), started);
-        }
-        self.accumulators
-            .get_mut(key)
-            .expect("the group was just started")
+    /// first time the key appears, printed as `label` makes it. The key
+    /// is looked up borrowed; only a new group takes a copy of it.
+    fn get_or_start(
+        &mut self,
+        key: &str,
+        label: impl FnOnce() -> String,
+        aggregates: &[Aggregate],
+    ) -> &mut Vec<Accumulator> {
+        let position = match self.index.get(key) {
+            Some(&position) => position,
+            None => {
+                let started = aggregates
+                    .iter()
+                    .map(Accumulator::start)
+                    .collect();
+                self.groups.push((label(), started));
+                self.index
+                    .insert(key.to_owned(), self.groups.len() - 1);
+                self.groups.len() - 1
+            }
+        };
+        &mut self.groups[position].1
     }
 
-    /// Every group, in first-seen order.
+    /// Every group, in first-seen order, by its printed key.
     fn in_order(&self) -> impl Iterator<Item = (&str, &[Accumulator])> {
-        self.order.iter().filter_map(|key| {
-            self.accumulators
-                .get(key)
-                .map(|accumulators| (key.as_str(), accumulators.as_slice()))
-        })
+        self.groups
+            .iter()
+            .map(|(label, accumulators)| (label.as_str(), accumulators.as_slice()))
     }
 }
 
@@ -423,10 +444,21 @@ impl Summarize {
         //a sum of 0 — like `grep -c` or `wc -l`. With --group-by, no
         //rows means no groups, and no rows to print.
         if key_span.is_none() {
-            groups.get_or_start("", &aggregates);
+            groups.get_or_start("", String::new, &aggregates);
         }
+        //a key and a distinct value are compared as the input holds them,
+        //with its delimiter between their fields: under another output
+        //delimiter `a;b`+`1` and `a`+`b;1` would otherwise meet as
+        //`a;b;1`. A key is still printed in the output's form
+        let aggregates: Vec<Aggregate> = aggregates
+            .into_iter()
+            .map(Aggregate::compared_as_read)
+            .collect();
+        let key_label_span = key_span.clone();
+        let key_span = key_span.map(ColumnSpan::keyed);
         Summarize {
             key_span,
+            key_label_span,
             readings: NumberReadings::new(&aggregates),
             aggregates,
             separator: separator.into(),
@@ -455,9 +487,16 @@ impl LineReducer for Summarize {
         };
 
         self.readings.read(&split);
+        let label_span = &self.key_label_span;
+        let label = || match label_span {
+            Some(span) => span
+                .select_canonical_in(&split)
+                .into_owned(),
+            None => String::new(),
+        };
         let accumulators = self
             .groups
-            .get_or_start(&key, &self.aggregates);
+            .get_or_start(&key, label, &self.aggregates);
         let aggregates = self
             .aggregates
             .iter()

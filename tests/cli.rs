@@ -484,6 +484,48 @@ fn keys_are_read_with_the_input_delimiter() {
 }
 
 #[test]
+fn group_keys_and_distinct_values_compare_the_fields_as_read() {
+    //"a;b"+"1" and "a"+"b;1" both print as "a;b;1", but are two groups
+    let input = "a;b,1\na,b;1\na;b,1\n";
+    let output = run_fxt_with_stdin(
+        &[
+            "-F",
+            ",",
+            "--group-by",
+            "1-2",
+            "--count",
+            "--output-delimiter",
+            ";",
+        ],
+        input,
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "a;b;1;2\na;b;1;1\n"
+    );
+    //and two distinct values
+    let output = run_fxt_with_stdin(
+        &["-F", ",", "--distinct", "1-2", "--output-delimiter", ";"],
+        input,
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "2\n");
+}
+
+#[test]
+fn a_quote_cannot_delimit_csv_output() {
+    let output = run_fxt_with_stdin(
+        &["-F", ",", "--quoted", "--output-delimiter", "\""],
+        "a,b\n",
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot contain a quote"), "{stderr}");
+    //without --quoted a quote is just text
+    let output = run_fxt_with_stdin(&["-F", ",", "--output-delimiter", "\""], "a,b\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "a\"b\n");
+}
+
+#[test]
 fn join_rows_get_the_output_delimiter_too() {
     let output = run_fxt_with_stdin(
         &["-F", ",", "--join", "|", "--output-delimiter", ";"],

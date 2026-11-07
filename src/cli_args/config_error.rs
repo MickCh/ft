@@ -11,6 +11,7 @@ pub enum ConfigError {
     DeleteWithoutRange,
     IgnoreCaseWithoutPattern,
     InPlaceWithoutFile,
+    QuoteInOutputDelimiter,
     InvalidRegex(String),
 }
 
@@ -59,6 +60,10 @@ impl fmt::Display for ConfigError {
                     "In-place editing needs an input file, not standard input"
                 )
             }
+            ConfigError::QuoteInOutputDelimiter => write!(
+                f,
+                "Under --quoted the output delimiter cannot contain a quote: the output would not be CSV"
+            ),
             ConfigError::InvalidRegex(error) => write!(f, "Invalid regular expression: {error}"),
         }
     }

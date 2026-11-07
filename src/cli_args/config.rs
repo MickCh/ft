@@ -505,6 +505,17 @@ impl TryFrom<ArgMatches> for Config {
             return Err(ConfigError::IgnoreCaseWithoutPattern);
         }
 
+        //a quote is what CSV quotes fields with; delimiting fields with it
+        //too would write something no CSV reader can split again
+        if config.quoted
+            && config
+                .output_delimiter
+                .as_ref()
+                .is_some_and(|delimiter| delimiter.contains('"'))
+        {
+            return Err(ConfigError::QuoteInOutputDelimiter);
+        }
+
         //--in-place rewrites its inputs, and standard input cannot be
         //rewritten, so every input has to be a file
         if config.in_place.is_some()

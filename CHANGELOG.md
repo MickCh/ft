@@ -13,11 +13,12 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 - `--output-delimiter ''` is accepted and runs the fields together; an empty `--split-on` is refused with a message about the separator, not about a field delimiter.
 - `--join` rows get `--output-delimiter` too (`a,b` and `c,d` join as `a;b|c;d`); only a summary, which splits its rows, keeps them as read.
 - Under `--quoted`, a field that holds the new `--output-delimiter` is quoted, so the output stays CSV (`a;b,c` → `"a;b";c`).
+- Under `--quoted`, an `--output-delimiter` containing `"` is refused: no CSV reader could split the output again.
 - `--in-place` refuses a summary and `--join`, which would replace each file with a number or a single row.
 
 ### Fixed
 
-- Sort, unique and grep keys spanning several fields were read with `--output-delimiter` between them: `-F , -u --output-delimiter ';'` took `a,b` and `a;b` for duplicates and dropped one, `-g ,` found nothing, and the sort compared the wrong character. Keys are read with the input delimiter again.
+- Sort, unique and grep keys spanning several fields were read with `--output-delimiter` between them: `-F , -u --output-delimiter ';'` took `a,b` and `a;b` for duplicates and dropped one, `-g ,` found nothing, and the sort compared the wrong character. Keys are read with the input delimiter again — `--group-by` and `--distinct` too, which merged `a;b`+`1` with `a`+`b;1`; a group key is still printed with the output delimiter.
 - `--title-case` started a new word after a combining accent (`e` + U+0301 + `cole` → `ÉCole`) and lowercased a final sigma as `σ`; a word is now made of grapheme clusters and lowercased as a whole (`École`, `Σοφος`).
 - `--title-case` capitalized all of a ligature or a digraph (`ﬁsh` → `FIsh`, `ǆ` → `Ǆ`) and turned a word-initial `ß` into `SS`; the first letter now gets its titlecase (`Fish`, `ǅ`, `Ss`).
 

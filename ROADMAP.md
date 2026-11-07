@@ -186,6 +186,7 @@ A second run, 1038 cases, all passing on 0.4.1 (report `fxt-testy-funkcjonalne-0
 - ✅ **B1 — keys read with the output delimiter** — a key over several fields (the whole row under bare `-F`, `-C 1-`, `--*-key 1-2`) was joined with `--output-delimiter`, so `-u` dropped `a;b` as a duplicate of `a,b`, `-g ,` matched nothing and the sort compared the wrong character. `ColumnSpan::keyed` clears the output delimiter of every key span (`ColumnClaims::key_or_cols`).
 - ✅ **B2 — `--title-case` on NFD text** — a combining accent ended the word (`e\u0301cole` → `ÉCole`). Words are now runs of grapheme clusters starting with a letter or digit.
 - ✅ **M1** — `--join` rows get the output delimiter (only a summary is left out). **M2** — `--in-place` conflicts with summaries and `--join`. **M3** — under `--quoted` a field holding the new delimiter is quoted. **M4** — documented: a column range's start starts a word. **M5** — a word's tail is lowercased as a whole, so a final sigma is `ς`.
+- ✅ **After the re-run** — of its three observations, one was a B1 left over: `--group-by` (and `--distinct`) joined key fields with the output delimiter, so `a;b`+`1` and `a`+`b;1` became one group. `Summarize` now compares keys keyed and prints them with the output delimiter (`Groups` keeps a label per group). `--output-delimiter` containing `"` under `--quoted` is refused. The third — `-C 2-` starting on a combining accent — is char columns working as documented; `--graphemes` is the way to keep clusters whole.
 
 ## 4. Tool maturity (cheap, highly visible)
 
