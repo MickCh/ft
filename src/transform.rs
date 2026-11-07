@@ -11,6 +11,9 @@
 use std::borrow::Cow;
 
 use regex::{NoExpand, Regex, RegexBuilder};
+use std::io;
+
+use crate::pattern::Pattern;
 
 use crate::columns::ColumnSpan;
 use crate::text;
@@ -30,8 +33,9 @@ pub enum LineOutcome {
 
 /// A single per-line operation in the processing pipeline.
 pub trait LineTransform {
-    /// Transform line content (without its terminator).
-    fn apply(&mut self, line: &str) -> LineOutcome;
+    /// Transform line content (without its terminator). Fails only when
+    /// a pattern cannot be matched (a `-P` regex that backtracks out).
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome>;
 }
 
 /// What a whole pipeline made of one input line: still a single line —
@@ -46,9 +50,9 @@ pub enum Lines<'a> {
 impl<'a> Lines<'a> {
     /// Run every line through one more transform, flattening whatever
     /// each of them expands into.
-    fn through(self, transform: &mut dyn LineTransform) -> Lines<'a> {
-        match self {
-            Lines::One(content) => match transform.apply(&content) {
+    fn through(self, transform: &mut dyn LineTransform) -> io::Result<Lines<'a>> {
+        Ok(match self {
+            Lines::One(content) => match transform.apply(&content)? {
                 LineOutcome::Keep => Lines::One(content),
                 LineOutcome::Replace(rewritten) => Lines::One(Cow::Owned(rewritten)),
                 LineOutcome::Expand(lines) => Lines::Several(lines),
@@ -57,7 +61,7 @@ impl<'a> Lines<'a> {
             Lines::Several(contents) => {
                 let mut lines = Vec::with_capacity(contents.len());
                 for content in contents {
-                    match transform.apply(&content) {
+                    match transform.apply(&content)? {
                         LineOutcome::Keep => lines.push(content),
                         LineOutcome::Replace(rewritten) => lines.push(rewritten),
                         LineOutcome::Expand(expanded) => lines.extend(expanded),
@@ -66,7 +70,7 @@ impl<'a> Lines<'a> {
                 }
                 Lines::Several(lines)
             }
-        }
+        })
     }
 }
 
@@ -91,10 +95,10 @@ impl Pipeline {
 
     /// Run one line through every transform. With no transforms
     /// configured the line passes through without an allocation.
-    pub fn apply<'a>(&mut self, line: &'a str) -> Lines<'a> {
+    pub fn apply<'a>(&mut self, line: &'a str) -> io::Result<Lines<'a>> {
         self.transforms
             .iter_mut()
-            .fold(Lines::One(Cow::Borrowed(line)), |lines, transform| {
+            .try_fold(Lines::One(Cow::Borrowed(line)), |lines, transform| {
                 lines.through(transform.as_mut())
             })
     }
@@ -114,8 +118,8 @@ impl SelectColumns {
 }
 
 impl LineTransform for SelectColumns {
-    fn apply(&mut self, line: &str) -> LineOutcome {
-        LineOutcome::Replace(self.span.select(line).into_owned())
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
+        Ok(LineOutcome::Replace(self.span.select(line).into_owned()))
     }
 }
 
@@ -132,8 +136,11 @@ impl DeleteColumns {
 }
 
 impl LineTransform for DeleteColumns {
-    fn apply(&mut self, line: &str) -> LineOutcome {
-        LineOutcome::Replace(text::remove_ranges(line, &self.span.delete_ranges(line)))
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
+        Ok(LineOutcome::Replace(text::remove_ranges(
+            line,
+            &self.span.delete_ranges(line),
+        )))
     }
 }
 
@@ -235,12 +242,12 @@ fn squeeze_whitespace(within: &str) -> String {
 }
 
 impl LineTransform for MapColumns {
-    fn apply(&mut self, line: &str) -> LineOutcome {
-        LineOutcome::Replace(text::map_ranges(
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
+        Ok(LineOutcome::Replace(text::map_ranges(
             line,
             &self.span.write_ranges(line),
             self.map,
-        ))
+        )))
     }
 }
 
@@ -262,18 +269,18 @@ impl ReplaceInColumns {
 }
 
 impl LineTransform for ReplaceInColumns {
-    fn apply(&mut self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
         //an occurrence inside the span is an occurrence in the line, so a
         //line without one is left as it is — no copy for the common case
         if !line.contains(self.find.as_str()) {
-            return LineOutcome::Keep;
+            return Ok(LineOutcome::Keep);
         }
-        LineOutcome::Replace(text::replace_in_ranges(
+        Ok(LineOutcome::Replace(text::replace_in_ranges(
             line,
             &self.find,
             &self.replace,
             &self.span.write_ranges(line),
-        ))
+        )))
     }
 }
 
@@ -305,15 +312,15 @@ impl ReplaceInColumnsIgnoreCase {
 }
 
 impl LineTransform for ReplaceInColumnsIgnoreCase {
-    fn apply(&mut self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
         //the pattern is an escaped literal — no anchors, no word
         //boundaries — so a match inside the span is a match in the line,
         //and a line without one needs no copy. (Not so for a user regex:
         //`^b` matches column 2 of `ab`, but not the line.)
         if !self.pattern.is_match(line) {
-            return LineOutcome::Keep;
+            return Ok(LineOutcome::Keep);
         }
-        LineOutcome::Replace(text::map_ranges(
+        Ok(LineOutcome::Replace(text::map_ranges(
             line,
             &self.span.write_ranges(line),
             |within| {
@@ -321,21 +328,21 @@ impl LineTransform for ReplaceInColumnsIgnoreCase {
                     .replace_all(within, NoExpand(&self.replace))
                     .into_owned()
             },
-        ))
+        )))
     }
 }
 
 /// Replaces every regex match with the replacement (which may use
 /// capture group references like `$1`) within a column span.
 pub struct RegexReplaceInColumns {
-    pattern: Regex,
+    pattern: Pattern,
     replacement: String,
     span: ColumnSpan,
 }
 
 impl RegexReplaceInColumns {
     pub fn new(
-        pattern: Regex,
+        pattern: Pattern,
         replacement: String,
         span: impl Into<ColumnSpan>,
     ) -> RegexReplaceInColumns {
@@ -348,16 +355,12 @@ impl RegexReplaceInColumns {
 }
 
 impl LineTransform for RegexReplaceInColumns {
-    fn apply(&mut self, line: &str) -> LineOutcome {
-        LineOutcome::Replace(text::map_ranges(
-            line,
-            &self.span.write_ranges(line),
-            |within| {
-                self.pattern
-                    .replace_all(within, self.replacement.as_str())
-                    .into_owned()
-            },
-        ))
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
+        let replaced = text::try_map_ranges(line, &self.span.write_ranges(line), |within| {
+            self.pattern
+                .replace_all(within, &self.replacement)
+        })?;
+        Ok(LineOutcome::Replace(replaced))
     }
 }
 
@@ -387,12 +390,12 @@ impl WrapLines {
 }
 
 impl LineTransform for WrapLines {
-    fn apply(&mut self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
         let chunks = match self.graphemes {
             true => text::wrap_graphemes(line, self.width),
             false => text::wrap_chars(line, self.width),
         };
-        match chunks.as_slice() {
+        Ok(match chunks.as_slice() {
             //a line that already fits is left alone, allocating nothing
             [_] => LineOutcome::Keep,
             chunks => LineOutcome::Expand(
@@ -401,7 +404,7 @@ impl LineTransform for WrapLines {
                     .map(|chunk| (*chunk).to_owned())
                     .collect(),
             ),
-        }
+        })
     }
 }
 
@@ -424,10 +427,10 @@ impl NumberLines {
 }
 
 impl LineTransform for NumberLines {
-    fn apply(&mut self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
         let numbered = format!("{}{}{line}", self.next, self.separator);
         self.next += 1;
-        LineOutcome::Replace(numbered)
+        Ok(LineOutcome::Replace(numbered))
     }
 }
 
@@ -446,16 +449,16 @@ impl SplitLines {
 }
 
 impl LineTransform for SplitLines {
-    fn apply(&mut self, line: &str) -> LineOutcome {
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
         if !line.contains(&self.separator) {
             //nothing to split on: the line stands as it is
-            return LineOutcome::Keep;
+            return Ok(LineOutcome::Keep);
         }
-        LineOutcome::Expand(
+        Ok(LineOutcome::Expand(
             line.split(&self.separator)
                 .map(str::to_owned)
                 .collect(),
-        )
+        ))
     }
 }
 
@@ -465,12 +468,11 @@ impl LineTransform for SplitLines {
 pub struct DropEmpty;
 
 impl LineTransform for DropEmpty {
-    fn apply(&mut self, line: &str) -> LineOutcome {
-        if line.is_empty() {
-            LineOutcome::Drop
-        } else {
-            LineOutcome::Keep
-        }
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
+        Ok(match line.is_empty() {
+            true => LineOutcome::Drop,
+            false => LineOutcome::Keep,
+        })
     }
 }
 
@@ -478,11 +480,12 @@ impl LineTransform for DropEmpty {
 mod tests {
     use super::*;
     use crate::columns::{ColumnList, FieldSpan};
+    use crate::pattern::Syntax;
 
     /// The one line a transform leaves behind, for the transforms that
     /// rewrite a line rather than expand or drop it.
     fn applied(transform: &mut dyn LineTransform, line: &str) -> String {
-        match transform.apply(line) {
+        match transform.apply(line).unwrap() {
             LineOutcome::Keep => line.to_owned(),
             LineOutcome::Replace(rewritten) => rewritten,
             outcome => panic!("expected a single line, got {outcome:?}"),
@@ -565,15 +568,18 @@ mod tests {
 
     #[test]
     fn regex_replace_in_columns_replaces_matches() {
-        let mut transform =
-            RegexReplaceInColumns::new(Regex::new(r"\d+").unwrap(), "N".to_owned(), 1..=usize::MAX);
+        let mut transform = RegexReplaceInColumns::new(
+            Pattern::new(r"\d+", false, Syntax::Linear).unwrap(),
+            "N".to_owned(),
+            1..=usize::MAX,
+        );
         assert_eq!(applied(&mut transform, "a1 bb22 ccc333"), "aN bbN cccN");
     }
 
     #[test]
     fn regex_replace_supports_capture_groups() {
         let mut transform = RegexReplaceInColumns::new(
-            Regex::new(r"(\w+)@(\w+)").unwrap(),
+            Pattern::new(r"(\w+)@(\w+)", false, Syntax::Linear).unwrap(),
             "$2.$1".to_owned(),
             1..=usize::MAX,
         );
@@ -582,8 +588,11 @@ mod tests {
 
     #[test]
     fn regex_replace_respects_column_range() {
-        let mut transform =
-            RegexReplaceInColumns::new(Regex::new(r"\d").unwrap(), "X".to_owned(), 1..=4);
+        let mut transform = RegexReplaceInColumns::new(
+            Pattern::new(r"\d", false, Syntax::Linear).unwrap(),
+            "X".to_owned(),
+            1..=4,
+        );
         assert_eq!(applied(&mut transform, "1234567890"), "XXXX567890");
     }
 
@@ -737,7 +746,7 @@ mod tests {
             Box::new(NumberLines::new(".")),
         ]);
         assert_eq!(
-            pipeline.apply("abcde"),
+            pipeline.apply("abcde").unwrap(),
             Lines::Several(vec!["1.ab".to_owned(), "2.cd".to_owned(), "3.e".to_owned()])
         );
     }
@@ -746,7 +755,7 @@ mod tests {
     fn wrap_expands_a_long_line_into_several() {
         let mut transform = WrapLines::new(3);
         assert_eq!(
-            transform.apply("abcdefg"),
+            transform.apply("abcdefg").unwrap(),
             LineOutcome::Expand(vec!["abc".to_owned(), "def".to_owned(), "g".to_owned()])
         );
     }
@@ -758,15 +767,15 @@ mod tests {
         let mut folded = ReplaceInColumnsIgnoreCase::new("foo", "bar".to_owned(), 1..=usize::MAX);
 
         // When / Then a line without it is kept, uncopied
-        assert_eq!(exact.apply("nothing here"), LineOutcome::Keep);
-        assert_eq!(folded.apply("nothing here"), LineOutcome::Keep);
+        assert_eq!(exact.apply("nothing here").unwrap(), LineOutcome::Keep);
+        assert_eq!(folded.apply("nothing here").unwrap(), LineOutcome::Keep);
         // and a line with it is still rewritten
         assert_eq!(
-            exact.apply("a foo"),
+            exact.apply("a foo").unwrap(),
             LineOutcome::Replace("a bar".to_owned())
         );
         assert_eq!(
-            folded.apply("a FOO"),
+            folded.apply("a FOO").unwrap(),
             LineOutcome::Replace("a bar".to_owned())
         );
     }
@@ -774,24 +783,27 @@ mod tests {
     #[test]
     fn wrap_keeps_a_line_that_already_fits() {
         let mut transform = WrapLines::new(3);
-        assert_eq!(transform.apply("abc"), LineOutcome::Keep);
-        assert_eq!(transform.apply(""), LineOutcome::Keep);
+        assert_eq!(transform.apply("abc").unwrap(), LineOutcome::Keep);
+        assert_eq!(transform.apply("").unwrap(), LineOutcome::Keep);
     }
 
     #[test]
     fn drop_empty_drops_only_empty_lines() {
         let mut transform = DropEmpty;
-        assert_eq!(transform.apply(""), LineOutcome::Drop);
-        assert_eq!(transform.apply("a"), LineOutcome::Keep);
+        assert_eq!(transform.apply("").unwrap(), LineOutcome::Drop);
+        assert_eq!(transform.apply("a").unwrap(), LineOutcome::Keep);
         //whitespace is content; --trim in front of it makes it empty
-        assert_eq!(transform.apply("  "), LineOutcome::Keep);
+        assert_eq!(transform.apply("  ").unwrap(), LineOutcome::Keep);
     }
 
     #[test]
     fn empty_pipeline_borrows_the_line() {
         let mut pipeline = Pipeline::default();
         assert!(pipeline.is_empty());
-        assert_eq!(pipeline.apply("abc"), Lines::One(Cow::Borrowed("abc")));
+        assert_eq!(
+            pipeline.apply("abc").unwrap(),
+            Lines::One(Cow::Borrowed("abc"))
+        );
     }
 
     #[test]
@@ -804,7 +816,10 @@ mod tests {
             )),
             Box::new(MapColumns::uppercase(1..=usize::MAX)),
         ]);
-        assert_eq!(pipeline.apply("a"), Lines::One(Cow::Owned("B".to_owned())));
+        assert_eq!(
+            pipeline.apply("a").unwrap(),
+            Lines::One(Cow::Owned("B".to_owned()))
+        );
     }
 
     #[test]
@@ -815,7 +830,7 @@ mod tests {
             Box::new(MapColumns::uppercase(1..=usize::MAX)),
         ]);
         assert_eq!(
-            pipeline.apply("abcde"),
+            pipeline.apply("abcde").unwrap(),
             Lines::Several(vec!["AB".to_owned(), "CD".to_owned(), "E".to_owned()])
         );
     }
@@ -825,12 +840,12 @@ mod tests {
         //splitting "a,,b" into fields would leave an empty middle line
         let mut pipeline = Pipeline::new(vec![Box::new(WrapLines::new(1)), Box::new(DropEmpty)]);
         assert_eq!(
-            pipeline.apply("ab"),
+            pipeline.apply("ab").unwrap(),
             Lines::Several(vec!["a".to_owned(), "b".to_owned()])
         );
 
         //a dropped single line leaves nothing behind
         let mut pipeline = Pipeline::new(vec![Box::new(DropEmpty)]);
-        assert_eq!(pipeline.apply(""), Lines::Several(Vec::new()));
+        assert_eq!(pipeline.apply("").unwrap(), Lines::Several(Vec::new()));
     }
 }

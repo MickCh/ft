@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use crate::pattern::{BytePattern, Pattern, Syntax};
 use clap::ArgMatches;
 use encoding_rs::Encoding;
-use regex::{Regex, RegexBuilder};
 
 use super::ConfigError;
 use crate::columns::{ColumnList, ColumnSpan, FieldSpan};
@@ -14,7 +14,7 @@ use crate::ranges::RangeSpec;
 #[derive(Debug)]
 pub enum FindPattern {
     Literal(String),
-    Regex(Regex),
+    Regex(Pattern),
 }
 
 /// One `--find`/`--replace` pair. Pairing the two arguments up while
@@ -133,11 +133,11 @@ pub struct Config {
     pub join: Option<String>,
     //the summary to write instead of the processed rows
     pub summary: SummarySpec,
-    pub grep: Option<Regex>,
+    pub grep: Option<Pattern>,
     //`--from`/`--to`: rows addressed by content, matched as bytes so the
     //rows outside them never need to be UTF-8
-    pub from_pattern: Option<regex::bytes::Regex>,
-    pub to_pattern: Option<regex::bytes::Regex>,
+    pub from_pattern: Option<BytePattern>,
+    pub to_pattern: Option<BytePattern>,
     pub invert: bool,
     //answer only whether anything matched: write nothing, and say it
     //with the exit code
@@ -239,14 +239,17 @@ impl TryFrom<ArgMatches> for Config {
     /// 1-based bounds) is enforced earlier, by the clap value parsers.
     fn try_from(matches: ArgMatches) -> Result<Config, ConfigError> {
         let ignore_case = matches.get_flag("ignore-case");
+        //-P: every regex may use backreferences and lookaround
+        let syntax = match matches.get_flag("perl-regexp") {
+            true => Syntax::Backtracking,
+            false => Syntax::Linear,
+        };
+        let compile = |source: &String| {
+            Pattern::new(source, ignore_case, syntax).map_err(ConfigError::InvalidRegex)
+        };
         let grep = matches
             .get_one::<String>("grep")
-            .map(|pattern| {
-                RegexBuilder::new(pattern)
-                    .case_insensitive(ignore_case)
-                    .build()
-                    .map_err(|e| ConfigError::InvalidRegex(e.to_string()))
-            })
+            .map(compile)
             .transpose()?;
         let regex_mode = matches.get_flag("regex");
         let find_patterns = matches
@@ -255,12 +258,7 @@ impl TryFrom<ArgMatches> for Config {
             .flatten()
             .map(|pattern| {
                 if regex_mode {
-                    Ok(FindPattern::Regex(
-                        RegexBuilder::new(pattern)
-                            .case_insensitive(ignore_case)
-                            .build()
-                            .map_err(|e| ConfigError::InvalidRegex(e.to_string()))?,
-                    ))
+                    Ok(FindPattern::Regex(compile(pattern)?))
                 } else {
                     Ok(FindPattern::Literal(pattern.clone()))
                 }
@@ -385,8 +383,8 @@ impl TryFrom<ArgMatches> for Config {
                     .cloned(),
             },
             grep,
-            from_pattern: row_pattern(&matches, "from", ignore_case)?,
-            to_pattern: row_pattern(&matches, "to", ignore_case)?,
+            from_pattern: row_pattern(&matches, "from", ignore_case, syntax)?,
+            to_pattern: row_pattern(&matches, "to", ignore_case, syntax)?,
             invert: matches.get_flag("invert"),
             quiet: matches.get_flag("quiet"),
             unique: matches.get_flag("unique"),
@@ -449,14 +447,12 @@ fn row_pattern(
     matches: &ArgMatches,
     id: &str,
     ignore_case: bool,
-) -> Result<Option<regex::bytes::Regex>, ConfigError> {
+    syntax: Syntax,
+) -> Result<Option<BytePattern>, ConfigError> {
     matches
         .get_one::<String>(id)
-        .map(|pattern| {
-            regex::bytes::RegexBuilder::new(pattern)
-                .case_insensitive(ignore_case)
-                .build()
-                .map_err(|e| ConfigError::InvalidRegex(e.to_string()))
+        .map(|source| {
+            BytePattern::new(source, ignore_case, syntax).map_err(ConfigError::InvalidRegex)
         })
         .transpose()
 }
@@ -847,7 +843,7 @@ mod tests {
         else {
             panic!("expected a regex find pattern");
         };
-        assert!(pattern.is_match("ABC"));
+        assert!(pattern.is_match("ABC").unwrap());
     }
 
     #[test]
@@ -861,13 +857,25 @@ mod tests {
     #[test]
     fn grep_compiles_as_regex() {
         let config = config_from(&["fxt", "-g", "a+b", "input.txt"]).unwrap();
-        assert!(config.grep.unwrap().is_match("aaab"));
+        assert!(
+            config
+                .grep
+                .unwrap()
+                .is_match("aaab")
+                .unwrap()
+        );
     }
 
     #[test]
     fn grep_honors_ignore_case() {
         let config = config_from(&["fxt", "--ignore-case", "-g", "abc", "input.txt"]).unwrap();
-        assert!(config.grep.unwrap().is_match("ABC"));
+        assert!(
+            config
+                .grep
+                .unwrap()
+                .is_match("ABC")
+                .unwrap()
+        );
     }
 
     #[test]
@@ -887,12 +895,14 @@ mod tests {
                 .from_pattern
                 .unwrap()
                 .is_match(b"abc")
+                .unwrap()
         );
         assert!(
             config
                 .to_pattern
                 .unwrap()
                 .is_match(b"xyz")
+                .unwrap()
         );
         let error = config_from(&["fxt", "--from", "[unclosed", "input.txt"]).unwrap_err();
         assert!(matches!(error, ConfigError::InvalidRegex(_)));
@@ -908,6 +918,7 @@ mod tests {
                 .to_pattern
                 .unwrap()
                 .is_match(b"end")
+                .unwrap()
         );
         assert!(config_from(&["fxt", "-q", "--from", "x", "input.txt"]).is_ok());
         assert!(

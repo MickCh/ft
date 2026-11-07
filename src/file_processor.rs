@@ -234,7 +234,7 @@ impl FileProcessor {
         //every line moves the pattern range along — also one outside
         //`--rows`, since it may open or close a block all the same
         let in_pattern_range = match &mut self.pattern_range {
-            Some(range) => range.admits(text::without_line_terminator(raw_line)),
+            Some(range) => range.admits(text::without_line_terminator(raw_line))?,
             None => true,
         };
 
@@ -262,7 +262,7 @@ impl FileProcessor {
         let (content, terminator) = text::split_line_terminator(utf8_line);
 
         if let Some(predicate) = &self.predicate
-            && !predicate.matches(content)
+            && !predicate.matches(content)?
         {
             //a non-matching line is treated like one outside the row range
             if self.row_mode.keeps_unselected() {
@@ -280,7 +280,7 @@ impl FileProcessor {
         }
 
         //a transform may expand the line into several, or drop it
-        match self.transforms.apply(content) {
+        match self.transforms.apply(content)? {
             Lines::One(content) => self.emit(&content, terminator, state, writer),
             Lines::Several(contents) => contents
                 .iter()

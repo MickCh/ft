@@ -7,7 +7,9 @@
 //! told every line in order and answers for that line, carrying its
 //! state — inside a block or not — from one to the next.
 
-use regex::bytes::Regex;
+use std::io;
+
+use crate::pattern::BytePattern;
 
 /// A row range bounded by patterns. Like `sed`, it is inclusive at both
 /// ends, the end is looked for from the line *after* the start (so one
@@ -23,8 +25,8 @@ use regex::bytes::Regex;
 /// through untouched, as it would outside a numeric range.
 #[derive(Debug)]
 pub struct PatternRange {
-    from: Option<Regex>,
-    to: Option<Regex>,
+    from: Option<BytePattern>,
+    to: Option<BytePattern>,
     inside: bool,
     /// Whether the implicit block of a range without a start has been
     /// opened: it is opened once, at the first line.
@@ -32,7 +34,7 @@ pub struct PatternRange {
 }
 
 impl PatternRange {
-    pub fn new(from: Option<Regex>, to: Option<Regex>) -> PatternRange {
+    pub fn new(from: Option<BytePattern>, to: Option<BytePattern>) -> PatternRange {
         PatternRange {
             from,
             to,
@@ -45,45 +47,47 @@ impl PatternRange {
     /// block. Must be told every line of the input, in order — also the
     /// ones another filter will reject — since each one may open or
     /// close a block.
-    pub fn admits(&mut self, line: &[u8]) -> bool {
+    pub fn admits(&mut self, line: &[u8]) -> io::Result<bool> {
         if self.inside {
-            if self.ends_at(line) {
+            if self.ends_at(line)? {
                 self.inside = false;
             }
-            return true;
+            return Ok(true);
         }
 
         match &self.from {
-            Some(start) if start.is_match(line) => {
+            Some(start) if start.is_match(line)? => {
                 //the end is only looked for from the next line on
                 self.inside = true;
-                true
+                Ok(true)
             }
-            Some(_) => false,
+            Some(_) => Ok(false),
             None if !self.opened_at_start => {
                 self.opened_at_start = true;
                 //no start pattern, so nothing else could claim this line:
                 //the end may close the block right here
-                self.inside = !self.ends_at(line);
-                true
+                self.inside = !self.ends_at(line)?;
+                Ok(true)
             }
-            None => false,
+            None => Ok(false),
         }
     }
 
-    fn ends_at(&self, line: &[u8]) -> bool {
-        self.to
-            .as_ref()
-            .is_some_and(|end| end.is_match(line))
+    fn ends_at(&self, line: &[u8]) -> io::Result<bool> {
+        match &self.to {
+            Some(end) => end.is_match(line),
+            None => Ok(false),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pattern::Syntax;
 
     fn range(from: Option<&str>, to: Option<&str>) -> PatternRange {
-        let compile = |pattern: &str| Regex::new(pattern).unwrap();
+        let compile = |pattern: &str| BytePattern::new(pattern, false, Syntax::Linear).unwrap();
         PatternRange::new(from.map(compile), to.map(compile))
     }
 
@@ -92,7 +96,7 @@ mod tests {
         input
             .iter()
             .copied()
-            .filter(|line| range.admits(line.as_bytes()))
+            .filter(|line| range.admits(line.as_bytes()).unwrap())
             .collect()
     }
 
@@ -169,7 +173,7 @@ mod tests {
         let mut range = range(Some("START"), None);
 
         // When / Then it is matched without complaint, and not admitted
-        assert!(!range.admits(b"\xff\xfe"));
-        assert!(range.admits(b"START"));
+        assert!(!range.admits(b"\xff\xfe").unwrap());
+        assert!(range.admits(b"START").unwrap());
     }
 }

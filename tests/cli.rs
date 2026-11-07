@@ -1932,3 +1932,58 @@ fn graphemes_wrap_without_splitting_a_cluster() {
         "e\u{301}t\nud\ne\n\u{1F469}\u{200D}\u{1F4BB}x\ny\n"
     );
 }
+
+#[test]
+fn perl_regexp_allows_backreferences_in_grep() {
+    let input = TempFile::new("pcre-grep", "book\nbok\nkeep\nkep\n");
+    let stdout = run_fxt_stdout(&["-P", "-g", r"(.)\1", input.path_str()]);
+    assert_eq!(stdout, "book\nkeep\n");
+
+    //the default engine rejects them, and says so
+    let output = run_fxt(&["-g", r"(.)\1", input.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("backreferences are not supported"));
+}
+
+#[test]
+fn perl_regexp_replaces_with_lookaround_and_groups() {
+    let input = TempFile::new("pcre-replace", "$15 and 15% and $7\nthe the end\n");
+    let stdout = run_fxt_stdout(&[
+        "-P",
+        "-e",
+        "-f",
+        r"(?<=\$)\d+",
+        "-r",
+        "N",
+        "-f",
+        r"\b(\w+) \1\b",
+        "-r",
+        "$1",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "$N and 15% and $N\nthe end\n");
+}
+
+#[test]
+fn perl_regexp_applies_to_from_and_to() {
+    let input = TempFile::new("pcre-from-to", "a\n[x]\nb\n[x]\nc\n");
+    //a block from a line to the next line that repeats it
+    let stdout = run_fxt_stdout(&[
+        "-P",
+        "--from",
+        r"^\[(?!y)",
+        "--to",
+        r"^\[x\]$",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "[x]\nb\n[x]\n");
+}
+
+#[test]
+fn perl_regexp_that_backtracks_out_fails_the_run() {
+    let input = TempFile::new("pcre-runaway", format!("{}b\n", "a".repeat(40)));
+    let output = run_fxt(&["-P", "-g", r"^(a|aa)+\1$", input.path_str()]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("matching the pattern"), "{stderr}");
+}

@@ -295,7 +295,7 @@ mod tests {
 
     /// The single line a pipeline turns `line` into.
     fn piped(pipeline: &mut Pipeline, line: &str) -> String {
-        match pipeline.apply(line) {
+        match pipeline.apply(line).unwrap() {
             Lines::One(content) => content.into_owned(),
             Lines::Several(contents) => panic!("expected a single line, got {contents:?}"),
         }
@@ -511,7 +511,9 @@ mod tests {
     #[test]
     fn grep_keeps_only_matching_lines() {
         let mut config = Config::default();
-        config.grep = Some(regex::Regex::new("ERROR").unwrap());
+        config.grep = Some(
+            crate::pattern::Pattern::new("ERROR", false, crate::pattern::Syntax::Linear).unwrap(),
+        );
 
         let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
         assert_eq!(result, "a ERROR\nc ERROR\n");
@@ -521,7 +523,9 @@ mod tests {
     fn grep_with_delete_removes_matching_lines() {
         let mut config = Config::default();
         config.delete = true;
-        config.grep = Some(regex::Regex::new("ERROR").unwrap());
+        config.grep = Some(
+            crate::pattern::Pattern::new("ERROR", false, crate::pattern::Syntax::Linear).unwrap(),
+        );
 
         let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
         assert_eq!(result, "b INFO\n");
@@ -531,7 +535,9 @@ mod tests {
     fn grep_filters_within_row_range_only() {
         let mut config = Config::default();
         config.rows = Some((1..=2).into());
-        config.grep = Some(regex::Regex::new("keep").unwrap());
+        config.grep = Some(
+            crate::pattern::Pattern::new("keep", false, crate::pattern::Syntax::Linear).unwrap(),
+        );
 
         //row 3 matches but lies outside the selected rows
         let result = run(config, "keep a\ndrop b\nkeep c\n");
@@ -542,7 +548,8 @@ mod tests {
     fn grep_combines_with_sort() {
         let mut config = Config::default();
         config.reorder = sorted(false, false);
-        config.grep = Some(regex::Regex::new("x").unwrap());
+        config.grep =
+            Some(crate::pattern::Pattern::new("x", false, crate::pattern::Syntax::Linear).unwrap());
 
         let result = run(config, "bx\nc\nax\n");
         assert_eq!(result, "ax\nbx\n");
@@ -809,7 +816,9 @@ mod tests {
     fn join_folds_only_the_rows_that_survive_the_filters() {
         let mut config = Config::default();
         config.join = Some(",".to_owned());
-        config.grep = Some(regex::Regex::new("keep").unwrap());
+        config.grep = Some(
+            crate::pattern::Pattern::new("keep", false, crate::pattern::Syntax::Linear).unwrap(),
+        );
 
         let result = run(config, "keep a\ndrop b\nkeep c\n");
         assert_eq!(result, format!("keep a,keep c{NEW_LINE}"));
@@ -853,7 +862,9 @@ mod tests {
     fn count_counts_only_the_rows_that_survive_the_filters() {
         let mut config = Config::default();
         config.summary.count = true;
-        config.grep = Some(regex::Regex::new("ERROR").unwrap());
+        config.grep = Some(
+            crate::pattern::Pattern::new("ERROR", false, crate::pattern::Syntax::Linear).unwrap(),
+        );
 
         //a reducer sees the rows the pipeline let through, no others
         let result = run(config, "a ERROR\nb INFO\nc ERROR\n");
@@ -1121,7 +1132,9 @@ mod tests {
         //read, since the predicate runs before any transform
         let mut config = Config::default();
         config.field_delimiter = Some(",".to_owned());
-        config.grep = Some(regex::Regex::new("ERROR").unwrap());
+        config.grep = Some(
+            crate::pattern::Pattern::new("ERROR", false, crate::pattern::Syntax::Linear).unwrap(),
+        );
         config.grep_key = Some((1..=1).into());
         config.cols = Some((2..=2).into());
 

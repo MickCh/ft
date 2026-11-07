@@ -10,6 +10,7 @@
 //! one already rewritten is skipped).
 
 use std::borrow::Cow;
+use std::convert::Infallible;
 use std::ops::RangeInclusive;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -179,14 +180,48 @@ pub fn replace_in_ranges(
     })
 }
 
+/// [`map_ranges`] with a mapping that may fail: the first error ends the
+/// rewrite and is returned.
+pub fn try_map_ranges<F, E>(
+    line: &str,
+    cols: &[RangeInclusive<usize>],
+    mut map_within: F,
+) -> Result<String, E>
+where
+    F: FnMut(&str) -> Result<Cow<'_, str>, E>,
+{
+    try_rewrite_ranges(line, cols, |within, result| {
+        result.push_str(&map_within(within)?);
+        Ok(())
+    })
+}
+
 /// Rebuild the line, letting `write_within` write what replaces the
-/// content of each column range (writing nothing removes it). Walks the
-/// line once, left to right, so the ranges must ascend; one starting
-/// inside an already rewritten range is skipped rather than applied
-/// twice.
+/// content of each column range (writing nothing removes it).
 fn rewrite_ranges<F>(line: &str, cols: &[RangeInclusive<usize>], mut write_within: F) -> String
 where
     F: FnMut(&str, &mut String),
+{
+    let rewritten = try_rewrite_ranges(line, cols, |within, result| {
+        write_within(within, result);
+        Ok::<(), Infallible>(())
+    });
+    match rewritten {
+        Ok(line) => line,
+        Err(never) => match never {},
+    }
+}
+
+/// [`rewrite_ranges`] for a `write_within` that may fail. Walks the line
+/// once, left to right, so the ranges must ascend; one starting inside
+/// an already rewritten range is skipped rather than applied twice.
+fn try_rewrite_ranges<F, E>(
+    line: &str,
+    cols: &[RangeInclusive<usize>],
+    mut write_within: F,
+) -> Result<String, E>
+where
+    F: FnMut(&str, &mut String) -> Result<(), E>,
 {
     let mut result = String::with_capacity(line.len());
     let mut cursor = 0usize;
@@ -199,12 +234,12 @@ where
             continue;
         }
         result.push_str(&line[cursor..from]);
-        write_within(&line[from..to], &mut result);
+        write_within(&line[from..to], &mut result)?;
         cursor = to;
     }
     result.push_str(&line[cursor..]);
 
-    result
+    Ok(result)
 }
 
 #[cfg(test)]

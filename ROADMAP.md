@@ -35,6 +35,7 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
 - ✅ **Quoted `--unique` keys** — `--unique` keys on `select_canonical` too, so under `--quoted` `"a"` and `a` are duplicates, as they are one `--group-by` group.
 - ✅ **Quoted text-sort keys** — the text sort reads `select_value` like the numeric one, so under `--quoted` `"b"` sorts between `a` and `c` instead of first, on its quote. With `--group-by`, `--unique` and the numeric sort, every key under `--quoted` now reads field values.
+- ✅ **Regex backreferences** — `-P`/`--perl-regexp` compiles every regex with `fancy-regex` (backreferences, lookaround); the default stays the linear-time `regex`. Behind `pattern::Pattern`/`BytePattern`, so `--grep`, `--find`, `--from`/`--to` share it. A backtracking match can fail at run time, so `LinePredicate::matches`, `LineTransform::apply` and `PatternRange::admits` now return `io::Result` — the failure ends the run instead of reading as a miss. *(2026-11-06 comparison)*
 - ✅ **Grapheme columns** — `--graphemes` counts char columns and `--wrap` widths in grapheme clusters (`unicode-segmentation`). A `ColumnSpan::Graphemes` resolves its columns to char ranges per line, as field mode does, so not one char helper in `text.rs` changed; ASCII lines without a CRLF borrow the ranges as they are. *(2026-11-06 comparison)*
 - ✅ **More summaries** — `--median` (exact for integers: halves added back rather than a sum that may overflow), `--distinct`, `--first`, `--last`, per group too: four more `Aggregate`/`Accumulator` variants, no engine change. The text ones read `select_canonical`, like `--group-by`.
 - ✅ **Encodings** — `--encoding <label>` decodes the inputs from any WHATWG encoding (`encoding_rs`), a UTF-16/UTF-8 BOM settles it by itself, and `--output-encoding` writes the output in one. `--in-place` writes each file back as it was read (BOM included) unless `--output-encoding` converts it. Undecodable input and unmappable output are errors, never replacements. Done at the edges (`encoding::open`, `EncodeWriter`), so the engine stays UTF-8 only.
@@ -61,7 +62,6 @@ Each is one new type plus one branch in `compose::build_pipeline`:
 
 Open findings of an external black-box comparison (the fixed ones are under *Done*):
 
-- **Regex backreferences** — `(.)\1` is rejected by the `regex` crate. `fancy-regex` behind a flag would allow it, at the cost of linear-time matching guarantees.
 - **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; `--encoding` answers it for files in a known encoding, the *Lossy/byte mode* item above for the rest.
 - **Performance** — `fxt` beat `sed` on replacement and `awk`/pipelines on combined operations, but trailed `grep` on plain filtering and `sort` on whole-line sorting (300k rows, Windows). `cargo bench` now measures the engine in memory; the baseline (100k rows, release build, Windows, 2026-11-06) points at field mode rather than at `--grep` or the sort:
 

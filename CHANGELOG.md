@@ -6,6 +6,7 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ### Added
 
+- `-P`, `--perl-regexp`: every regex may use backreferences (`(.)\1`) and lookaround, through a backtracking engine (`fancy-regex`). A pattern that backtracks without end fails the run (exit code 2).
 - `--graphemes`: columns and `--wrap` widths count user-perceived characters (grapheme clusters), so `e` with a combining accent or a ZWJ emoji sequence is one column and is never cut in half.
 
 ## [0.3.0] — 2026-11-07

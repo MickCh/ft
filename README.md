@@ -40,6 +40,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 | `-r, --replace <text>` | Replacement text (repeatable, one per `--find`) |
 | `-e, --regex` | Treat the find pattern as a regular expression (requires `--find`) |
 | `--ignore-case` | Match the find pattern case-insensitively (requires `--find`) |
+| `-P`, `--perl-regexp` | Let every regex use backreferences (`(.)\1`) and lookaround (`(?<=x)`, `(?!y)`), matched by backtracking |
 | `--upper` | Convert the column range to uppercase |
 | `--lower` | Convert the column range to lowercase |
 | `--trim` | Trim whitespace at both ends of the column range |
@@ -79,6 +80,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 - Find/replace only replaces occurrences that lie entirely inside the column range.
 - `--find` and `--replace` may be repeated to run several substitutions: the *n*-th `--find` pairs with the *n*-th `--replace`, and the pairs apply left to right, so a later pair can rewrite what an earlier one produced. Every `--find` must have its own `--replace` and vice versa (a lone `--find` is rejected — use `--grep` to filter rows by content instead).
 - `--grep` filters rows by content, complementing the positional row range: only rows inside `--rows` *and* matching the pattern are processed. With `--delete`, matching rows are deleted instead. The match is scoped to the column range.
+- Regular expressions (`--grep`, `--regex --find`, `--from`, `--to`) use the `regex` crate by default, which matches in time linear in the input whatever the pattern — and so has no backreferences or lookaround. `-P` switches all of them to a backtracking engine (`fancy-regex`) that has both: `(.)\1`, `(?<=\$)\d+`, `(?!draft)`. Capture groups in a replacement are written `$1` or `${name}` either way. A pattern that backtracks without end gives up after a million steps; that is an error (exit code 2), never a silent miss.
 - `--from`/`--to` address rows by content, like `sed '/START/,/END/'`: a block runs from a line matching `--from` through the next line matching `--to`, both included. The end is looked for from the line *after* the start, so `--from '^\[db' --to '^\['` takes the `[db]` section up to and including the next header, and once a block ends the next `--from` match opens another — every block is selected. `--from` alone runs to the end of the input; `--to` alone runs from the first line through the first match (which may be the first line itself, like `sed 0,/END/`). Blocks combine with the other filters: a row is processed when it lies in `--rows` *and* in a block *and* matches `--grep`, so `--rows` and `--grep` narrow a block rather than extend it. The patterns see whole lines (not the column range), honour `--ignore-case`, and are matched as bytes, so rows outside every block pass through even if they are not valid UTF-8.
 - `--upper`, `--lower`, `--title-case`, `--squeeze` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`. `--squeeze` runs before `--trim`, so `--squeeze --trim` normalizes the whitespace of a line completely.
 - `--number` prefixes each **output** row with its number (separated by `--output-delimiter`, else `--fields`, else a tab). It counts the rows it actually emits — after the filters, after `--split-on`/`--wrap` expanded them and after `--drop-empty` removed some — so the numbers are always contiguous. It cannot be combined with a reordering, which would shuffle the numbers along with the rows.
@@ -200,6 +202,8 @@ fxt -e -f '(\w+)@(\w+)' -r '$2.$1' input.txt
 
 # Case-insensitive replace: rewrites foo, FOO, Foo, ...
 fxt --ignore-case -f foo -r bar input.txt
+fxt -P -g '(.)\1' words.txt                       # lines with a doubled letter
+fxt -P -e -f '\b(\w+) \1\b' -r '$1' notes.txt    # "the the" -> "the"
 
 # Several substitutions in one pass (applied left to right)
 fxt -f cat -r dog -f red -r blue input.txt

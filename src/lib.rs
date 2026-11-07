@@ -10,6 +10,7 @@ pub mod encoding;
 pub mod error;
 pub mod file_processor;
 pub mod number;
+pub mod pattern;
 pub mod pattern_range;
 pub mod predicate;
 pub mod ranges;

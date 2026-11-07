@@ -432,6 +432,18 @@ pub fn cli() -> Command {
                 .help("Treat the find pattern as a regular expression"),
         )
         .arg(
+            Arg::new("perl-regexp")
+                .short('P')
+                .long("perl-regexp")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Let every regex (--grep, --regex --find, --from, --to) use backreferences \
+                     like (.)\\1 and lookaround like (?<=x); matched by backtracking, \
+                     without the default engine's linear-time guarantee",
+                ),
+        )
+        .arg(
             Arg::new("ignore-case")
                 .long("ignore-case")
                 .required(false)
