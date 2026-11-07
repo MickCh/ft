@@ -221,6 +221,10 @@ pub fn unexpand_tabs(text: &str, tab: usize, result: &mut String) {
     let mut pending = 0;
     //a lone space that reached a stop: a tab if a blank follows it
     let mut lone_at_stop = false;
+    //the char before is a blank, or there is none (the line starts): a
+    //space reaching a stop then continues a run of blanks, as GNU counts
+    //it — which matters only at a tab size of 1, where every space does
+    let mut after_blank = true;
     for character in text.chars() {
         if std::mem::take(&mut lone_at_stop) {
             result.push(if matches!(character, ' ' | '\t') {
@@ -234,7 +238,7 @@ pub fn unexpand_tabs(text: &str, tab: usize, result: &mut String) {
                 pending += 1;
                 column += 1;
                 if column % tab == 0 {
-                    match pending > 1 {
+                    match pending > 1 || after_blank {
                         true => result.push('\t'),
                         false => lone_at_stop = true,
                     }
@@ -253,6 +257,8 @@ pub fn unexpand_tabs(text: &str, tab: usize, result: &mut String) {
                 column = if character == '\n' { 0 } else { column + 1 };
             }
         }
+        //a line break starts a line, which counts as following a blank
+        after_blank = matches!(character, ' ' | '\t' | '\n');
     }
     if lone_at_stop {
         result.push(' ');
@@ -583,6 +589,12 @@ mod tests {
         assert_eq!(unexpanded("abcdefg \tb", 8), "abcdefg\t\tb");
         assert_eq!(unexpanded("abc  d", 4), "abc\t d");
         assert_eq!(unexpanded("abc ", 4), "abc ");
+        //at a tab size of 1 every space is at a stop: one continuing a
+        //run of blanks, or opening the line, becomes a tab (GNU)
+        assert_eq!(unexpanded("a  b", 1), "a\t\tb");
+        assert_eq!(unexpanded(" a", 1), "\ta");
+        assert_eq!(unexpanded("a b", 1), "a b");
+        assert_eq!(unexpanded("a\t b", 1), "a\t\tb");
         //trailing spaces that reach no stop stay as they are
         assert_eq!(unexpanded("ab  ", 8), "ab  ");
     }
