@@ -11,9 +11,9 @@ use crate::pattern_range::PatternRange;
 use crate::predicate::{GrepPredicate, LinePredicate};
 use crate::reduce::{Aggregate, Join, LineReducer, Summarize};
 use crate::transform::{
-    DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, Pipeline,
-    RegexReplaceInColumns, ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns, SplitLines,
-    WrapLines,
+    DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, PadColumns, PadSide,
+    Pipeline, RegexReplaceInColumns, ReplaceInColumns, ReplaceInColumnsIgnoreCase, SelectColumns,
+    SplitLines, WrapLines,
 };
 
 /// Assemble the streaming processor implied by the configuration.
@@ -224,6 +224,21 @@ fn build_pipeline(config: &Config, cols: &mut ColumnClaims) -> Pipeline {
     }
     if config.trim {
         pipeline.push(Box::new(MapColumns::trim(cols.claim())));
+    }
+    //padding comes after trimming, so `--trim --pad-left 8` aligns the
+    //trimmed text rather than whatever whitespace surrounded it
+    let padding = [
+        (config.pad_left, PadSide::Left),
+        (config.pad_right, PadSide::Right),
+    ];
+    for (width, side) in padding {
+        if let Some(width) = width {
+            let pad = PadColumns::new(cols.claim(), width, side);
+            pipeline.push(Box::new(match config.graphemes {
+                true => pad.graphemes(),
+                false => pad,
+            }));
+        }
     }
 
     //splitting comes after the rewriting transforms (they are scoped to

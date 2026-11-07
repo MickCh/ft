@@ -162,6 +162,34 @@ fn wrap_rejects_a_zero_width() {
 }
 
 #[test]
+fn pad_left_right_aligns_each_field_on_its_own() {
+    let input = TempFile::new("pad-left", "a,10,x\nlonger,2,\n,,z\n");
+    let stdout = run_fxt_stdout(&["-F", ",", "-C", "1-2", "--pad-left", "4", input.path_str()]);
+    //fields 1 and 2 are padded separately, the empty ones too, and a
+    //field already wider is left whole
+    assert_eq!(stdout, "   a,  10,x\nlonger,   2,\n    ,    ,z\n");
+}
+
+#[test]
+fn pad_right_counts_chars_and_with_graphemes_clusters() {
+    let input = TempFile::new("pad-right", "ż\ne\u{301}\n");
+    assert_eq!(
+        run_fxt_stdout(&["--pad-right", "3", input.path_str()]),
+        "ż  \ne\u{301} \n"
+    );
+    assert_eq!(
+        run_fxt_stdout(&["--graphemes", "--pad-right", "3", input.path_str()]),
+        "ż  \ne\u{301}  \n"
+    );
+}
+
+#[test]
+fn pad_left_and_pad_right_are_exclusive() {
+    let output = run_fxt_with_stdin(&["--pad-left", "3", "--pad-right", "3"], "a\n");
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
 fn drop_empty_removes_lines_emptied_by_a_transform() {
     //cutting column 3 leaves the short row empty, and --drop-empty
     //removes it — a predicate could not, it runs before the cut

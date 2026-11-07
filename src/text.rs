@@ -166,6 +166,50 @@ where
     })
 }
 
+/// Rebuild the line with each cell's text put through `map`. A cell is a
+/// char range as [`crate::columns::ColumnSpan::cell_ranges`] gives them:
+/// ascending, and an empty one (`n..=n-1`) is the point before column
+/// `n`, so something can be written into an empty field. A cell lying
+/// past the end of the line is skipped.
+pub fn map_cells<F>(line: &str, cells: &[RangeInclusive<usize>], map: F) -> String
+where
+    F: Fn(&str) -> String,
+{
+    let mut result = String::with_capacity(line.len());
+    let mut cursor = 0usize;
+
+    for cell in cells {
+        let bounds = match cell.start() > cell.end() {
+            true => column_offset(line, *cell.start()).map(|at| (at, at)),
+            false => byte_range(line, cell),
+        };
+        let Some((from, to)) = bounds else {
+            continue;
+        };
+        if from < cursor {
+            continue;
+        }
+        result.push_str(&line[cursor..from]);
+        result.push_str(&map(&line[from..to]));
+        cursor = to;
+    }
+    result.push_str(&line[cursor..]);
+    result
+}
+
+/// The byte offset at which the 1-based char `column` starts — the
+/// line's length for the column just past its end, `None` beyond that.
+fn column_offset(line: &str, column: usize) -> Option<usize> {
+    let index = column.max(1) - 1;
+    if line.is_ascii() {
+        return (index <= line.len()).then_some(index);
+    }
+    line.char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(line.len()))
+        .nth(index)
+}
+
 /// Replace every `find` occurrence with `replace`, but only within the
 /// column ranges; the rest of the line is left untouched. Each range is
 /// searched on its own, so a match straddling two of them is not
@@ -391,6 +435,36 @@ mod tests {
         assert_eq!(offset_in("abc", &elsewhere), None);
     }
 
+    /// The empty cell before column `n`, as field positions write it.
+    fn empty_at(n: usize) -> RangeInclusive<usize> {
+        n..=n - 1
+    }
+
+    #[test]
+    fn map_cells_writes_into_empty_cells_too() {
+        // Given "a,,ż" with its fields as cells: 1..=1, an empty 3..=2, 4..=4
+        let line = "a,,ż";
+        let cells = [1..=1, empty_at(3), 4..=4];
+
+        // When each cell is bracketed
+        let result = map_cells(line, &cells, |cell| format!("[{cell}]"));
+
+        // Then the empty field gets its brackets as well
+        assert_eq!(result, "[a],[],[ż]");
+    }
+
+    #[test]
+    fn map_cells_skips_cells_past_the_line() {
+        // Given / When / Then: the point just past the end is still on
+        // the line, anything further is not
+        assert_eq!(map_cells("ab", &[empty_at(3)], |_| "!".to_owned()), "ab!");
+        assert_eq!(
+            map_cells("ab", &[empty_at(4), 5..=9], |_| "!".to_owned()),
+            "ab"
+        );
+        assert_eq!(map_cells("żb", &[empty_at(3)], |_| "!".to_owned()), "żb!");
+    }
+
     #[test]
     fn select_ranges_reads_the_parts_in_order() {
         //an empty list selects nothing, one part borrows from the line
@@ -472,6 +546,22 @@ mod properties {
     }
 
     proptest! {
+        #[test]
+        fn map_cells_marks_each_field_where_it_lies(line in "[a-zż]{0,3}(,[a-zż]{0,3}){0,4}") {
+            //the fields of a comma-split line as cells (empty ones
+            //inverted, as field positions write them), each wrapped in
+            //brackets: the result is the line with every field bracketed
+            let mut cells = Vec::new();
+            let mut column = 1;
+            for field in line.split(',') {
+                let width = field.chars().count();
+                cells.push(column..=column + width - 1);
+                column += width + 1;
+            }
+            let expected: Vec<String> = line.split(',').map(|field| format!("[{field}]")).collect();
+            prop_assert_eq!(map_cells(&line, &cells, |cell| format!("[{cell}]")), expected.join(","));
+        }
+
         #[test]
         fn select_columns_matches_a_char_slice(line in lines(), range in ranges()) {
             let chars: Vec<char> = line.chars().collect();

@@ -153,6 +153,34 @@ impl ColumnSpan {
         }
     }
 
+    /// The char ranges of the span's *cells* on this line, ascending: what
+    /// a transform writing into each piece of the span on its own works
+    /// on (padding). In field mode every field of the span is a cell —
+    /// `-C 2-3` is two cells, not one stretch with a delimiter inside —
+    /// and so is an empty field, as the inverted range `n..=n-1` that
+    /// stands for the point before column `n` (see [`text::map_cells`]).
+    /// Otherwise the cells are the write ranges.
+    pub fn cell_ranges(&self, line: &str) -> SpanRanges<'_> {
+        let ColumnSpan::Fields(spec) = self else {
+            return self.write_ranges(line);
+        };
+        let parts = spec.fields.normalized();
+        let positions = field_positions(line, spec, fields_needed(parts));
+        let cells = parts
+            .iter()
+            .flat_map(|part| {
+                //fields are 1-based, the positions are indexed from 0
+                let first = (*part.start()).max(1) - 1;
+                let last = (*part.end()).min(positions.len());
+                positions
+                    .get(first..last)
+                    .unwrap_or_default()
+            })
+            .cloned()
+            .collect();
+        SpanRanges::Resolved(cells)
+    }
+
     /// Like [`ColumnSpan::write_ranges`], but in field mode each part
     /// swallows one adjacent delimiter (like `cut`), so deleting fields
     /// does not leave a dangling delimiter behind. Normalizing first is

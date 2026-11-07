@@ -267,6 +267,24 @@ pub fn cli() -> Command {
                 .help("Collapse runs of whitespace in the column range into single spaces"),
         )
         .arg(
+            Arg::new("pad-left")
+                .long("pad-left")
+                .required(false)
+                .value_name("WIDTH")
+                .conflicts_with_all(["delete", "pad-right"])
+                .value_parser(parse_width)
+                .help("Pad the column range with spaces on the left to this width (right-aligns it; each field on its own)"),
+        )
+        .arg(
+            Arg::new("pad-right")
+                .long("pad-right")
+                .required(false)
+                .value_name("WIDTH")
+                .conflicts_with("delete")
+                .value_parser(parse_width)
+                .help("Pad the column range with spaces on the right to this width (left-aligns it; each field on its own)"),
+        )
+        .arg(
             Arg::new("number")
                 .long("number")
                 .required(false)
@@ -647,14 +665,15 @@ fn parse_suffix(input: &str) -> Result<String, String> {
     Ok(input.to_owned())
 }
 
-/// Parse a wrapping width: a width of 0 would cut the line into
-/// infinitely many empty chunks, so at least one char is required.
+/// Parse a width (`--wrap`, `--pad-left`, `--pad-right`): a wrapping
+/// width of 0 would cut the line into infinitely many empty chunks, and
+/// padding to 0 would do nothing, so at least one char is required.
 fn parse_width(input: &str) -> Result<usize, String> {
     let width: usize = input
         .parse()
         .map_err(|_| format!("Width `{input}` isn't a number"))?;
     if width < 1 {
-        return Err("The wrapping width must be at least 1".to_owned());
+        return Err("The width must be at least 1".to_owned());
     }
     Ok(width)
 }

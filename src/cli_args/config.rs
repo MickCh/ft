@@ -113,6 +113,9 @@ pub struct Config {
     pub trim: bool,
     pub title_case: bool,
     pub squeeze: bool,
+    //`--pad-left`/`--pad-right`: the width to pad the column range to
+    pub pad_left: Option<usize>,
+    pub pad_right: Option<usize>,
     //number the output rows, like `nl`
     pub number: bool,
     //--fields splits on the delimiter even inside quotes unless set
@@ -345,6 +348,12 @@ impl TryFrom<ArgMatches> for Config {
             trim: matches.get_flag("trim"),
             title_case: matches.get_flag("title-case"),
             squeeze: matches.get_flag("squeeze"),
+            pad_left: matches
+                .get_one::<usize>("pad-left")
+                .copied(),
+            pad_right: matches
+                .get_one::<usize>("pad-right")
+                .copied(),
             number: matches.get_flag("number"),
             quoted: matches.get_flag("quoted"),
             graphemes: matches.get_flag("graphemes"),

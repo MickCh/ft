@@ -13,6 +13,7 @@ use std::ops::Range;
 
 use regex::{NoExpand, Regex, RegexBuilder};
 use std::io;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::pattern::Pattern;
 
@@ -277,6 +278,64 @@ impl LineTransform for MapColumns {
             line,
             &self.span.write_ranges(line),
             self.map,
+        )))
+    }
+}
+
+/// Which side of a cell the padding goes on: `--pad-left` right-aligns
+/// the text, `--pad-right` left-aligns it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PadSide {
+    Left,
+    Right,
+}
+
+/// Pads every cell of a span with spaces to at least `width` (chars, or
+/// grapheme clusters): every field of the span on its own in field mode,
+/// empty ones too. A cell already that wide is left as it is, never cut.
+pub struct PadColumns {
+    span: ColumnSpan,
+    width: usize,
+    side: PadSide,
+    graphemes: bool,
+}
+
+impl PadColumns {
+    pub fn new(span: impl Into<ColumnSpan>, width: usize, side: PadSide) -> PadColumns {
+        PadColumns {
+            span: span.into(),
+            width,
+            side,
+            graphemes: false,
+        }
+    }
+
+    /// Count the width in grapheme clusters (`--graphemes`).
+    pub fn graphemes(mut self) -> PadColumns {
+        self.graphemes = true;
+        self
+    }
+
+    fn pad(&self, cell: &str) -> String {
+        let length = match self.graphemes {
+            true => cell.graphemes(true).count(),
+            false => cell.chars().count(),
+        };
+        let padding = " ".repeat(self.width.saturating_sub(length));
+        match self.side {
+            PadSide::Left => padding + cell,
+            PadSide::Right => cell.to_owned() + &padding,
+        }
+    }
+}
+
+impl LineTransform for PadColumns {
+    fn apply(&mut self, line: &str) -> io::Result<LineOutcome> {
+        let cells = self.span.cell_ranges(line);
+        Ok(LineOutcome::Replace(text::map_cells(
+            line,
+            &cells,
+            |cell| self.pad(cell),
         )))
     }
 }

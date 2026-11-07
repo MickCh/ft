@@ -46,6 +46,8 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 | `--trim` | Trim whitespace at both ends of the column range |
 | `--title-case` | Capitalize the first letter of every word in the column range |
 | `--squeeze` | Collapse runs of whitespace in the column range into single spaces |
+| `--pad-left <width>` | Pad the column range with spaces on the left to `<width>`, right-aligning it (each field on its own) |
+| `--pad-right <width>` | Pad the column range with spaces on the right to `<width>`, left-aligning it (each field on its own) |
 | `--number` | Number the output rows, like `nl` |
 | `--split-on <sep>` | Split every line at each occurrence of `<sep>`, one row per piece |
 | `--wrap <width>` | Wrap every line into chunks of at most `<width>` characters (like `fold -w`) |
@@ -88,6 +90,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 - Regular expressions (`--grep`, `--regex --find`, `--from`, `--to`) use the `regex` crate by default, which matches in time linear in the input whatever the pattern — and so has no backreferences or lookaround. `-P` switches all of them to a backtracking engine (`fancy-regex`) that has both: `(.)\1`, `(?<=\$)\d+`, `(?!draft)`. Capture groups in a replacement are written `$1` or `${name}` either way. A pattern that backtracks without end gives up after a million steps; that is an error (exit code 2), never a silent miss.
 - `--from`/`--to` address rows by content, like `sed '/START/,/END/'`: a block runs from a line matching `--from` through the next line matching `--to`, both included. The end is looked for from the line *after* the start, so `--from '^\[db' --to '^\['` takes the `[db]` section up to and including the next header, and once a block ends the next `--from` match opens another — every block is selected. `--from` alone runs to the end of the input; `--to` alone runs from the first line through the first match (which may be the first line itself, like `sed 0,/END/`). Blocks combine with the other filters: a row is processed when it lies in `--rows` *and* in a block *and* matches `--grep`, so `--rows` and `--grep` narrow a block rather than extend it. The patterns see whole lines (not the column range), honour `--ignore-case`, and are matched as bytes, so rows outside every block pass through even if they are not valid UTF-8.
 - `--upper`, `--lower`, `--title-case`, `--squeeze` and `--trim` apply to the column range (the whole line without one) and run after find/replace, so replaced text is transformed too. They cannot be combined with `--delete`. `--squeeze` runs before `--trim`, so `--squeeze --trim` normalizes the whitespace of a line completely.
+- `--pad-left <width>` and `--pad-right <width>` pad the column range with spaces to at least `<width>` characters (grapheme clusters under `--graphemes`), on the left (right-aligning the text) or on the right; text already that wide is left whole, never cut. In field mode every field of the range is padded on its own, empty ones included, so `fxt -F , -C 2-3 --pad-left 8` right-aligns two columns of numbers; under `--quoted` the quotes count as part of the field. Padding runs after `--trim`, so `--trim --pad-left 8` aligns the trimmed text.
 - `--number` prefixes each **output** row with its number (separated by `--output-delimiter`, else `--fields`, else a tab). It counts the rows it actually emits — after the filters, after `--split-on`/`--wrap` expanded them and after `--drop-empty` removed some — so the numbers are always contiguous. It cannot be combined with a reordering, which would shuffle the numbers along with the rows.
 - `--wrap` cuts every processed line into chunks of at most `<width>` **characters** — one row in, several rows out. It runs after the other transforms, so the chunks are cut from the finished line. If the input's last line had no terminator, neither does the last chunk.
 - `--split-on` cuts every processed line at each occurrence of the separator, turning one row into one row per piece (`tr , '\n'`, but only on the rows being processed). It runs after the column-scoped transforms and before `--wrap`.
@@ -113,7 +116,7 @@ When no filename is given (or a filename is `-`), `fxt` reads from standard inpu
 The flags describe *what* to do, not in which order: whatever order they are written in, `fxt` always runs the same pipeline.
 
 1. **Row range** (`--rows` and the `--from`/`--to` blocks), then the **content filter** (`--grep`/`--invert`) — on the line *as it was read*, before any transform.
-2. **Transforms**, in this fixed order: column delete → find/replace pairs → `--upper` → `--lower` → `--title-case` → `--squeeze` → `--trim` → `--split-on` → `--wrap` → `--drop-empty` → `--number`.
+2. **Transforms**, in this fixed order: column delete → find/replace pairs → `--upper` → `--lower` → `--title-case` → `--squeeze` → `--trim` → `--pad-left`/`--pad-right` → `--split-on` → `--wrap` → `--drop-empty` → `--number`.
 3. **`--unique`**, on the transformed line.
 4. **Reordering** (`--sort`/`--tac`/`--shuffle`), then a **reducer** (`--join` or a summary) instead of writing the rows.
 
@@ -219,6 +222,9 @@ fxt -f cat -r dog -f red -r blue input.txt
 # Uppercase columns 1-3, trim whitespace around every line
 fxt --upper -C 1-3 input.txt
 fxt --trim input.txt
+
+# Right-align the numbers in fields 2-3 to a width of 8
+fxt -F , -C 2-3 --pad-left 8 data.csv
 
 # Hard-wrap every line at 80 characters (like fold -w 80)
 fxt --wrap 80 input.txt
