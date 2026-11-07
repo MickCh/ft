@@ -596,7 +596,8 @@ pub fn cli() -> Command {
                 .long("in-place")
                 .required(false)
                 .action(ArgAction::SetTrue)
-                .conflicts_with("output")
+                //a summary or a join would replace each file with it
+                .conflicts_with_all(["output", "summary", "join"])
                 .help("Edit the input file in place instead of writing to stdout"),
         )
         .arg(

@@ -28,7 +28,9 @@ pub fn build_processor(config: &Config) -> FileProcessor {
         .then(|| cols.key_or_cols(&config.unique_key));
     let transforms = build_pipeline(config, &mut cols);
     let reducer = build_reducer(config);
-    let outgoing = build_outgoing(config, &cols, reducer.is_some());
+    //a summary splits the rows it reads, --join only runs them together
+    let summarizes = reducer.is_some() && config.join.is_none();
+    let outgoing = build_outgoing(config, &cols, summarizes);
 
     FileProcessor {
         rows: config.rows_or_full(),
@@ -73,11 +75,13 @@ impl<'a> ColumnClaims<'a> {
 
     /// The span keying an operation: its own key range when given —
     /// which leaves `--cols` unclaimed, free to select — else `--cols`.
+    /// Either way read as a key, with the input delimiter.
     fn key_or_cols(&mut self, own_key: &Option<ColumnList>) -> ColumnSpan {
-        match own_key {
+        let span = match own_key {
             Some(columns) => self.config.span_for(columns.clone()),
             None => self.claim(),
-        }
+        };
+        span.keyed()
     }
 
     /// Whether `--cols` selects (cuts) the columns: it was given, and no
@@ -213,16 +217,17 @@ fn build_predicate(config: &Config, cols: &mut ColumnClaims) -> Option<Box<dyn L
 /// bare `--cols` selection rejoins the fields it cuts out with it, but a
 /// row no selection cut (no `--cols`, or `--cols` taken by an operation)
 /// is rejoined here, every field, once its keys have been read with the
-/// input delimiter. Not for a reducer, whose rows are its own to split,
-/// and whose columns the output delimiter already separates.
-fn build_outgoing(config: &Config, cols: &ColumnClaims, reduces: bool) -> Pipeline {
+/// input delimiter. Not for a summary, whose rows are its own to split,
+/// and whose columns the output delimiter already separates (`--join`
+/// gets the rows rejoined, like any output).
+fn build_outgoing(config: &Config, cols: &ColumnClaims, summarizes: bool) -> Pipeline {
     let mut outgoing: Vec<Box<dyn LineTransform>> = Vec::new();
     let rejoins = config
         .output_delimiter
         .as_ref()
         .zip(config.field_delimiter.as_ref())
         .is_some_and(|(output, input)| output != input);
-    if rejoins && !cols.selects_bare() && !reduces {
+    if rejoins && !cols.selects_bare() && !summarizes {
         let every_field = config.span_for(ColumnList::from(1..=usize::MAX));
         outgoing.push(Box::new(SelectColumns::new(every_field)));
     }

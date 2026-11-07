@@ -82,6 +82,12 @@ impl FieldSpan {
             .is_some_and(|output| *output != self.delimiter)
     }
 
+    /// Whether fields rejoined by a new delimiter must be quoted where
+    /// they hold it, to stay CSV (`--quoted`).
+    fn requotes(&self) -> bool {
+        self.quoted && self.rejoins()
+    }
+
     /// How many fields `line` has, split as this span splits it — counting
     /// no further than `limit`, which is all a lower bound needs to know.
     pub fn count_fields(&self, line: &str, limit: usize) -> usize {
@@ -225,7 +231,11 @@ impl ColumnSpan {
     /// selects nothing, like `cut` — which is what makes it a usable
     /// sort, unique or grouping key on a short line.
     pub fn select<'a>(&self, line: &'a str) -> Cow<'a, str> {
-        text::select_ranges(line, &self.read_ranges(line), self.joiner())
+        let ranges = self.read_ranges(line);
+        match self {
+            ColumnSpan::Fields(spec) if spec.requotes() => requoted(line, &ranges, self.joiner()),
+            _ => text::select_ranges(line, &ranges, self.joiner()),
+        }
     }
 
     /// What the selection *means* rather than the text it occupies: under
@@ -256,7 +266,10 @@ impl ColumnSpan {
                 let parts = spec.fields.written();
                 let positions = split.positions_for(spec, parts);
                 let ranges = read_parts(&positions, spec, parts);
-                text::select_ranges(split.line, &ranges, self.joiner())
+                match spec.requotes() {
+                    true => requoted(split.line, &ranges, self.joiner()),
+                    false => text::select_ranges(split.line, &ranges, self.joiner()),
+                }
             }
         }
     }
@@ -301,6 +314,17 @@ impl ColumnSpan {
             .flat_map(|part| (*part.start()).max(1)..=(*part.end()).min(positions.len()))
             .map(|field| unquote(text::select_columns(split.line, &positions[field - 1])))
             .collect()
+    }
+
+    /// The span as a key: its fields joined with the input delimiter,
+    /// whatever the output's. A key compares what the input holds, so
+    /// `a,b` and `a;b` are different rows also under
+    /// `--output-delimiter ';'`.
+    pub fn keyed(mut self) -> ColumnSpan {
+        if let ColumnSpan::Fields(spec) = &mut self {
+            spec.output_delimiter = None;
+        }
+        self
     }
 
     /// What joins the parts of a selection: the output delimiter in
@@ -622,6 +646,26 @@ fn quote_if_needed<'a>(value: Cow<'a, str>, delimiter: &str) -> Cow<'a, str> {
     } else {
         value
     }
+}
+
+/// The fields at `ranges`, joined by a delimiter other than the input's,
+/// each quoted if it has to be now: a field that held no delimiter of the
+/// input may hold the new one (`a;b` read at `,`, written at `;`). A
+/// field already quoted keeps its quotes as they were, and a field is
+/// otherwise left as the input wrote it.
+fn requoted<'a>(line: &'a str, ranges: &[RangeInclusive<usize>], joiner: &str) -> Cow<'a, str> {
+    let fields = ranges
+        .iter()
+        .map(|range| {
+            let field = text::select_columns(line, range);
+            let ambiguous = !joiner.is_empty() && !field.starts_with('"') && field.contains(joiner);
+            match ambiguous {
+                true => Cow::Owned(format!("\"{}\"", field.replace('"', "\"\""))),
+                false => Cow::Borrowed(field),
+            }
+        })
+        .collect();
+    join_parts(fields, joiner)
 }
 
 /// Join selected parts, borrowing the only one rather than copying it.

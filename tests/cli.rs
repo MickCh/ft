@@ -438,6 +438,100 @@ fn output_delimiter_rewrites_rows_no_selection_cut() {
 }
 
 #[test]
+fn keys_are_read_with_the_input_delimiter() {
+    let run = |args: &[&str], input: &str| {
+        let output = run_fxt_with_stdin(args, input);
+        (
+            output.status.code(),
+            String::from_utf8(output.stdout).unwrap(),
+        )
+    };
+    //unique: "a,b" and "a;b" are different rows, whatever the output says
+    assert_eq!(
+        run(&["-F", ",", "-u", "--output-delimiter", ";"], "a,b\na;b\n"),
+        (Some(0), "a;b\na;b\n".to_owned())
+    );
+    //grep: the pattern sees the row as it was read
+    assert_eq!(
+        run(&["-F", ",", "-g", ",", "--output-delimiter", ";"], "a,b\n"),
+        (Some(0), "a;b\n".to_owned())
+    );
+    assert_eq!(
+        run(&["-F", ",", "-g", ";", "--output-delimiter", ";"], "a,b\n"),
+        (Some(1), String::new())
+    );
+    assert_eq!(
+        run(
+            &[
+                "-F",
+                ",",
+                "--grep-key",
+                "1-2",
+                "-g",
+                "a,b",
+                "--output-delimiter",
+                ";"
+            ],
+            "a,b\n"
+        ),
+        (Some(0), "a;b\n".to_owned())
+    );
+    //sort: "," sorts before "-"
+    assert_eq!(
+        run(&["-F", ",", "-s", "--output-delimiter", "~"], "a-b\na,z\n"),
+        (Some(0), "a~z\na-b\n".to_owned())
+    );
+}
+
+#[test]
+fn join_rows_get_the_output_delimiter_too() {
+    let output = run_fxt_with_stdin(
+        &["-F", ",", "--join", "|", "--output-delimiter", ";"],
+        "a,b\nc,d\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "a;b|c;d\n");
+}
+
+#[test]
+fn in_place_refuses_a_summary_or_a_join() {
+    let input = TempFile::new("in-place-summary", "a\n");
+    for args in [["-i", "--count"], ["-i", "--join=,"]] {
+        let output = run_fxt(&[args[0], args[1], input.path_str()]);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+    }
+    assert_eq!(fs::read_to_string(&input.path).unwrap(), "a\n");
+}
+
+#[test]
+fn a_new_delimiter_quotes_the_fields_that_hold_it() {
+    //under --quoted the output stays CSV: "a;b" is one field
+    let output = run_fxt_with_stdin(
+        &["-F", ",", "--quoted", "--output-delimiter", ";"],
+        "a;b,c\n\"x;y\",z\n",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "\"a;b\";c\n\"x;y\";z\n"
+    );
+    //without --quoted the fields are text, written as they are
+    let output = run_fxt_with_stdin(&["-F", ",", "--output-delimiter", ";"], "a;b,c\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "a;b;c\n");
+}
+
+#[test]
+fn title_case_keeps_combining_accents_and_final_sigma_in_the_word() {
+    //"e" + U+0301 is one letter: the word goes on after it
+    let input = TempFile::new(
+        "title-nfd",
+        "e\u{301}cole cafe\u{301} n\u{303}o \u{3a3}\u{39f}\u{3a6}\u{39f}\u{3a3}\n",
+    );
+    assert_eq!(
+        run_fxt_stdout(&["--title-case", input.path_str()]),
+        "E\u{301}cole Cafe\u{301} N\u{303}o \u{3a3}\u{3bf}\u{3c6}\u{3bf}\u{3c2}\n"
+    );
+}
+
+#[test]
 fn an_empty_split_separator_is_named_for_what_it_is() {
     let output = run_fxt_with_stdin(&["--split-on", ""], "a\n");
     assert_eq!(output.status.code(), Some(2));

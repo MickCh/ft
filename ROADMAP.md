@@ -179,6 +179,14 @@ A second run, 1038 cases, all passing on 0.4.1 (report `fxt-testy-funkcjonalne-0
 - ✅ **N3 — empty separators** — `--output-delimiter ''` is accepted, like `--join ''`; `--split-on ''` is still refused, with its own message.
 - ✅ **N4 — `--title-case` on ligatures** — titlecase now comes from a table (`case.rs`, generated from Unicode's titlecase mappings) for the 135 chars where it differs from the uppercase: `ﬁ` → `Fi`, `ǆ` → `ǅ`, `ß` → `Ss`.
 
+## 3c. From the 0.5.0 functional tests
+
+1142 cases before the release (report `fxt-testy-funkcjonalne-0.5.0.md`); 10 failed, from two bugs, and five small things were noted. All fixed before 0.5.0 was published:
+
+- ✅ **B1 — keys read with the output delimiter** — a key over several fields (the whole row under bare `-F`, `-C 1-`, `--*-key 1-2`) was joined with `--output-delimiter`, so `-u` dropped `a;b` as a duplicate of `a,b`, `-g ,` matched nothing and the sort compared the wrong character. `ColumnSpan::keyed` clears the output delimiter of every key span (`ColumnClaims::key_or_cols`).
+- ✅ **B2 — `--title-case` on NFD text** — a combining accent ended the word (`e\u0301cole` → `ÉCole`). Words are now runs of grapheme clusters starting with a letter or digit.
+- ✅ **M1** — `--join` rows get the output delimiter (only a summary is left out). **M2** — `--in-place` conflicts with summaries and `--join`. **M3** — under `--quoted` a field holding the new delimiter is quoted. **M4** — documented: a column range's start starts a word. **M5** — a word's tail is lowercased as a whole, so a final sigma is `ς`.
+
 ## 4. Tool maturity (cheap, highly visible)
 
 - ✅ Fuzzing the range parser — property tests in `cli_args::cli` (`properties`): arbitrary and hostile input never panics and only spec characters get through (`+2` and `~+1` used to be accepted, via `usize::from_str`; this property now holds that out); generated specs, written out, select exactly the rows their definition names; column lists normalize to what they cover. Property tests rather than `cargo fuzz`, so they run in CI on every platform.

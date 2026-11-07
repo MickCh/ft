@@ -289,18 +289,41 @@ fn title_case(within: &str, result: &mut String) {
         return;
     }
 
-    for character in within.chars() {
-        if character.is_alphanumeric() {
-            match starts_word {
-                true => case::push_titlecase(character, result),
-                false => result.extend(character.to_lowercase()),
+    //elsewhere a word is a run of grapheme clusters starting with a
+    //letter or digit, so an accent combined with a letter (`e` + U+0301)
+    //stays inside its word
+    let mut word_start = None;
+    for (at, cluster) in within.grapheme_indices(true) {
+        let in_word = cluster
+            .chars()
+            .next()
+            .is_some_and(char::is_alphanumeric);
+        match (in_word, word_start) {
+            (true, None) => word_start = Some(at),
+            (true, Some(_)) => {}
+            (false, start) => {
+                if let Some(start) = start {
+                    push_title_word(&within[start..at], result);
+                    word_start = None;
+                }
+                result.push_str(cluster);
             }
-            starts_word = false;
-        } else {
-            result.push(character);
-            starts_word = true;
         }
     }
+    if let Some(start) = word_start {
+        push_title_word(&within[start..], result);
+    }
+}
+
+/// One word in title case: its first letter titlecased, the rest of it
+/// lowercased as a whole, so a final sigma comes out as one (`ΣΟΦΟΣ` →
+/// `Σοφος`).
+fn push_title_word(word: &str, result: &mut String) {
+    let mut chars = word.chars();
+    if let Some(first) = chars.next() {
+        case::push_titlecase(first, result);
+    }
+    result.push_str(&chars.as_str().to_lowercase());
 }
 
 /// Collapse each run of whitespace into one space, keeping the runs at
