@@ -77,7 +77,7 @@ pub fn cli() -> Command {
                 .required(false)
                 .action(ArgAction::SetTrue)
                 .requires("fields")
-                .help("Respect \"quoted\" fields: a delimiter inside quotes does not split (requires --fields)"),
+                .help("Respect \"quoted\" fields: a delimiter inside quotes does not split, a newline does not end the record (requires --fields)"),
         )
         .arg(
             Arg::new("output-delimiter")

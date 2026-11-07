@@ -13,6 +13,7 @@ pub mod number;
 pub mod pattern_range;
 pub mod predicate;
 pub mod ranges;
+pub mod records;
 pub mod reduce;
 pub mod text;
 pub mod transform;

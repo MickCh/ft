@@ -1402,18 +1402,127 @@ fn quoted_csv_numbers_sort_numerically() {
     assert_eq!(stdout, "y,\"9\"\nx,\"10\"\n");
 }
 
+/// A CSV file whose second record holds a newline inside a quoted field.
+const MULTILINE_CSV: &str = "id,note,amount\n1,\"hello\nworld\",20\n2,\"fine\",10\n";
+
 #[test]
-fn quoted_csv_rejects_a_record_spanning_lines() {
-    //a quoted field running into the next line would come out cut in
-    //half, so it fails instead of answering wrongly
-    let input = TempFile::new("csv-multiline", "1,\"hello\nworld\",20\n2,\"fine\",10\n");
+fn quoted_csv_reads_a_record_spanning_lines() {
+    //the newline inside quotes belongs to the field, so it comes out with it
+    let input = TempFile::new("csv-multiline", MULTILINE_CSV);
+    let stdout = run_fxt_stdout(&["-F", ",", "--quoted", "-C", "2", input.path_str()]);
+    assert_eq!(stdout, "note\n\"hello\nworld\"\n\"fine\"\n");
+}
+
+#[test]
+fn quoted_csv_counts_records_not_lines() {
+    //row 3 is the third record, which starts on line 4
+    let input = TempFile::new("csv-multiline-rows", MULTILINE_CSV);
+    let stdout = run_fxt_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "-C",
+        "1-",
+        "-R",
+        "3",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "2,\"fine\",10\n");
+
+    let stdout = run_fxt_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "-C",
+        "1-",
+        "-R",
+        "2-",
+        "--number",
+        input.path_str(),
+    ]);
+    //in field mode the number is a field of its own
+    assert_eq!(stdout, "1,1,\"hello\nworld\",20\n2,2,\"fine\",10\n");
+
+    let stdout = run_fxt_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "-C",
+        "1-",
+        "--count",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "3\n");
+}
+
+#[test]
+fn quoted_csv_sorts_and_sums_multiline_records_whole() {
+    let input = TempFile::new("csv-multiline-sort", MULTILINE_CSV);
+    let stdout = run_fxt_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "-C",
+        "1-",
+        "-R",
+        "2-",
+        "-s",
+        "-n",
+        "--sort-key",
+        "3",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "2,\"fine\",10\n1,\"hello\nworld\",20\n");
+
+    let stdout = run_fxt_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "-C",
+        "1-",
+        "-R",
+        "2-",
+        "--sum",
+        "3",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "30\n");
+}
+
+#[test]
+fn quoted_csv_end_relative_rows_count_records() {
+    let input = TempFile::new("csv-multiline-tail", MULTILINE_CSV);
+    let stdout = run_fxt_stdout(&[
+        "-F",
+        ",",
+        "--quoted",
+        "-C",
+        "1-",
+        "-R",
+        "~2",
+        input.path_str(),
+    ]);
+    assert_eq!(stdout, "1,\"hello\nworld\",20\n");
+}
+
+#[test]
+fn quoted_csv_rejects_a_quote_never_closed() {
+    //reading to the end of the input as one field would answer wrongly
+    let input = TempFile::new("csv-unclosed", "1,x\n2,\"open\nstill open\n");
     let output = run_fxt(&["-F", ",", "--quoted", "-C", "2", input.path_str()]);
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("line 1 leaves a quoted field open"),
+        stderr.contains("the quoted field opened on line 2 is never closed"),
         "{stderr}"
     );
+}
+
+#[test]
+fn without_quoted_a_quote_does_not_join_lines() {
+    let input = TempFile::new("csv-plain-split", MULTILINE_CSV);
+    let stdout = run_fxt_stdout(&["-F", ",", "-C", "1-", "-R", "3", input.path_str()]);
+    assert_eq!(stdout, "world\",20\n");
 }
 
 #[test]

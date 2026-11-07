@@ -4,6 +4,10 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Changed
+
+- Under `--quoted`, a CSV record may span several lines: a newline inside quotes stays in its field, and `--rows`, `--number`, `--count` and error messages count records. Only a quoted field left open at the end of the input fails (exit code 2).
+
 ## [0.2.0] — 2026-11-07
 
 ### Changed

@@ -4,12 +4,13 @@
 //! parts (see [`crate::compose`]), so this module stays independent of
 //! the CLI layer.
 
-use crate::columns::{self, ColumnSpan};
+use crate::columns::ColumnSpan;
 use crate::constants::NEW_LINE;
 use crate::number::Number;
 use crate::pattern_range::PatternRange;
 use crate::predicate::LinePredicate;
 use crate::ranges::{RangeSet, RangeSpec};
+use crate::records::Records;
 use crate::reduce::LineReducer;
 use crate::text;
 use crate::transform::{Lines, Pipeline};
@@ -151,10 +152,10 @@ pub struct FileProcessor {
     /// Stop reading as soon as a row matches (`--quiet`, which asks only
     /// whether anything matches at all).
     pub stop_when_matched: bool,
-    /// Fail on a line that leaves a `"quoted"` CSV field open (`--quoted`):
-    /// its record continues on the next line, which line-based processing
-    /// cannot read, and cutting it in half would be silently wrong output.
-    pub reject_open_quotes: bool,
+    /// Rows are CSV records (`--quoted`): a line that leaves a `"quoted"`
+    /// field open goes on in the next, and the row is the whole record.
+    /// `--rows`, `--number` and error messages then count records.
+    pub quoted_records: bool,
 }
 
 impl FileProcessor {
@@ -172,22 +173,34 @@ impl FileProcessor {
         if self.rows.is_absolute() {
             //the total line count is irrelevant, so lines can stream through
             let rows = self.rows.resolve(usize::MAX);
-            let mut line_number = 0usize;
+            let mut records = Records::new(self.quoted_records);
+            let mut row_number = 0usize;
             reader.for_byte_line_with_terminator(|raw_line| {
-                line_number += 1;
-                self.process_line(raw_line, line_number, &rows, &mut state, writer)?;
+                let Some(row) = records.push(raw_line) else {
+                    return Ok(true);
+                };
+                row_number += 1;
+                self.process_line(&row, row_number, &rows, &mut state, writer)?;
                 //asked only whether anything matches, there is no reason
                 //to read the rest of the input once something has
                 Ok(!(self.stop_when_matched && state.matched))
             })?;
+            //stopping early leaves the rest unread, open quote or not
+            if !(self.stop_when_matched && state.matched) {
+                records.finish()?;
+            }
         } else {
             //end-relative bounds (`~N`) only resolve once the total
             //line count is known: the whole input must be buffered
+            let mut records = Records::new(self.quoted_records);
             let mut lines: Vec<Vec<u8>> = Vec::new();
             reader.for_byte_line_with_terminator(|raw_line| {
-                lines.push(raw_line.to_vec());
+                if let Some(row) = records.push(raw_line) {
+                    lines.push(row.into_owned());
+                }
                 Ok(true)
             })?;
+            records.finish()?;
             let rows = self.rows.resolve(lines.len());
             for (index, raw_line) in lines.iter().enumerate() {
                 self.process_line(raw_line, index + 1, &rows, &mut state, writer)?;
@@ -242,21 +255,11 @@ impl FileProcessor {
         let utf8_line = from_utf8(raw_line).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("line {line_number} is not valid UTF-8: {e}"),
+                format!("{} {line_number} is not valid UTF-8: {e}", self.row_noun()),
             )
         })?;
 
         let (content, terminator) = text::split_line_terminator(utf8_line);
-
-        if self.reject_open_quotes && columns::leaves_quote_open(content) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "line {line_number} leaves a quoted field open: \
-                     CSV records spanning several lines are not supported"
-                ),
-            ));
-        }
 
         if let Some(predicate) = &self.predicate
             && !predicate.matches(content)
@@ -282,6 +285,16 @@ impl FileProcessor {
             Lines::Several(contents) => contents
                 .iter()
                 .try_for_each(|content| self.emit(content, terminator, state, writer)),
+        }
+    }
+
+    /// What a row is called in an error message: under `--quoted` it is a
+    /// record, which may span several lines.
+    fn row_noun(&self) -> &'static str {
+        if self.quoted_records {
+            "record"
+        } else {
+            "line"
         }
     }
 

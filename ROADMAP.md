@@ -19,12 +19,19 @@ Implemented in the order suggested below, one commit per item:
 - ✅ **`--join`** — the N→1 direction, a streaming `LineReducer` (`accept` takes the writer). The inverse of `--split-on`.
 - ✅ **Reordering + reducers** — the reorder buffer drains through the same output path as streamed lines, so `--sort --join` folds sorted and `--sort --group-by` reports groups in sorted order.
 - ✅ **Exact numbers** — `Number` (`Int(i128)` exact, `Float(f64)` otherwise, compared exactly across the two) replaces the bare `f64` in the numeric sort key and the summaries, so keys beyond 2^53 sort correctly and integer sums stay exact. *(2026-11-06 comparison)*
+- ✅ **Multi-line CSV records** — under `--quoted` the engine reads records, not lines (`records::Records` joins lines while a quote is open), so a newline inside quotes stays in its field and `--rows`/`--number`/`--count` count records; only a quote never closed fails.
 - ✅ **Quoted CSV values** — `ColumnSpan::select_value` reads a field's value without its quotes; numeric operations use it, so `"10"` sums and sorts as 10. Lexical ones still read the field as written, which keeps projections valid CSV. *(2026-11-06 comparison)*
+- ✅ **Multi-line CSV records** — under `--quoted` the engine reads records, not lines (`records::Records` joins lines while a quote is open), so a newline inside quotes stays in its field and `--rows`/`--number`/`--count` count records; only a quote never closed fails.
 - ✅ **Multi-line CSV boundary** — under `--quoted`, a line that leaves a quoted field open fails with exit code 2 instead of returning records cut in half. *(2026-11-06 comparison)*
+- ✅ **Multi-line CSV records** — under `--quoted` the engine reads records, not lines (`records::Records` joins lines while a quote is open), so a newline inside quotes stays in its field and `--rows`/`--number`/`--count` count records; only a quote never closed fails.
 - ✅ **`--grep-key`** — `--grep` gets a column range of its own, so `--cols` is free to select: `-F , -C 2 --grep-key 1 -g ERROR`. Unlike the sort and unique keys it addresses the line as read, since the predicate runs before the transforms. *(2026-11-06 comparison)*
+- ✅ **Multi-line CSV records** — under `--quoted` the engine reads records, not lines (`records::Records` joins lines while a quote is open), so a newline inside quotes stays in its field and `--rows`/`--number`/`--count` count records; only a quote never closed fails.
 - ✅ **Quoted `--group-by` keys** — `ColumnSpan::select_canonical` reduces each field to its value and quotes it again only where needed, so `"a"` and `a` are one group, printed as `a`, and the key stays valid CSV. Being unambiguous, it keeps `a,"b,c"` and `"a,b",c` apart. *(2026-11-06 comparison)*
+- ✅ **Multi-line CSV records** — under `--quoted` the engine reads records, not lines (`records::Records` joins lines while a quote is open), so a newline inside quotes stays in its field and `--rows`/`--number`/`--count` count records; only a quote never closed fails.
 - ✅ **UTF-8 BOM** — `bom::strip_bom` takes the mark off every input before they are joined, so it no longer hides the first field; `--in-place` (and so `--dry-run`) writes it back, other output carries none. *(2026-11-06 comparison)*
+- ✅ **Multi-line CSV records** — under `--quoted` the engine reads records, not lines (`records::Records` joins lines while a quote is open), so a newline inside quotes stays in its field and `--rows`/`--number`/`--count` count records; only a quote never closed fails.
 - ✅ **Order of operations documented** — README section on the fixed pipeline and the shared `--cols` scope, with examples. *(2026-11-06 comparison)*
+- ✅ **Multi-line CSV records** — under `--quoted` the engine reads records, not lines (`records::Records` joins lines while a quote is open), so a newline inside quotes stays in its field and `--rows`/`--number`/`--count` count records; only a quote never closed fails.
 - ✅ **Renamed to `fxt`** — PowerShell aliases `ft` to `Format-Table`, which shadowed the binary.
 - ✅ **Quoted `--unique` keys** — `--unique` keys on `select_canonical` too, so under `--quoted` `"a"` and `a` are duplicates, as they are one `--group-by` group.
 - ✅ **Quoted text-sort keys** — the text sort reads `select_value` like the numeric one, so under `--quoted` `"b"` sorts between `a` and `c` instead of first, on its quote. With `--group-by`, `--unique` and the numeric sort, every key under `--quoted` now reads field values.
@@ -52,7 +59,6 @@ Each is one new type plus one branch in `compose::build_pipeline`:
 
 Open findings of an external black-box comparison (the fixed ones are under *Done*):
 
-- **Multi-line CSV records** — a newline inside quotes is now rejected; actually reading such a record needs the engine to iterate over *records* rather than lines when `--quoted` is set (a record reader in front of `process_line`, with row numbers counting records). The largest item here.
 - **Grapheme columns** — columns count code points, so `e\u0301` and ZWJ emoji sequences can be split. An opt-in `--graphemes` (`unicode-segmentation`) would count user-perceived characters; it touches every char-indexed helper in `text.rs`.
 - **Regex backreferences** — `(.)\1` is rejected by the `regex` crate. `fancy-regex` behind a flag would allow it, at the cost of linear-time matching guarantees.
 - **Partial output before an encoding error** — a streaming run writes the valid lines before failing on invalid UTF-8 (exit 2). Inherent to streaming; the *Encodings* item above (a lossy/byte mode) is the real answer.
