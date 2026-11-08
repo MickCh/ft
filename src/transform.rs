@@ -272,18 +272,29 @@ impl MapColumns {
     /// Rotates every ASCII letter within the span by 13 places (`rot13`);
     /// anything else, other letters included, stays as it is.
     pub fn rot13(span: impl Into<ColumnSpan>) -> MapColumns {
-        MapColumns::with(span, |within, out| out.extend(within.chars().map(rot13)))
+        MapColumns::with(span, |within, out| {
+            //copied whole and rotated in place, like the ASCII case mappings
+            let start = out.len();
+            out.push_str(within);
+            // SAFETY: `rot13_byte` turns ASCII letters into ASCII letters and
+            // leaves every other byte — each byte of a multi-byte char among
+            // them — as it was, so the text stays valid UTF-8
+            let bytes = unsafe { out[start..].as_bytes_mut() };
+            bytes
+                .iter_mut()
+                .for_each(|byte| *byte = rot13_byte(*byte));
+        })
     }
 }
 
-/// One char rotated by 13 places, if it is an ASCII letter.
-fn rot13(character: char) -> char {
-    let base = match character {
-        'a'..='z' => b'a',
-        'A'..='Z' => b'A',
-        _ => return character,
+/// One byte rotated by 13 places, if it is an ASCII letter.
+fn rot13_byte(byte: u8) -> u8 {
+    let base = match byte {
+        b'a'..=b'z' => b'a',
+        b'A'..=b'Z' => b'A',
+        _ => return byte,
     };
-    char::from(base + (character as u8 - base + 13) % 26)
+    base + (byte - base + 13) % 26
 }
 
 /// Title-case a piece of text: a letter starts a word when the char
@@ -1185,6 +1196,27 @@ mod properties {
                 line.chars().rev().collect::<String>()
             );
             prop_assert_eq!(mapped(MapColumns::title_case(full), &line), title_cased(&line));
+        }
+
+        //rot13 rewrites bytes in place: on any text, multi-byte chars
+        //included, it must do what rotating char by char does, and undo
+        //itself
+        #[test]
+        fn rot13_in_place_agrees_with_rotating_chars(line in "\\PC{0,32}", from in 1usize..6) {
+            let rotated: String = line
+                .chars()
+                .map(|character| match character {
+                    'a'..='z' => char::from(b'a' + (character as u8 - b'a' + 13) % 26),
+                    'A'..='Z' => char::from(b'A' + (character as u8 - b'A' + 13) % 26),
+                    _ => character,
+                })
+                .collect();
+            prop_assert_eq!(mapped(MapColumns::rot13(1..=usize::MAX), &line), rotated.clone());
+            prop_assert_eq!(mapped(MapColumns::rot13(1..=usize::MAX), &rotated), line.clone());
+            //a span starting inside the line rotates from there on only
+            let kept: String = line.chars().take(from - 1).collect();
+            let rest: String = rotated.chars().skip(from - 1).collect();
+            prop_assert_eq!(mapped(MapColumns::rot13(from..=usize::MAX), &line), kept + &rest);
         }
     }
 }
