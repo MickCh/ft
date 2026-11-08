@@ -3062,11 +3062,11 @@ fn perl_regexp_that_backtracks_out_fails_the_run() {
     assert!(stderr.contains("matching the pattern"), "{stderr}");
 }
 
-#[cfg(unix)]
 #[test]
 fn output_hard_link_to_the_input_is_rejected() {
     //a hard link is the input under another path, which no comparison
-    //of paths can tell: File::create would truncate the input
+    //of paths can tell: File::create would truncate the input. NTFS has
+    //hard links too, so this runs on Windows as well
     let dir = TempDir::new("output-hard-link");
     let content = "row\n".repeat(10_000);
     let input = dir.write("in.txt", &content);
