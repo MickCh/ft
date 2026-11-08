@@ -21,6 +21,10 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 - `--output` naming a hard link to an input was not caught, and truncated the input before it was read (all but its first three bytes were lost). Output and inputs are now compared as files — device and inode on Unix, volume and file index on Windows — rather than as paths.
 - File names that are not valid UTF-8 (possible on Unix) were refused as arguments; inputs and `--output` now take any path, and the temporary file of an in-place edit keeps such a name as it is.
 
+### Performance
+
+- A transform over the whole line (no `--cols`) no longer looks through the line to place column 1 to the end on it: `--upper`, `--lower`, `--trim` and the other mappings gain a few percent.
+
 ## [0.5.0] — 2026-11-07
 
 ### Changed

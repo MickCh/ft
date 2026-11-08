@@ -273,28 +273,29 @@ impl MapColumns {
     /// anything else, other letters included, stays as it is.
     pub fn rot13(span: impl Into<ColumnSpan>) -> MapColumns {
         MapColumns::with(span, |within, out| {
-            //copied whole and rotated in place, like the ASCII case mappings
-            let start = out.len();
-            out.push_str(within);
+            //rotated as it is copied, a byte at a time: one pass, which
+            //the compiler turns into SIMD
             // SAFETY: `rot13_byte` turns ASCII letters into ASCII letters and
             // leaves every other byte — each byte of a multi-byte char among
             // them — as it was, so the text stays valid UTF-8
-            let bytes = unsafe { out[start..].as_bytes_mut() };
-            bytes
-                .iter_mut()
-                .for_each(|byte| *byte = rot13_byte(*byte));
+            let bytes = unsafe { out.as_mut_vec() };
+            bytes.extend(within.bytes().map(rot13_byte));
         })
     }
 }
 
-/// One byte rotated by 13 places, if it is an ASCII letter.
+/// One byte rotated by 13 places, if it is an ASCII letter. Branchless,
+/// so the loop over a line compiles to SIMD: setting bit 5 folds upper
+/// case onto lower, the first half of the alphabet moves 13 up, the
+/// second 13 down (as a wrapping add of 256 - 13), anything else by 0.
 fn rot13_byte(byte: u8) -> u8 {
-    let base = match byte {
-        b'a'..=b'z' => b'a',
-        b'A'..=b'Z' => b'A',
-        _ => return byte,
+    let letter = (byte | 0x20).wrapping_sub(b'a');
+    let shift = match (letter < 13, letter < 26) {
+        (true, _) => 13,
+        (false, true) => 13u8.wrapping_neg(),
+        (false, false) => 0,
     };
-    base + (byte - base + 13) % 26
+    byte.wrapping_add(shift)
 }
 
 /// Title-case a piece of text: a letter starts a word when the char
@@ -771,6 +772,20 @@ mod tests {
         );
         assert_eq!(applied(&mut transform, "Uryyb"), "Hello");
         assert_eq!(applied(&mut transform, "AMNZamnz"), "NZAMnzam");
+    }
+
+    #[test]
+    fn rot13_byte_agrees_with_the_alphabet_on_every_byte() {
+        // Given every byte / When rotated / Then only ASCII letters move,
+        // 13 places along their own case's alphabet
+        for byte in 0..=u8::MAX {
+            let expected = match byte {
+                b'a'..=b'z' => b'a' + (byte - b'a' + 13) % 26,
+                b'A'..=b'Z' => b'A' + (byte - b'A' + 13) % 26,
+                _ => byte,
+            };
+            assert_eq!(rot13_byte(byte), expected, "byte {byte:#04x}");
+        }
     }
 
     #[test]

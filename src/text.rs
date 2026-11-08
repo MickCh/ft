@@ -103,6 +103,12 @@ fn byte_range(line: &str, cols: &RangeInclusive<usize>) -> Option<(usize, usize)
         return None;
     }
 
+    //from the first column on is the whole line, whatever it holds: the
+    //span every transform without --cols gets, so worth not looking at
+    if start == 1 && end == usize::MAX {
+        return (!line.is_empty()).then_some((0, line.len()));
+    }
+
     //in ASCII text a column is a byte, so no walk is needed — the common
     //case, and `is_ascii` checks a word at a time
     if line.is_ascii() {
