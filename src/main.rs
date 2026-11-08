@@ -1,8 +1,10 @@
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use clap_complete::Shell;
 
@@ -72,6 +74,9 @@ fn run() -> Result<Verdict, AppError> {
     let config = Config::try_from(matches)?;
 
     if let Some(in_place) = &config.in_place {
+        if !in_place.dry_run {
+            remove_pending_on_signal();
+        }
         //validated in Config: --in-place only ever has file inputs, and
         //each is edited on its own, with its own row numbering
         let mut matched = false;
@@ -101,6 +106,7 @@ fn run() -> Result<Verdict, AppError> {
 /// Process a file without writing anything, reporting whether the edit
 /// would change it — what `--in-place --dry-run` is for.
 fn report_changes(config: &Config, path: &Path) -> Result<RunOutcome, AppError> {
+    ensure_regular_file(path)?;
     //the file is read twice: once as the input, once as what the result
     //is compared against
     let mut comparison = CompareWriter::new(open_file(path)?);
@@ -176,6 +182,7 @@ fn run_streaming(config: &Config) -> Result<RunOutcome, AppError> {
 /// link being replaced by a regular file. The temporary file inherits
 /// the original's permissions and is synced to disk before the swap.
 fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunOutcome, AppError> {
+    ensure_regular_file(path)?;
     //the BOM is taken off for processing and put back below, and the
     //result encoded as the input was: the edited file stays encoded as
     //it was, unless --output-encoding converts it
@@ -199,6 +206,9 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
         path: temp_path.clone(),
         source,
     })?;
+    //registered only once it is ours: a signal must never remove a file
+    //create_new refused to take over
+    let pending = Pending::register(&temp_path);
 
     let mut writer = BufWriter::new(encoded(target, temp_file));
 
@@ -245,12 +255,129 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
         return Ok(outcome);
     }
 
-    std::fs::rename(&temp_path, path).map_err(|source| {
-        let _ = std::fs::remove_file(&temp_path);
-        replace_error(path, source)
+    pending.settle(|| {
+        std::fs::rename(&temp_path, path).map_err(|source| {
+            let _ = std::fs::remove_file(&temp_path);
+            replace_error(path, source)
+        })
     })?;
 
     Ok(outcome)
+}
+
+/// Refuse to edit anything but a regular file (symlinks followed): the
+/// rename would put a regular file where a FIFO or a device was, and
+/// reading one may block or never end. `sed -i` refuses them too.
+fn ensure_regular_file(path: &Path) -> Result<(), AppError> {
+    let metadata = std::fs::metadata(path).map_err(|source| open_error(path, source))?;
+    match metadata.is_file() {
+        true => Ok(()),
+        false => Err(AppError::NotRegularFile {
+            path: path.to_path_buf(),
+        }),
+    }
+}
+
+/// The temporary file an in-place edit is writing, while there is one:
+/// what a signal ending the run has to remove (`remove_pending_on_signal`).
+static PENDING: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn pending_slot() -> MutexGuard<'static, Option<PathBuf>> {
+    //the slot holds a path and nothing that a panic could leave half-set
+    PENDING
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A temporary file registered in `PENDING` for as long as it lives;
+/// dropping the guard unregisters it.
+struct Pending;
+
+impl Pending {
+    fn register(path: &Path) -> Pending {
+        *pending_slot() = Some(path.to_path_buf());
+        Pending
+    }
+
+    /// Run `swap` — the rename that settles the file's fate — holding the
+    /// registration, so a signal arriving meanwhile waits for it rather
+    /// than removing the file mid-rename, and then finds nothing to do.
+    fn settle<T>(self, swap: impl FnOnce() -> T) -> T {
+        let mut slot = pending_slot();
+        let result = swap();
+        *slot = None;
+        result
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        *pending_slot() = None;
+    }
+}
+
+/// Remove the temporary file an edit is writing, if there is one: what a
+/// signal ending the run does first.
+fn remove_pending() {
+    if let Some(path) = pending_slot().take() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// On SIGINT, SIGTERM or SIGHUP, remove the temporary file an edit is
+/// writing before dying of the signal, rather than leaving it next to the
+/// input. The input itself is safe either way: it is only ever replaced
+/// whole. A signal the run started out ignoring (`nohup`, a background
+/// job of a script) stays ignored.
+#[cfg(unix)]
+fn remove_pending_on_signal() {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+
+    let caught = [SIGINT, SIGTERM, SIGHUP]
+        .into_iter()
+        .filter(|&signal| !is_ignored(signal));
+    //without a handler a signal still ends the run, only less tidily, so
+    //failing to install one is no reason to refuse the edit
+    let Ok(mut signals) = signal_hook::iterator::Signals::new(caught) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        if let Some(signal) = signals.forever().next() {
+            remove_pending();
+            //die of it as if it had not been caught, so the shell sees the
+            //usual 128 + its number
+            let _ = signal_hook::low_level::emulate_default_handler(signal);
+            std::process::exit(128 + signal);
+        }
+    });
+}
+
+/// Whether `signal` is ignored, as `nohup` leaves SIGHUP and a shell
+/// script leaves SIGINT for a job it starts in the background.
+#[cfg(unix)]
+fn is_ignored(signal: libc::c_int) -> bool {
+    let mut current = std::mem::MaybeUninit::<libc::sigaction>::uninit();
+    // SAFETY: with no new action given, sigaction only reads the current
+    // one into `current`, which it fully initializes when it returns 0
+    unsafe {
+        libc::sigaction(signal, std::ptr::null(), current.as_mut_ptr()) == 0
+            && current.assume_init().sa_sigaction == libc::SIG_IGN
+    }
+}
+
+/// On Ctrl+C or Ctrl+Break, remove the temporary file an edit is writing
+/// before exiting, rather than leaving it next to the input. The input
+/// itself is safe either way: it is only ever replaced whole.
+#[cfg(windows)]
+fn remove_pending_on_signal() {
+    //what Windows reports for a console program Ctrl+C ended
+    const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+    //without a handler Ctrl+C still ends the run, only less tidily, so
+    //failing to install one is no reason to refuse the edit
+    let _ = ctrlc::set_handler(|| {
+        remove_pending();
+        std::process::exit(STATUS_CONTROL_C_EXIT as i32);
+    });
 }
 
 /// Why an in-place edit would leave nothing of a file that had something
@@ -326,14 +453,31 @@ fn simplified(path: PathBuf) -> PathBuf {
     }
 }
 
-/// Whether two paths point at the same existing file, resolving
-/// symlinks and relative components. A path that cannot be resolved
-/// (e.g. an output file that does not exist yet) aliases nothing.
+/// Whether two paths name the same existing file — through a symlink, a
+/// relative component or a hard link, which no comparison of paths can
+/// see. A path that names nothing (e.g. an output file that does not
+/// exist yet) aliases nothing.
 fn same_file(a: &Path, b: &Path) -> bool {
-    match (resolve(a), resolve(b)) {
-        (Ok(a), Ok(b)) => a == b,
+    match (file_identity(a), file_identity(b)) {
+        (Some(a), Some(b)) => a == b,
         _ => false,
     }
+}
+
+/// What tells files apart on Unix: the device and inode, read without
+/// opening the file (opening a FIFO to compare it would block).
+#[cfg(unix)]
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+/// What tells files apart on Windows: the volume serial number
+/// and file index, which `std` does not expose yet.
+#[cfg(windows)]
+fn file_identity(path: &Path) -> Option<same_file::Handle> {
+    same_file::Handle::from_path(path).ok()
 }
 
 /// Open every input and read them as one stream, in the order given —
@@ -534,11 +678,10 @@ fn fill<R: Read>(reader: &mut R, buffer: &mut [u8]) -> std::io::Result<usize> {
 /// A temporary path next to `path` (same directory, so a rename onto
 /// `path` stays on one filesystem and is atomic).
 fn temporary_sibling(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let temp_name = format!(".{name}.fxt-{}.tmp", std::process::id());
+    //built as an OsString, so a name that is not UTF-8 is kept as it is
+    let mut temp_name = OsString::from(".");
+    temp_name.push(path.file_name().unwrap_or_default());
+    temp_name.push(format!(".fxt-{}.tmp", std::process::id()));
     match path.parent() {
         Some(dir) => dir.join(temp_name),
         None => PathBuf::from(temp_name),

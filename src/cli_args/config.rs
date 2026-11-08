@@ -491,8 +491,8 @@ impl TryFrom<ArgMatches> for Config {
             inputs: inputs(&matches),
             replacements,
             output_filename: matches
-                .get_one::<String>("output")
-                .map(PathBuf::from),
+                .get_one::<PathBuf>("output")
+                .cloned(),
             //clap enforces that --backup and --dry-run come with --in-place,
             //and the struct makes the dependency structural
             in_place: matches
@@ -586,12 +586,12 @@ fn row_pattern(
 /// lone `-`) means standard input, so the list is never empty.
 fn inputs(matches: &ArgMatches) -> Vec<Input> {
     let inputs: Vec<Input> = matches
-        .get_many::<String>("filename")
+        .get_many::<PathBuf>("filename")
         .into_iter()
         .flatten()
-        .map(|name| match name.as_str() {
-            "-" => Input::Stdin,
-            path => Input::File(PathBuf::from(path)),
+        .map(|path| match path.as_os_str() == "-" {
+            true => Input::Stdin,
+            false => Input::File(path.clone()),
         })
         .collect();
 

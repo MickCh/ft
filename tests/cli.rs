@@ -3061,3 +3061,185 @@ fn perl_regexp_that_backtracks_out_fails_the_run() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("matching the pattern"), "{stderr}");
 }
+
+#[cfg(unix)]
+#[test]
+fn output_hard_link_to_the_input_is_rejected() {
+    //a hard link is the input under another path, which no comparison
+    //of paths can tell: File::create would truncate the input
+    let dir = TempDir::new("output-hard-link");
+    let content = "row\n".repeat(10_000);
+    let input = dir.write("in.txt", &content);
+    let link = dir.path.join("hard.txt");
+    fs::hard_link(&input, &link).unwrap();
+
+    let output = run_fxt(&["-o", link.to_str().unwrap(), input.to_str().unwrap()]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(fs::read_to_string(&input).unwrap(), content);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_name_need_not_be_utf8() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = TempDir::new("non-utf8-name");
+    let name = std::ffi::OsStr::from_bytes(b"z\xff.txt");
+    let path = dir.path.join(name);
+    fs::write(&path, "a\n").unwrap();
+    let fxt = |args: &[&std::ffi::OsStr]| {
+        Command::new(env!("CARGO_BIN_EXE_fxt"))
+            .args(args)
+            .output()
+            .expect("failed to run fxt binary")
+    };
+
+    // Given a file whose name is not UTF-8 / When it is read / Then it is
+    let read = fxt(&["--upper".as_ref(), path.as_os_str()]);
+    assert!(
+        read.status.success(),
+        "{}",
+        String::from_utf8_lossy(&read.stderr)
+    );
+    assert_eq!(read.stdout, b"A\n");
+
+    // And it can be edited in place, with no temporary file left behind
+    let edit = fxt(&["-i".as_ref(), "--upper".as_ref(), path.as_os_str()]);
+    assert!(
+        edit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&edit.stderr)
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "A\n");
+    assert_eq!(fs::read_dir(&dir.path).unwrap().count(), 1);
+}
+
+#[test]
+fn in_place_refuses_a_directory() {
+    let dir = TempDir::new("in-place-directory");
+
+    let output = run_fxt(&["-i", "--upper", dir.path.to_str().unwrap()]);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a regular file"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_refuses_a_fifo_and_leaves_it_be() {
+    // Given a FIFO, which renaming over would turn into a regular file
+    let dir = TempDir::new("in-place-fifo");
+    let fifo = dir.path.join("pipe");
+    let made = Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+
+    // When it is edited in place (or only dry-run: reading it would block)
+    for flags in [&["-i"][..], &["-i", "--dry-run"]] {
+        let mut args = flags.to_vec();
+        args.extend(["--upper", fifo.to_str().unwrap()]);
+        let output = run_fxt(&args);
+
+        // Then fxt refuses, and the FIFO is still one
+        assert_eq!(output.status.code(), Some(2), "{flags:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("not a regular file"), "{stderr}");
+        use std::os::unix::fs::FileTypeExt;
+        assert!(
+            fs::metadata(&fifo)
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
+    }
+}
+
+/// An in-place edit long enough to be caught in the middle, run through
+/// `launcher` (e.g. `nohup`, or nothing) and sent `signal` once its
+/// temporary file is there. What is left: the directory, the original
+/// text, the input and how fxt ended — or `None` when fxt finished before
+/// its temporary file was seen, which leaves nothing to test.
+#[cfg(unix)]
+fn signalled_mid_edit(
+    name: &str,
+    launcher: &[&str],
+    signal: &str,
+) -> Option<(TempDir, String, PathBuf, std::process::ExitStatus)> {
+    use std::time::{Duration, Instant};
+
+    let dir = TempDir::new(name);
+    let content = "some text to upper-case\n".repeat(2_000_000);
+    let input = dir.write("data.txt", &content);
+    let fxt = env!("CARGO_BIN_EXE_fxt");
+    let (program, args) = match launcher {
+        [] => (fxt, Vec::new()),
+        [program, args @ ..] => (*program, [args, &[fxt]].concat()),
+    };
+    let mut child = Command::new(program)
+        .args(args)
+        .args(["-i", "--upper", input.to_str().unwrap()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn fxt binary");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while dir.names().len() < 2 && Instant::now() < deadline {
+        if child.try_wait().unwrap().is_some() {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let sent = Command::new("kill")
+        .args([&format!("-{signal}"), &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+    let status = child.wait().unwrap();
+    Some((dir, content, input, status))
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_removes_its_temporary_file_when_terminated() {
+    use std::os::unix::process::ExitStatusExt;
+    //the same number on every Unix
+    const SIGTERM: i32 = 15;
+
+    // Given an in-place edit / When it is sent SIGTERM while writing
+    let Some((dir, content, input, status)) = signalled_mid_edit("in-place-sigterm", &[], "TERM")
+    else {
+        return;
+    };
+
+    // Then the temporary file is gone and the input is whole: original,
+    // or edited if the signal came as it was being swapped in
+    assert_eq!(dir.names(), ["data.txt"]);
+    let now = fs::read_to_string(&input).unwrap();
+    assert!(now == content || now == content.to_uppercase());
+    // And fxt died of the signal, as an uncaught one would have it
+    assert!(
+        status.signal() == Some(SIGTERM) || status.success(),
+        "{status:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_keeps_ignoring_a_signal_it_started_out_ignoring() {
+    // Given an edit started under nohup / When it is sent SIGHUP
+    let Some((dir, content, input, status)) =
+        signalled_mid_edit("in-place-nohup", &["nohup"], "HUP")
+    else {
+        return;
+    };
+
+    // Then the hangup is ignored, as nohup asked: the edit completes
+    assert!(status.success(), "{status:?}");
+    assert_eq!(fs::read_to_string(&input).unwrap(), content.to_uppercase());
+    assert_eq!(dir.names(), ["data.txt"]);
+}

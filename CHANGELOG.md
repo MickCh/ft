@@ -10,6 +10,16 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 - `--center <width>` pads the column range on both sides, each field on its own, the odd space on the right.
 - `--rot13` rotates the ASCII letters in the column range by 13 places.
 
+### Changed
+
+- `--in-place` (and `--dry-run`) refuses anything but a regular file: a FIFO was read and replaced by a regular file, and a dry run on one blocked. `sed -i` refuses them too.
+- An in-place edit ended by SIGINT, SIGTERM or SIGHUP (Ctrl+C or Ctrl+Break on Windows) removes its temporary `.<name>.fxt-<pid>.tmp` file before it exits; on Unix it then dies of the signal as before, and a signal it was started ignoring (`nohup`) stays ignored. The input was never at risk: it is only ever replaced whole.
+
+### Fixed
+
+- `--output` naming a hard link to an input was not caught, and truncated the input before it was read (all but its first three bytes were lost). Output and inputs are now compared as files — device and inode on Unix, volume and file index on Windows — rather than as paths.
+- File names that are not valid UTF-8 (possible on Unix) were refused as arguments; inputs and `--output` now take any path, and the temporary file of an in-place edit keeps such a name as it is.
+
 ## [0.5.0] — 2026-11-07
 
 ### Changed

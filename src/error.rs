@@ -12,6 +12,7 @@ pub enum AppError {
     OpenInput { path: PathBuf, source: io::Error },
     CreateOutput { path: PathBuf, source: io::Error },
     OutputIsInput { path: PathBuf },
+    NotRegularFile { path: PathBuf },
     ReplaceInput { path: PathBuf, source: io::Error },
     Backup { path: PathBuf, source: io::Error },
     Processing(io::Error),
@@ -38,6 +39,13 @@ impl fmt::Display for AppError {
                     path.display()
                 )
             }
+            AppError::NotRegularFile { path } => {
+                write!(
+                    f,
+                    "Cannot edit `{}` in place: not a regular file",
+                    path.display()
+                )
+            }
             AppError::ReplaceInput { path, source } => {
                 write!(
                     f,
@@ -61,7 +69,7 @@ impl std::error::Error for AppError {
             | AppError::CreateOutput { source, .. }
             | AppError::ReplaceInput { source, .. }
             | AppError::Backup { source, .. } => Some(source),
-            AppError::OutputIsInput { .. } => None,
+            AppError::OutputIsInput { .. } | AppError::NotRegularFile { .. } => None,
             AppError::Processing(error) => Some(error),
         }
     }

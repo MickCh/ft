@@ -2,6 +2,7 @@ use crate::codec::Codec;
 use clap::{Arg, ArgAction, ArgGroup, Command, crate_name, crate_version, value_parser};
 use clap_complete::Shell;
 use std::ops::RangeInclusive;
+use std::path::PathBuf;
 
 use crate::columns::ColumnList;
 use crate::encoding;
@@ -591,6 +592,7 @@ pub fn cli() -> Command {
                 .short('o')
                 .long("output")
                 .required(false)
+                .value_parser(value_parser!(PathBuf))
                 .help("Output filename"),
         )
         .arg(
@@ -655,6 +657,8 @@ pub fn cli() -> Command {
             Arg::new("filename")
                 .required(false)
                 .num_args(1..)
+                //paths, not strings: a file name need not be valid UTF-8
+                .value_parser(value_parser!(PathBuf))
                 .help(
                     "Input files, read as one stream (--in-place edits each on its own); \
                      reads standard input when omitted or `-`",
