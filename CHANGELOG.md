@@ -12,7 +12,8 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ### Changed
 
-- `--in-place` (and `--dry-run`) refuses anything but a regular file: a FIFO was read and replaced by a regular file, and a dry run on one blocked. `sed -i` refuses them too.
+- `--in-place` (and `--dry-run`) refuses anything but a regular file: a FIFO was read and replaced by a regular file, and a dry run on one blocked. `sed -i` refuses them too. A Windows device (`NUL`, `CON`, `COM1`…) is refused with the same message, rather than with "Incorrect function".
+- `--in-place` checks every name before it edits the first file: a missing one at the end of the list left the files before it edited, and a dry run reported none of them.
 - An in-place edit ended by SIGINT, SIGTERM or SIGHUP (Ctrl+C or Ctrl+Break on Windows) removes its temporary `.<name>.fxt-<pid>.tmp` file before it exits; on Unix it then dies of the signal as before, and a signal it was started ignoring (`nohup`) stays ignored. The input was never at risk: it is only ever replaced whole.
 
 ### Fixed

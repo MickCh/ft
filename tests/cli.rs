@@ -2020,6 +2020,50 @@ fn in_place_stops_at_the_first_file_that_fails() {
     assert_eq!(dir.names(), ["1.txt", "2.txt", "3.txt"]);
 }
 
+#[test]
+fn in_place_checks_every_name_before_editing_any() {
+    //a missing name anywhere in the batch is refused before the first
+    //file is touched, where the edit would otherwise stop half way
+    let dir = TempDir::new("in-place-preflight");
+    let first = dir.write("1.txt", "a\n");
+    let missing = dir.path.join("missing.txt");
+    let last = dir.write("3.txt", "c\n");
+    let names = [
+        first.to_str().unwrap(),
+        missing.to_str().unwrap(),
+        last.to_str().unwrap(),
+    ];
+
+    let output = run_fxt(&[&["-i", "--upper"][..], &names].concat());
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing.txt"), "{stderr}");
+    assert_eq!(fs::read_to_string(&first).unwrap(), "a\n");
+    assert_eq!(fs::read_to_string(&last).unwrap(), "c\n");
+    assert_eq!(dir.names(), ["1.txt", "3.txt"]);
+
+    //a dry run reports nothing either, rather than the files before it
+    let output = run_fxt(&[&["-i", "--dry-run", "--upper"][..], &names].concat());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn in_place_refuses_a_windows_device_by_name() {
+    //Windows answers NUL with "Incorrect function"; say what is wrong
+    for device in ["NUL", "CON"] {
+        let output = run_fxt(&["-i", "--upper", device]);
+        assert_eq!(output.status.code(), Some(2), "{device}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("not a regular file"), "{device}: {stderr}");
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn in_place_refuses_a_read_only_file_on_windows() {

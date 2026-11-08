@@ -84,11 +84,17 @@ fn run() -> Result<Verdict, AppError> {
         //reprocessing the first's output and overwriting its backup —
         //so each distinct file is edited once
         let mut seen = HashSet::new();
-        for path in config.input_files() {
-            let identity = resolve(path).unwrap_or_else(|_| path.to_path_buf());
-            if !seen.insert(identity) {
-                continue;
-            }
+        let paths: Vec<&Path> = config
+            .input_files()
+            .filter(|path| seen.insert(resolve(path).unwrap_or_else(|_| path.to_path_buf())))
+            .collect();
+        //a name that is missing or no regular file is refused before any
+        //file is touched, so a typo in the last name does not leave the
+        //batch half edited
+        for path in &paths {
+            ensure_regular_file(path)?;
+        }
+        for path in paths {
             let outcome = match in_place.dry_run {
                 true => report_changes(&config, path)?,
                 false => run_in_place(&config, in_place, path)?,
@@ -269,13 +275,55 @@ fn run_in_place(config: &Config, in_place: &InPlace, path: &Path) -> Result<RunO
 /// rename would put a regular file where a FIFO or a device was, and
 /// reading one may block or never end. `sed -i` refuses them too.
 fn ensure_regular_file(path: &Path) -> Result<(), AppError> {
-    let metadata = std::fs::metadata(path).map_err(|source| open_error(path, source))?;
+    let metadata = std::fs::metadata(path).map_err(|source| match names_a_device(path) {
+        true => AppError::NotRegularFile {
+            path: path.to_path_buf(),
+        },
+        false => open_error(path, source),
+    })?;
     match metadata.is_file() {
         true => Ok(()),
         false => Err(AppError::NotRegularFile {
             path: path.to_path_buf(),
         }),
     }
+}
+
+/// Whether `path`, whose metadata could not be read, names a Windows
+/// device (`NUL`, `CON`, `COM1`…): Windows answers those with an error
+/// that depends on the device and the console ("Incorrect function",
+/// "The parameter is incorrect") rather than with metadata saying what
+/// they are, as Unix does. Asked only once reading the metadata failed,
+/// so a regular file such a name may also stand for is never refused.
+#[cfg(windows)]
+fn names_a_device(path: &Path) -> bool {
+    let Some(name) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    //`nul.txt` and `NUL ` name the device too
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end()
+        .to_ascii_uppercase();
+    match stem.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" => true,
+        _ => {
+            let (port, number) = stem.split_at(stem.len().min(3));
+            matches!(port, "COM" | "LPT") && matches!(number.as_bytes(), [b'1'..=b'9'])
+        }
+    }
+}
+
+/// On Unix a device has metadata of its own, which `ensure_regular_file`
+/// reads, so no name needs guessing.
+#[cfg(unix)]
+fn names_a_device(_path: &Path) -> bool {
+    false
 }
 
 /// The temporary file an in-place edit is writing, while there is one:
