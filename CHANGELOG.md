@@ -4,6 +4,10 @@ All notable changes to `fxt`. The format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Changed
+
+- Library: the engine type `FileProcessor` is now `StreamProcessor`, in the module `stream_processor` (was `file_processor`): it never touches files, it processes a stream.
+
 ## [0.6.0] — 2026-11-08
 
 ### Added

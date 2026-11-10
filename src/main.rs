@@ -14,7 +14,7 @@ use fxt::cli_args::{Config, InPlace, Input, cli};
 use fxt::compose;
 use fxt::encoding::{self, Decoded, EncodeWriter, SourceEncoding};
 use fxt::error::AppError;
-use fxt::file_processor::RunOutcome;
+use fxt::stream_processor::RunOutcome;
 
 /// Exit codes follow `grep`: 0 when rows matched, 1 when a filter was
 /// given and nothing matched at all, 2 when the run failed outright.

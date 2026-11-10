@@ -376,7 +376,7 @@ fxt --completions powershell | Out-String | Invoke-Expression
 - `src/main.rs` — the binary: files, stdin/stdout, `--in-place`, `--dry-run`, exit codes
 - `src/cli_args/` — clap definition and validated `Config` (`TryFrom<ArgMatches>`)
 - `src/compose.rs` — turns a `Config` into a processor; the only place that knows how options map onto engine parts
-- `src/file_processor.rs` — the streaming engine, generic over `BufRead`/`Write`: row selection, filtering, reordering
+- `src/stream_processor.rs` — the streaming engine, generic over `BufRead`/`Write`: row selection, filtering, reordering
 - `src/transform.rs` — `LineTransform` trait and the per-line operations (one line in, zero or more out)
 - `src/predicate.rs`, `src/pattern_range.rs` — the row filters (`--grep`, `--min-fields`/`--max-fields`, `--min-len`/`--max-len`), and `--from`/`--to` blocks
 - `src/reduce.rs` — `LineReducer`: `--join` and the summaries

@@ -8,10 +8,10 @@ use std::ops::RangeInclusive;
 
 use crate::cli_args::{Config, FindPattern, ReorderMode, Replacement};
 use crate::columns::{ColumnList, ColumnSpan, FieldSpan};
-use crate::file_processor::{FileProcessor, Reorder, RowMode, SortSpec};
 use crate::pattern_range::PatternRange;
 use crate::predicate::{AllOf, FieldCount, GrepPredicate, Length, LinePredicate};
 use crate::reduce::{Aggregate, Join, LineReducer, Summarize};
+use crate::stream_processor::{Reorder, RowMode, SortSpec, StreamProcessor};
 use crate::transform::{
     CodecColumns, DeleteColumns, DropEmpty, LineTransform, MapColumns, NumberLines, PadColumns,
     PadSide, Pipeline, RegexReplaceInColumns, ReplaceInColumns, ReplaceInColumnsIgnoreCase,
@@ -19,7 +19,7 @@ use crate::transform::{
 };
 
 /// Assemble the streaming processor implied by the configuration.
-pub fn build_processor(config: &Config) -> FileProcessor {
+pub fn build_processor(config: &Config) -> StreamProcessor {
     //`--cols` is a shared scope: operations take it by claiming it, and
     //only a `--cols` nobody claimed selects (cuts) the columns
     let mut cols = ColumnClaims::new(config);
@@ -34,7 +34,7 @@ pub fn build_processor(config: &Config) -> FileProcessor {
     let summarizes = reducer.is_some() && config.join.is_none();
     let outgoing = build_outgoing(config, &cols, summarizes);
 
-    FileProcessor {
+    StreamProcessor {
         rows: config.rows_or_full(),
         pattern_range: (config.from_pattern.is_some() || config.to_pattern.is_some())
             .then(|| PatternRange::new(config.from_pattern.clone(), config.to_pattern.clone())),

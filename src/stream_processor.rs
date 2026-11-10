@@ -193,7 +193,7 @@ fn write_pending_separator<W: Write>(state: &mut RunState, writer: &mut W) -> io
 
 /// The streaming processor, configured by its fields and assembled by
 /// the composition layer.
-pub struct FileProcessor {
+pub struct StreamProcessor {
     /// Rows taking part in processing (every row when no range given).
     pub rows: RangeSpec,
     /// `--from`/`--to`: rows addressed by content, resolved as the lines
@@ -228,7 +228,7 @@ pub struct FileProcessor {
     pub lossy: bool,
 }
 
-impl FileProcessor {
+impl StreamProcessor {
     /// Stream `reader` line by line into `writer`, applying the configured
     /// row selection, per-line transforms and optional reordering.
     /// Takes `self`: a reducer accumulates into itself, and a processor
@@ -652,8 +652,8 @@ mod tests {
         let keys = ["b", "a", "b", "a"];
 
         // When sorted ascending and descending
-        let ascending = FileProcessor::sorted_order(keys.iter(), false);
-        let descending = FileProcessor::sorted_order(keys.iter(), true);
+        let ascending = StreamProcessor::sorted_order(keys.iter(), false);
+        let descending = StreamProcessor::sorted_order(keys.iter(), true);
 
         // Then equal keys keep their input order either way
         assert_eq!(ascending, [1, 3, 0, 2]);

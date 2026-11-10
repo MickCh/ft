@@ -66,6 +66,8 @@ Second point — **`Config` does not make invalid states unrepresentable**:
 
 **Status: mostly fixed** — `Config` now holds `reorder: Option<ReorderMode>` and `replacements: Vec<Replacement>` (the lone-`--find` pipeline state became unrepresentable, and its test disappeared with it); the engine additionally gained a `RowMode` enum replacing the two derived booleans. `has_column_operation()` remains a hand-maintained list, now over fewer inputs.
 
+**Status (2026-11-10): fixed** — `has_column_operation()` is gone: `compose::ColumnClaims` hands out the `--cols` span, and an operation registers its claim by taking it, so a new column-scoped operation cannot forget to.
+
 ## 🟢 Rust idioms
 
 Very good: consistent `Result` propagation (zero `unwrap` outside tests; the only `expect`, in `ReplaceInColumnsIgnoreCase::new`, is justified and commented), errors with hand-written `Display` plus a correct `source()`, `Cow` in `apply_transforms` for the allocation-free path, `NumericKey` using `total_cmp` instead of the `partial_cmp().unwrap()` trap, `sort_by_cached_key` for stability and performance, `saturating_add/sub` in range arithmetic, validation inside clap value parsers rather than after the fact. UTF-8 handling (`char`-based indexing with a single char→byte mapping pass in `text::byte_range`, no per-line `Vec<char>`) is done properly and densely tested.
@@ -77,6 +79,14 @@ Minor points to consider:
 - The name `FileProcessor` is misleading in that the type deliberately does *not* touch files (that is its virtue) — `StreamProcessor`/`Processor` would express the intent.
 - `parse_bound` accepts `+5` (the `usize` parser tolerates a leading plus) — cosmetic.
 - Hand-written error enums are good for learning; in "grown-up" code `thiserror` would remove ~80 lines of boilerplate from `error.rs`/`config_error.rs`.
+
+**Status (2026-11-10):**
+
+- ✅ `apply` no longer returns `String`: it returns a `LineOutcome` (`Keep` / `Replace` / `Slice` / `Expand` / `Drop`), so a line a transform leaves alone is never copied.
+- ✅ The `std::io::prelude` glob import is gone.
+- ✅ `FileProcessor` is now `StreamProcessor` (module `stream_processor`).
+- ✅ `parse_bound` takes digits only; a property test in `cli_args::cli` holds `+5` and `~+1` out.
+- Won't do: `thiserror`. The hand-written enums stay — they are part of what the project is for, and their `Display`/`source()` are correct and cheap to maintain.
 
 ## 🟢 Remaining safety
 
